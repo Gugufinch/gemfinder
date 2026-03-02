@@ -1,7 +1,7 @@
 import { cookies } from 'next/headers';
-import GemFinderApp from '@/gem-finder-v7.jsx';
+import GemFinderApp from './GemFinderApp.jsx';
 import ARLogin from './ARLogin';
-import { getArAuthUserById } from '@/lib/bonafied/repository';
+import { getAuthUserById } from '@/lib/gemfinder/auth-store';
 
 type SearchParams = Record<string, string | string[] | undefined>;
 
@@ -22,7 +22,7 @@ export default async function ARPage({ searchParams }: { searchParams?: Promise<
     return <ARLogin initialMode={initialMode} initialResetToken={resetTokenParam} />;
   }
 
-  const authUser = await getArAuthUserById(userId);
+  const authUser = await getAuthUserById(userId);
   if (!authUser || !authUser.active) {
     return <ARLogin initialMode={initialMode} initialResetToken={resetTokenParam} />;
   }

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
-import { getArAuthUserById, updateArUserByAdmin } from '@/lib/bonafied/repository';
+import { getAuthUserById, updateUserByAdmin } from '@/lib/gemfinder/auth-store';
 
 const patchSchema = z.object({
   role: z.enum(['admin', 'editor', 'viewer']).optional(),
@@ -10,7 +10,7 @@ const patchSchema = z.object({
 
 export async function PATCH(req: NextRequest, ctx: { params: Promise<{ userId: string }> }) {
   const adminUserId = req.cookies.get('ar_user')?.value || '';
-  const actor = await getArAuthUserById(adminUserId);
+  const actor = await getAuthUserById(adminUserId);
   if (!actor || !actor.active) {
     return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
   }
@@ -25,7 +25,7 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ userId: s
   }
 
   const { userId } = await ctx.params;
-  const result = await updateArUserByAdmin(actor.userId, userId, parsed.data);
+  const result = await updateUserByAdmin(actor.userId, userId, parsed.data);
   if (!result.ok) {
     const status = result.error === 'User not found' ? 404 : result.error.includes('Admin') ? 403 : 400;
     return NextResponse.json({ error: result.error }, { status });

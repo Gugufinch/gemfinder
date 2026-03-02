@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
-import { getArAuthUserById, listArUsersForAdmin, registerArUser } from '@/lib/bonafied/repository';
+import { getAuthUserById, listUsersForAdmin, registerAuthUser } from '@/lib/gemfinder/auth-store';
 
 const createSchema = z.object({
   email: z.string().email().max(220),
@@ -17,7 +17,7 @@ function tempPassword(): string {
 
 export async function GET(req: NextRequest) {
   const adminUserId = req.cookies.get('ar_user')?.value || '';
-  const actor = await getArAuthUserById(adminUserId);
+  const actor = await getAuthUserById(adminUserId);
   if (!actor || !actor.active) {
     return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
   }
@@ -25,7 +25,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Admin access required' }, { status: 403 });
   }
 
-  const result = await listArUsersForAdmin(actor.userId);
+  const result = await listUsersForAdmin(actor.userId);
   if (!result.ok) {
     return NextResponse.json({ error: result.error }, { status: 403 });
   }
@@ -34,7 +34,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   const adminUserId = req.cookies.get('ar_user')?.value || '';
-  const actor = await getArAuthUserById(adminUserId);
+  const actor = await getAuthUserById(adminUserId);
   if (!actor || !actor.active) {
     return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
   }
@@ -50,7 +50,7 @@ export async function POST(req: NextRequest) {
 
   const generated = !parsed.data.password;
   const password = parsed.data.password || tempPassword();
-  const result = await registerArUser(parsed.data.email, password, {
+  const result = await registerAuthUser(parsed.data.email, password, {
     createdByUserId: actor.userId,
     role: parsed.data.role,
     active: parsed.data.active

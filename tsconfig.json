@@ -24,10 +24,9 @@
     "next-env.d.ts",
     "app/**/*.ts",
     "app/**/*.tsx",
-    "components/bonafied/**/*.ts",
-    "components/bonafied/**/*.tsx",
-    "lib/bonafied/**/*.ts",
+    "app/**/*.jsx",
+    "lib/gemfinder/**/*.ts",
     ".next/types/**/*.ts"
   ],
-  "exclude": ["node_modules", "dist", "server", "components/*.tsx", "hooks", "services", "lib/api.ts", "lib/analytics.ts"]
+  "exclude": ["node_modules"]
 }

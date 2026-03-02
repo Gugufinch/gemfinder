@@ -1,0 +1,14 @@
+{
+  "users": [
+    {
+      "userId": "user_f426908945d5",
+      "email": "gregcmcd@gmail.com",
+      "passwordHash": "scrypt$698c2ec344cd49d55a97c55c2d02a1cd$696cadca060625fcd0c8ab97b4e9f7f340879d405dfa92632d956e7b14bf497a35bbd067ace9ddde8a4c5bf576c92c33c2f30ccc9e4efe221a9f940e3c5ce644",
+      "role": "admin",
+      "active": true,
+      "createdAt": "2026-03-02T17:53:01.698Z",
+      "updatedAt": "2026-03-02T17:53:01.698Z"
+    }
+  ],
+  "resetTokens": []
+}

@@ -167,7 +167,7 @@ export default function ARLogin({ initialMode = 'login', initialResetToken = '' 
         }}
       >
         <div style={{ fontSize: 11, letterSpacing: 4, fontWeight: 700, color: '#2563eb', textTransform: 'uppercase', marginBottom: 6 }}>
-          Gem Finder v7
+          Gem Finder
         </div>
         <h1 style={{ margin: '0 0 8px', fontSize: 24, color: '#111827' }}>{mode === 'signup' ? 'Create account' : 'Log in'}</h1>
         <p style={{ margin: '0 0 18px', color: '#5f6b84', fontSize: 13 }}>
