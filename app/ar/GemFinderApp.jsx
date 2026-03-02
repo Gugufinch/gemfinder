@@ -1204,6 +1204,32 @@ async function sSet(k, v) {
   }
 }
 
+async function apiGetProjects() {
+  try {
+    const res = await fetch("/api/ar/projects", { cache: "no-store" });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return { ok: false, error: data.error || "Could not load projects" };
+    return { ok: true, projects: Array.isArray(data.projects) ? data.projects : [] };
+  } catch {
+    return { ok: false, error: "Network error loading projects" };
+  }
+}
+
+async function apiSaveProjects(projects) {
+  try {
+    const res = await fetch("/api/ar/projects", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ projects }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return { ok: false, error: data.error || "Could not save projects" };
+    return { ok: true };
+  } catch {
+    return { ok: false, error: "Network error saving projects" };
+  }
+}
+
 function parseCSV(text) {
   const lines = text.split(/\r?\n/).filter(l => l.trim());
   if (lines.length < 2) return [];
@@ -1429,13 +1455,10 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         }
         const nextWorkspaceUser = d?.workspaceUser || defaultWorkspaceUser;
         const nextLayouts = d?.layoutByUser || {};
-        if (d?.projects) {
-          const norm = d.projects.map(normalizeProject);
-          setProjects(norm);
-          if (d.lastActive) setApId(d.lastActive);
-          if (d.dark) setDark(d.dark);
-          if (d.viewMode) setViewMode(d.viewMode);
-        }
+        const localProjects = Array.isArray(d?.projects) ? d.projects : [];
+        if (d?.lastActive) setApId(d.lastActive);
+        if (d?.dark) setDark(d.dark);
+        if (d?.viewMode) setViewMode(d.viewMode);
         setWorkspaceUser(nextWorkspaceUser);
         setLayoutByUser(nextLayouts);
         const initialLayout = normalizeLayout(nextLayouts[nextWorkspaceUser] || DEFAULT_LAYOUT);
@@ -1447,13 +1470,37 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         setShowAB(!!initialLayout.showAB);
         setShowFilters(!!initialLayout.showFilters);
         setAiKeySet(!!getStoredAiKey("anthropic") || !!getStoredAiKey("openai"));
+
+        if (authUserId) {
+          const shared = await apiGetProjects();
+          if (shared.ok) {
+            if (shared.projects.length) {
+              setProjects(shared.projects.map(normalizeProject));
+            } else if (localProjects.length && canEdit) {
+              const migrated = await apiSaveProjects(localProjects);
+              if (migrated.ok) {
+                setProjects(localProjects.map(normalizeProject));
+              } else {
+                setProjects(localProjects.map(normalizeProject));
+                console.error("Project migration failed:", migrated.error);
+              }
+            } else {
+              setProjects([]);
+            }
+          } else if (localProjects.length) {
+            setProjects(localProjects.map(normalizeProject));
+            console.error("Shared project load failed:", shared.error);
+          }
+        } else if (localProjects.length) {
+          setProjects(localProjects.map(normalizeProject));
+        }
       } catch (e) {
-        console.error("Gem Finder boot failed:", e);
+        console.error("GEMFINDER boot failed:", e);
       } finally {
         setLoading(false);
       }
     })();
-  }, [storageKey, defaultWorkspaceUser]);
+  }, [storageKey, defaultWorkspaceUser, authUserId, canEdit]);
 
   useEffect(() => {
     if (!loading) return undefined;
@@ -1462,15 +1509,22 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   }, [loading]);
 
   const persist = useCallback(async (np, la, dk, vm, lb, wu) => {
+    const nextProjects = np || projects;
     await sSet(storageKey, {
-      projects: np || projects,
+      projects: nextProjects,
       lastActive: la !== undefined ? la : apId,
       dark: dk !== undefined ? dk : dark,
       viewMode: vm !== undefined ? vm : viewMode,
       layoutByUser: lb !== undefined ? lb : layoutByUser,
       workspaceUser: wu !== undefined ? wu : workspaceUser,
     });
-  }, [storageKey, projects, apId, dark, viewMode, layoutByUser, workspaceUser]);
+    if (np !== undefined && authUserId && canEdit) {
+      const result = await apiSaveProjects(nextProjects);
+      if (!result.ok) {
+        console.error("Shared project save failed:", result.error);
+      }
+    }
+  }, [storageKey, projects, apId, dark, viewMode, layoutByUser, workspaceUser, authUserId, canEdit]);
 
   const flash = (m, t = "ok") => { setToast({ m, t }); setTimeout(() => setToast(null), 2500); };
   const togDark = async () => { const nd = !dark; setDark(nd); await persist(undefined, undefined, nd); };
@@ -2440,11 +2494,14 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       <Toast /><style>{css}</style>
       <div style={{ borderBottom: `1px solid ${C.bd}`, background: C.sf }}>
         <div style={{ maxWidth: 960, margin: "0 auto", padding: "24px 24px 20px", display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-          <div>
-            <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 5, color: C.ac, textTransform: "uppercase", marginBottom: 4 }}>Gem Finder v7</div>
+          <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
+            <img src="/gemfinder-logo.png" alt="GEMFINDER logo" style={{ width: 44, height: 44, objectFit: "contain", marginTop: 2 }} />
+            <div>
+              <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 5, color: C.ac, textTransform: "uppercase", marginBottom: 4 }}>GEMFINDER</div>
             <div style={{ fontSize: 26, fontWeight: 800, letterSpacing: "-0.03em" }}>AI-Powered A&R</div>
             <div style={{ fontSize: 13, color: C.ts, marginTop: 3 }}>Sequence engine, send tracking, and A/B-optimized outreach.</div>
             {loading && <div style={{ fontSize: 11, color: C.tt, marginTop: 8 }}>Loading saved workspace...</div>}
+            </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <span style={{ fontSize: 11, color: C.tt, maxWidth: 240, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>

@@ -166,8 +166,11 @@ export default function ARLogin({ initialMode = 'login', initialResetToken = '' 
           padding: 24
         }}
       >
-        <div style={{ fontSize: 11, letterSpacing: 4, fontWeight: 700, color: '#2563eb', textTransform: 'uppercase', marginBottom: 6 }}>
-          Gem Finder
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+          <img src="/gemfinder-logo.png" alt="GEMFINDER logo" style={{ width: 40, height: 40, objectFit: 'contain' }} />
+          <div style={{ fontSize: 11, letterSpacing: 4, fontWeight: 700, color: '#2563eb', textTransform: 'uppercase' }}>
+            GEMFINDER
+          </div>
         </div>
         <h1 style={{ margin: '0 0 8px', fontSize: 24, color: '#111827' }}>{mode === 'signup' ? 'Create account' : 'Log in'}</h1>
         <p style={{ margin: '0 0 18px', color: '#5f6b84', fontSize: 13 }}>

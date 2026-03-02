@@ -120,7 +120,10 @@ export default function AdminUsersPanel({ actorEmail }: { actorEmail: string }) 
       <div style={{ maxWidth: 960, margin: '0 auto', padding: '24px 20px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
           <div>
-            <div style={{ fontSize: 11, letterSpacing: 4, fontWeight: 700, color: '#2563eb', textTransform: 'uppercase' }}>Gem Finder Admin</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <img src="/gemfinder-logo.png" alt="GEMFINDER logo" style={{ width: 36, height: 36, objectFit: 'contain' }} />
+              <div style={{ fontSize: 11, letterSpacing: 4, fontWeight: 700, color: '#2563eb', textTransform: 'uppercase' }}>GEMFINDER Admin</div>
+            </div>
             <h1 style={{ margin: '6px 0', fontSize: 28 }}>Team Users</h1>
             <div style={{ fontSize: 13, color: '#5f6b84' }}>Signed in as {actorEmail}</div>
           </div>

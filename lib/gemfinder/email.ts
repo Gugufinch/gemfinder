@@ -24,7 +24,7 @@ export async function sendPasswordResetEmail(email: string, token: string): Prom
   await transport.sendMail({
     from,
     to: email,
-    subject: 'Gem Finder password reset',
+    subject: 'GEMFINDER password reset',
     text: `Use this password reset link: ${link}`,
     html: `<p>Use this password reset link:</p><p><a href="${link}">${link}</a></p>`
   });
