@@ -15,6 +15,8 @@ type GmailTokenResponse = {
   expires_in?: number;
   scope?: string;
   token_type?: string;
+  error?: string;
+  error_description?: string;
 };
 
 type GmailHeader = { name?: string; value?: string };
@@ -42,6 +44,20 @@ type GmailThread = {
   messages?: GmailMessage[];
   snippet?: string;
 };
+
+export class GmailApiError extends Error {
+  code: string;
+  details: string;
+  status: number;
+
+  constructor(code: string, message: string, details = '', status = 500) {
+    super(message);
+    this.name = 'GmailApiError';
+    this.code = code;
+    this.details = details;
+    this.status = status;
+  }
+}
 
 function requireEnv(name: string): string {
   const value = String(process.env[name] || '').trim();
@@ -173,20 +189,87 @@ function lastMessageAt(thread: GmailThread): string {
   return last ? sentAtForMessage(last) : new Date().toISOString();
 }
 
+function computeExpiry(expiresIn?: number): string {
+  const clean = Number(expiresIn || 0);
+  if (!Number.isFinite(clean) || clean <= 0) return '';
+  return new Date(Date.now() + clean * 1000).toISOString();
+}
+
+function normalizeGoogleErrorCode(raw: string): string {
+  const clean = String(raw || '').trim();
+  if (!clean) return 'google_api_error';
+  return clean.toLowerCase().replace(/[^a-z0-9_]+/g, '_');
+}
+
+function mapGoogleErrorMessage(code: string, fallbackError: string, details: string): string {
+  if (code === 'redirect_uri_mismatch') {
+    return 'Google OAuth redirect URI mismatch. Check APP_URL and the redirect URI in Google Cloud.';
+  }
+  if (code === 'invalid_client') {
+    return 'Google OAuth client is invalid. Check GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET.';
+  }
+  if (code === 'invalid_grant') {
+    return 'Google refresh token is invalid or revoked. Disconnect Gmail and reconnect the mailbox.';
+  }
+  if (code === 'access_denied') {
+    if (/organization|internal|songfinch\.com|not completed the google verification process/i.test(details)) {
+      return 'Google blocked this mailbox. Use an allowed songfinch.com account for this internal OAuth app.';
+    }
+    return 'Google access was denied. Use an allowed account and approve the requested Gmail scopes.';
+  }
+  if (code === 'missing_refresh_token') {
+    return 'No refresh token returned; ensure prompt=consent + access_type=offline.';
+  }
+  return fallbackError;
+}
+
+function parseGoogleError(raw: string, fallbackError: string, status = 500): GmailApiError {
+  let code = 'google_api_error';
+  let details = '';
+  try {
+    const parsed = JSON.parse(raw);
+    const nested = parsed?.error && typeof parsed.error === 'object' ? parsed.error : null;
+    const rawCode =
+      parsed?.error?.status ||
+      parsed?.error ||
+      parsed?.error_code ||
+      nested?.status ||
+      'google_api_error';
+    code = normalizeGoogleErrorCode(String(rawCode || 'google_api_error'));
+    details =
+      String(parsed?.error_description || nested?.message || parsed?.message || parsed?.error || '').trim();
+  } catch {
+    details = String(raw || '').trim();
+  }
+  const message = mapGoogleErrorMessage(code, fallbackError, details) || fallbackError;
+  return new GmailApiError(code, message, details, status);
+}
+
 async function googleFetch<T>(url: string, init: RequestInit, fallbackError: string): Promise<T> {
   const res = await fetch(url, init);
   const raw = await res.text();
   if (!res.ok) {
-    try {
-      const parsed = JSON.parse(raw);
-      const message = parsed?.error?.message || parsed?.error_description || parsed?.error || fallbackError;
-      throw new Error(message);
-    } catch (error) {
-      if (error instanceof Error && error.message !== `Unexpected token o in JSON at position 1`) throw error;
-      throw new Error(fallbackError);
-    }
+    throw parseGoogleError(raw, fallbackError, res.status);
   }
   return JSON.parse(raw) as T;
+}
+
+export function gmailErrorMeta(error: unknown): { code: string; message: string; details: string; status: number } {
+  if (error instanceof GmailApiError) {
+    return {
+      code: error.code,
+      message: error.message,
+      details: error.details,
+      status: error.status,
+    };
+  }
+  const message = error instanceof Error ? error.message : 'Unexpected Gmail error';
+  return {
+    code: 'gmail_error',
+    message,
+    details: '',
+    status: 500,
+  };
 }
 
 export function gmailScopes(): string[] {
@@ -226,7 +309,7 @@ export async function exchangeGoogleCode(code: string, origin?: string): Promise
   );
 }
 
-export async function refreshGoogleAccessToken(refreshToken: string): Promise<{ accessToken: string; scope: string[] }> {
+export async function refreshGoogleAccessToken(refreshToken: string): Promise<{ accessToken: string; scope: string[]; tokenExpiresAt: string }> {
   const params = new URLSearchParams({
     refresh_token: refreshToken,
     client_id: requireEnv('GOOGLE_CLIENT_ID'),
@@ -242,10 +325,13 @@ export async function refreshGoogleAccessToken(refreshToken: string): Promise<{ 
     },
     'Google token refresh failed',
   );
-  if (!data.access_token) throw new Error('Google token refresh did not return an access token');
+  if (!data.access_token) {
+    throw new GmailApiError('missing_access_token', 'Google token refresh did not return an access token', '', 500);
+  }
   return {
     accessToken: data.access_token,
     scope: String(data.scope || '').split(/\s+/).filter(Boolean),
+    tokenExpiresAt: computeExpiry(data.expires_in),
   };
 }
 
@@ -275,6 +361,22 @@ export async function gmailSearchThreadIds(accessToken: string, artistEmail: str
     'Could not search Gmail messages',
   );
   return [...new Set((data.messages || []).map((item) => String(item.threadId || '')).filter(Boolean))];
+}
+
+export async function gmailListMessageIds(accessToken: string, maxResults = 5): Promise<string[]> {
+  const params = new URLSearchParams({
+    maxResults: String(Math.max(1, Math.min(maxResults, 25))),
+  });
+  const data = await googleFetch<{ messages?: Array<{ id?: string }> }>(
+    `${GMAIL_API_BASE}/messages?${params.toString()}`,
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+    'Could not list Gmail messages',
+  );
+  return (data.messages || []).map((item) => String(item.id || '')).filter(Boolean);
+}
+
+export function tokenExpiryFromSeconds(expiresIn?: number): string {
+  return computeExpiry(expiresIn);
 }
 
 export async function fetchGmailThread(accessToken: string, externalThreadId: string): Promise<GmailThread> {

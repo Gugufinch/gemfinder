@@ -1402,10 +1402,39 @@ async function apiGetGmailStatus() {
       available: !!data.available,
       currentUserConnected: !!data.currentUserConnected,
       currentUserGmail: data.currentUserGmail || "",
+      currentConnection: data.currentConnection || null,
       connections: Array.isArray(data.connections) ? data.connections : [],
     };
   } catch {
     return { ok: false, error: "Network error loading Gmail status" };
+  }
+}
+
+async function apiTestGmailProfile() {
+  try {
+    const res = await fetch("/api/ar/gmail/test-profile", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return { ok: false, error: data.error || "Could not validate Gmail profile", code: data.code || "", details: data.details || "" };
+    return { ok: true, ...data };
+  } catch {
+    return { ok: false, error: "Network error validating Gmail profile", code: "network_error", details: "" };
+  }
+}
+
+async function apiTestGmailList() {
+  try {
+    const res = await fetch("/api/ar/gmail/test-list", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return { ok: false, error: data.error || "Could not validate Gmail API access", code: data.code || "", details: data.details || "" };
+    return { ok: true, ...data };
+  } catch {
+    return { ok: false, error: "Network error validating Gmail API access", code: "network_error", details: "" };
   }
 }
 
@@ -1724,8 +1753,17 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [followUpLoading, setFollowUpLoading] = useState(false);
   const [improveLoading, setImproveLoading] = useState(false);
   const [detailTab, setDetailTab] = useState("outreach");
-  const [gmailStatus, setGmailStatus] = useState({ available: false, currentUserConnected: false, currentUserGmail: "", connections: [] });
+  const [gmailStatus, setGmailStatus] = useState({
+    available: false,
+    currentUserConnected: false,
+    currentUserGmail: "",
+    currentConnection: null,
+    connections: [],
+  });
   const [gmailStatusLoading, setGmailStatusLoading] = useState(false);
+  const [gmailProfileTesting, setGmailProfileTesting] = useState(false);
+  const [gmailListTesting, setGmailListTesting] = useState(false);
+  const [gmailBanner, setGmailBanner] = useState(null);
   const [artistInbox, setArtistInbox] = useState({ threads: [], messages: [], connections: [] });
   const [projectInbox, setProjectInbox] = useState({ threads: [], messages: [], connections: [] });
   const [projectInboxLoading, setProjectInboxLoading] = useState(false);
@@ -1771,8 +1809,30 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const currentActor = sessionUserName || authEmail || authUserId || "Unknown";
   const reportScopeMode = workspaceUser === ALL_USER_VIEW ? "team" : "workspace";
   const reportViewLabel = workspaceUser === ALL_USER_VIEW ? "All" : workspaceUser === UNASSIGNED_USER_VIEW ? "Unassigned" : workspaceUser;
+  const gmailConnectionMeta = gmailStatus.currentConnection || null;
+  const gmailConnected = !!gmailConnectionMeta?.connected;
+  const fmtDateTime = useCallback((iso) => {
+    if (!iso) return "Never";
+    const dt = new Date(iso);
+    if (Number.isNaN(dt.getTime())) return "Never";
+    return dt.toLocaleString("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    });
+  }, []);
+  const setGmailBannerMessage = useCallback((kind, message, details = "") => {
+    setGmailBanner({ kind, message, details });
+  }, []);
 
   const C = dark ? DK : LT;
+  const gmailBannerTone = gmailBanner?.kind === "error"
+    ? { border: C.rbd, bg: C.rb, fg: C.rd }
+    : gmailBanner?.kind === "success"
+      ? { border: C.gd, bg: C.gb, fg: C.gn }
+      : { border: C.bd, bg: C.sa, fg: C.ts };
   const ft = "'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif";
   const mn = "'JetBrains Mono','Fira Code','SF Mono',monospace";
   const mkP = (a, cl, bg) => ({
@@ -1977,6 +2037,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
           available: !!result.available,
           currentUserConnected: !!result.currentUserConnected,
           currentUserGmail: result.currentUserGmail || "",
+          currentConnection: result.currentConnection || null,
           connections: result.connections || [],
         });
       }
@@ -1992,48 +2053,47 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     const url = new URL(window.location.href);
     const gmail = url.searchParams.get("gmail") || "";
     const gmailError = url.searchParams.get("gmail_error") || "";
+    const gmailErrorDetails = url.searchParams.get("gmail_error_details") || "";
     if (!gmail && !gmailError) return;
 
-    if (gmail === "connected") {
-      flash("Gmail connected");
-      refreshGmailStatus();
-    } else if (gmail === "missing_refresh_token") {
-      flash("Google did not return a refresh token. Disconnect and reconnect Gmail, then approve consent again.", "err");
-    } else if (gmail === "not_configured") {
-      flash("Google OAuth is not configured on this deployment.", "err");
-    } else if (gmail === "auth_required") {
-      flash("Sign in before connecting Gmail.", "err");
-    } else if (gmail === "forbidden") {
-      flash("Viewer role cannot connect Gmail.", "err");
-    } else if (gmail === "state_error") {
-      flash("Gmail connection state expired. Try connecting again.", "err");
-    } else if (gmailError) {
-      flash(decodeURIComponent(gmailError), "err");
-    }
+    (async () => {
+      if (gmail === "connected") {
+        await refreshGmailStatus();
+        await runGmailProfileCheck({ silent: true });
+      } else if (gmail === "missing_refresh_token") {
+        const message = "No refresh token returned; ensure prompt=consent + access_type=offline.";
+        setGmailBannerMessage("error", message, "Disconnect the mailbox, then reconnect and approve Google consent again.");
+        flash(message, "err");
+      } else if (gmail === "not_configured") {
+        const message = "Google OAuth is not configured on this deployment.";
+        setGmailBannerMessage("error", message, "Check GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, APP_URL, and the redirect URI in Google Cloud.");
+        flash(message, "err");
+      } else if (gmail === "auth_required") {
+        const message = "Sign in before connecting Gmail.";
+        setGmailBannerMessage("error", message, "");
+        flash(message, "err");
+      } else if (gmail === "forbidden") {
+        const message = "Viewer role cannot connect Gmail.";
+        setGmailBannerMessage("error", message, "");
+        flash(message, "err");
+      } else if (gmail === "state_error") {
+        const message = "Gmail connection state expired. Try connecting again.";
+        setGmailBannerMessage("error", message, "");
+        flash(message, "err");
+      } else if (gmailError) {
+        const message = decodeURIComponent(gmailError);
+        const details = gmailErrorDetails ? decodeURIComponent(gmailErrorDetails) : "";
+        setGmailBannerMessage("error", message, details);
+        flash(message, "err");
+      }
+    })();
 
     url.searchParams.delete("gmail");
     url.searchParams.delete("gmail_error");
+    url.searchParams.delete("gmail_error_details");
+    url.searchParams.delete("gmail_error_code");
     window.history.replaceState({}, "", `${url.pathname}${url.search || ""}${url.hash || ""}`);
   }, []);
-
-  useEffect(() => {
-    if (!authUserId) return;
-    try {
-      const params = new URLSearchParams(window.location.search || "");
-      const gmailFlag = params.get("gmail");
-      const gmailError = params.get("gmail_error");
-      if (gmailFlag === "connected") flash("Gmail connected");
-      if (gmailFlag === "missing_refresh_token") flash("Google did not return a refresh token. Disconnect and reconnect Gmail.", "err");
-      if (gmailFlag === "not_configured") flash("Google OAuth is not configured on this deploy", "err");
-      if (gmailError) flash(decodeURIComponent(gmailError), "err");
-      if (gmailFlag || gmailError) {
-        params.delete("gmail");
-        params.delete("gmail_error");
-        const next = `${window.location.pathname}${params.toString() ? `?${params.toString()}` : ""}`;
-        window.history.replaceState(null, "", next);
-      }
-    } catch {}
-  }, [authUserId]);
 
   const persist = useCallback(async (np, la, dk, vm, lb, wu) => {
     const nextProjects = np || projects;
@@ -2558,12 +2618,47 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         available: !!result.available,
         currentUserConnected: !!result.currentUserConnected,
         currentUserGmail: result.currentUserGmail || "",
+        currentConnection: result.currentConnection || null,
         connections: result.connections || [],
       });
     } else {
       flash(result.error || "Could not load Gmail status", "err");
     }
     setGmailStatusLoading(false);
+    return result;
+  };
+
+  const runGmailProfileCheck = async ({ silent = false } = {}) => {
+    setGmailProfileTesting(true);
+    const result = await apiTestGmailProfile();
+    setGmailProfileTesting(false);
+    if (!result.ok) {
+      setGmailBannerMessage("error", result.error || "Gmail profile validation failed", result.details || "");
+      if (!silent) flash(result.error || "Gmail profile validation failed", "err");
+      return result;
+    }
+    setGmailBannerMessage("success", `Gmail connected for ${result.emailAddress}`, result.historyId ? `History ID: ${result.historyId}` : "");
+    await refreshGmailStatus();
+    if (!silent) flash(`Gmail connected for ${result.emailAddress}`);
+    return result;
+  };
+
+  const runGmailListCheck = async () => {
+    setGmailListTesting(true);
+    const result = await apiTestGmailList();
+    setGmailListTesting(false);
+    if (!result.ok) {
+      setGmailBannerMessage("error", result.error || "Gmail API test failed", result.details || "");
+      flash(result.error || "Gmail API test failed", "err");
+      return result;
+    }
+    setGmailBannerMessage(
+      "success",
+      `Gmail API is working for ${result.provider_email || gmailStatus.currentUserGmail || "this mailbox"}`,
+      result.sample_message_ids?.length ? `Sample IDs: ${result.sample_message_ids.join(", ")}` : "No recent messages returned, but the API call succeeded.",
+    );
+    await refreshGmailStatus();
+    flash("Gmail API test passed");
     return result;
   };
 
@@ -2580,6 +2675,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       return;
     }
     await refreshGmailStatus();
+    setGmailBannerMessage("info", "Gmail disconnected", "Reconnect your mailbox to send or sync from Gmail.");
     flash("Gmail disconnected");
   };
 
@@ -2662,6 +2758,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     if (proj?.id) {
       await loadProjectInbox(proj.id, selectedProjectThreadKey || "");
     }
+    await refreshGmailStatus();
     if (result.errors?.length) {
       flash(result.errors[0], "err");
     } else {
@@ -3271,6 +3368,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     if (proj?.id) {
       await loadProjectInbox(proj.id, result.threadKey || selectedProjectThreadKey || "");
     }
+    await refreshGmailStatus();
     await trackSend(artist, draft, "gmail_api", { subject: parsed.subject });
     flash(`Email sent from ${result.senderGmailEmail || "Gmail"}`);
   };
@@ -3315,6 +3413,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     if (proj?.id) {
       await loadProjectInbox(proj.id, result.threadKey || selectedProjectThreadKey || "");
     }
+    await refreshGmailStatus();
     await trackSend(artist, { key: "gmail_reply", channel: "email", text: `Subject: ${subject}\n\n${body}`, variantId: "GMAIL" }, "gmail_api", { subject, sequenceStep: "Inbox reply" });
     flash(`Reply sent from ${result.senderGmailEmail || "Gmail"}`);
   };
@@ -3353,6 +3452,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     if (selA?.n === thread.artistName) {
       await loadArtistInbox(selA);
     }
+    await refreshGmailStatus();
     setGmailReplyDraft("");
     if (artist) {
       await trackSend(artist, { key: "gmail_reply", channel: "email", text: `Subject: ${subject}\n\n${body}`, variantId: "GMAIL" }, "gmail_api", { subject, sequenceStep: "Inbox reply" });
@@ -4006,8 +4106,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     const currentOwner = proj?.assignments?.[a.n] || "Unassigned";
     const mailboxSummary = selectedMailbox
       ? `${selectedMailbox.workspaceEmail.split("@")[0]} · ${selectedMailbox.gmailEmail}`
-      : gmailStatus.currentUserConnected
-        ? gmailStatus.currentUserGmail
+      : gmailConnected
+        ? (gmailConnectionMeta?.provider_email || gmailStatus.currentUserGmail)
         : "Not connected";
     const railStats = [
       { label: "Stage", value: currentStageMeta.label, tone: sc(stage, C) },
@@ -4448,7 +4548,7 @@ Requirements:
                   </div>
                 </div>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                  {!gmailStatus.currentUserConnected ? (
+                  {!gmailConnected ? (
                     <button onClick={connectGmail} disabled={gmailStatusLoading || isReadOnly} style={{ padding: "6px 12px", borderRadius: 9, border: `1.5px solid ${C.ac}`, background: C.al, color: C.ac, cursor: gmailStatusLoading || isReadOnly ? "not-allowed" : "pointer", fontSize: 11, fontWeight: 600, fontFamily: ft, ...lockStyle(gmailStatusLoading || isReadOnly) }}>
                       Connect My Gmail
                     </button>
@@ -4457,10 +4557,48 @@ Requirements:
                       Disconnect My Gmail
                     </button>
                   )}
+                  <button onClick={() => runGmailProfileCheck()} disabled={gmailProfileTesting || !gmailConnected || isReadOnly} style={{ padding: "6px 12px", borderRadius: 9, border: `1px solid ${C.bd}`, background: C.sf, color: C.ts, cursor: gmailProfileTesting || !gmailConnected || isReadOnly ? "not-allowed" : "pointer", fontSize: 11, fontWeight: 600, fontFamily: ft, ...lockStyle(gmailProfileTesting || !gmailConnected || isReadOnly) }}>
+                    {gmailProfileTesting ? "Checking..." : "Test Profile"}
+                  </button>
+                  <button onClick={runGmailListCheck} disabled={gmailListTesting || !gmailConnected || isReadOnly} style={{ padding: "6px 12px", borderRadius: 9, border: `1px solid ${C.bd}`, background: C.sf, color: C.ts, cursor: gmailListTesting || !gmailConnected || isReadOnly ? "not-allowed" : "pointer", fontSize: 11, fontWeight: 600, fontFamily: ft, ...lockStyle(gmailListTesting || !gmailConnected || isReadOnly) }}>
+                    {gmailListTesting ? "Testing API..." : "Test Gmail API"}
+                  </button>
                   <button onClick={() => syncArtistInbox(a)} disabled={!a.e || syncingInbox || isReadOnly} style={{ padding: "6px 12px", borderRadius: 9, border: `1px solid ${C.bd}`, background: syncingInbox ? C.sa : C.sf, color: C.ts, cursor: !a.e || syncingInbox || isReadOnly ? "not-allowed" : "pointer", fontSize: 11, fontWeight: 600, fontFamily: ft, ...lockStyle(!a.e || syncingInbox || isReadOnly) }}>
                     {syncingInbox ? "Syncing..." : "Sync Gmail"}
                   </button>
                 </div>
+              </div>
+
+              {gmailBanner && (
+                <div style={{ marginBottom: 12, padding: "10px 12px", borderRadius: 12, border: `1px solid ${gmailBannerTone.border}`, background: gmailBannerTone.bg }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: gmailBannerTone.fg }}>{gmailBanner.message}</div>
+                  {gmailBanner.details ? <div style={{ fontSize: 11, color: C.ts, marginTop: 4, lineHeight: 1.5 }}>{gmailBanner.details}</div> : null}
+                </div>
+              )}
+
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10, marginBottom: 12 }}>
+                <div style={{ padding: "10px 12px", borderRadius: 12, border: `1px solid ${C.bd}`, background: C.sa }}>
+                  <div style={{ fontSize: 10, letterSpacing: 1.2, textTransform: "uppercase", color: C.tt, marginBottom: 4 }}>Connected</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: gmailConnected ? C.gn : C.rd }}>{gmailConnected ? "Yes" : "No"}</div>
+                </div>
+                <div style={{ padding: "10px 12px", borderRadius: 12, border: `1px solid ${C.bd}`, background: C.sa }}>
+                  <div style={{ fontSize: 10, letterSpacing: 1.2, textTransform: "uppercase", color: C.tt, marginBottom: 4 }}>Connected Gmail</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: C.tx }}>{gmailConnectionMeta?.provider_email || "Not connected"}</div>
+                </div>
+                <div style={{ padding: "10px 12px", borderRadius: 12, border: `1px solid ${C.bd}`, background: C.sa }}>
+                  <div style={{ fontSize: 10, letterSpacing: 1.2, textTransform: "uppercase", color: C.tt, marginBottom: 4 }}>Last Token Refresh</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: C.tx }}>{fmtDateTime(gmailConnectionMeta?.last_refresh_at)}</div>
+                </div>
+                <div style={{ padding: "10px 12px", borderRadius: 12, border: `1px solid ${C.bd}`, background: C.sa }}>
+                  <div style={{ fontSize: 10, letterSpacing: 1.2, textTransform: "uppercase", color: C.tt, marginBottom: 4 }}>Last Sync</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: C.tx }}>{fmtDateTime(gmailConnectionMeta?.last_sync_at)}</div>
+                </div>
+              </div>
+
+              <div style={{ fontSize: 11, color: C.tt, lineHeight: 1.5, marginBottom: 12 }}>
+                {gmailConnected
+                  ? `Scopes: ${(gmailConnectionMeta?.scopes || []).join(", ") || "none reported yet"}`
+                  : "Use a songfinch.com Google account. This Gmail OAuth app is internal to Songfinch."}
               </div>
 
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
@@ -4756,8 +4894,8 @@ Requirements:
                       <div className="gf-rail-kv-label">Mailbox</div>
                       <div className="gf-rail-kv-value">{mailboxSummary}</div>
                       <div style={{ fontSize: 11, color: C.tt }}>
-                        {gmailStatus.currentUserConnected
-                          ? `Current user connected as ${gmailStatus.currentUserGmail}`
+                        {gmailConnected
+                          ? `Current user connected as ${gmailConnectionMeta?.provider_email || gmailStatus.currentUserGmail}`
                           : "Current user is not connected yet"}
                       </div>
                     </div>
@@ -4785,12 +4923,38 @@ Requirements:
                   <div style={{ fontSize: 11, color: C.ts, lineHeight: 1.6, marginBottom: 12 }}>
                     This is where to verify direct Gmail sending. If a mailbox is connected here, GEMFINDER can send from it in Outreach and Inbox.
                   </div>
+                  <div style={{ display: "grid", gap: 10, marginBottom: 12 }}>
+                    <div className="gf-rail-kv">
+                      <div className="gf-rail-kv-label">Connected</div>
+                      <div className="gf-rail-kv-value" style={{ color: gmailConnected ? C.gn : C.rd }}>{gmailConnected ? "Yes" : "No"}</div>
+                    </div>
+                    <div className="gf-rail-kv">
+                      <div className="gf-rail-kv-label">Connected Gmail</div>
+                      <div className="gf-rail-kv-value">{gmailConnectionMeta?.provider_email || "Not connected"}</div>
+                    </div>
+                    <div className="gf-rail-kv">
+                      <div className="gf-rail-kv-label">Last Token Refresh</div>
+                      <div className="gf-rail-kv-value">{fmtDateTime(gmailConnectionMeta?.last_refresh_at)}</div>
+                    </div>
+                    <div className="gf-rail-kv">
+                      <div className="gf-rail-kv-label">Last Sync</div>
+                      <div className="gf-rail-kv-value">{fmtDateTime(gmailConnectionMeta?.last_sync_at)}</div>
+                    </div>
+                  </div>
+                  {gmailConnectionMeta?.last_error ? (
+                    <div style={{ marginBottom: 12, padding: "9px 10px", borderRadius: 10, border: `1px solid ${C.rbd}`, background: C.rb, color: C.rd, fontSize: 11, lineHeight: 1.5 }}>
+                      {gmailConnectionMeta.last_error}
+                    </div>
+                  ) : null}
                   {connectedGmailAccounts.length ? (
                     <div style={{ display: "grid", gap: 6, marginBottom: 12 }}>
                       {connectedGmailAccounts.map((conn) => (
                         <div key={conn.userId} style={{ padding: "8px 10px", borderRadius: 10, border: `1px solid ${selectedMailbox?.userId === conn.userId ? `${C.ac}40` : C.bd}`, background: selectedMailbox?.userId === conn.userId ? C.al : C.sa }}>
                           <div style={{ fontSize: 12, fontWeight: 700, color: C.tx }}>{conn.workspaceEmail.split("@")[0]}</div>
-                          <div style={{ fontSize: 11, color: C.ts, marginTop: 2 }}>{conn.gmailEmail}</div>
+                          <div style={{ fontSize: 11, color: C.ts, marginTop: 2 }}>{conn.providerEmail || conn.gmailEmail}</div>
+                          <div style={{ fontSize: 10, color: C.tt, marginTop: 4 }}>
+                            Refresh {fmtDateTime(conn.lastRefreshAt)} · Sync {fmtDateTime(conn.lastSyncAt)}
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -4800,7 +4964,7 @@ Requirements:
                     </div>
                   )}
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                    {!gmailStatus.currentUserConnected ? (
+                    {!gmailConnected ? (
                       <button onClick={connectGmail} disabled={gmailStatusLoading || isReadOnly} style={{ ...actionBtn(true, "accent"), ...lockStyle(gmailStatusLoading || isReadOnly) }}>
                         {gmailStatusLoading ? "Checking..." : "Connect My Gmail"}
                       </button>
@@ -4809,6 +4973,12 @@ Requirements:
                         Disconnect My Gmail
                       </button>
                     )}
+                    <button onClick={() => runGmailProfileCheck()} disabled={gmailProfileTesting || !gmailConnected || isReadOnly} style={{ ...actionBtn(false, "neutral"), ...lockStyle(gmailProfileTesting || !gmailConnected || isReadOnly) }}>
+                      {gmailProfileTesting ? "Checking..." : "Test Profile"}
+                    </button>
+                    <button onClick={runGmailListCheck} disabled={gmailListTesting || !gmailConnected || isReadOnly} style={{ ...actionBtn(false, "neutral"), ...lockStyle(gmailListTesting || !gmailConnected || isReadOnly) }}>
+                      {gmailListTesting ? "Testing API..." : "Test Gmail API"}
+                    </button>
                     {a.e && (
                       <button onClick={() => syncArtistInbox(a)} disabled={syncingInbox || isReadOnly} style={{ ...actionBtn(false, "neutral"), ...lockStyle(syncingInbox || isReadOnly) }}>
                         {syncingInbox ? "Syncing..." : "Sync Artist Inbox"}
@@ -5307,7 +5477,7 @@ Requirements:
                   </div>
                 </div>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                  {!gmailStatus.currentUserConnected ? (
+                  {!gmailConnected ? (
                     <button onClick={connectGmail} disabled={gmailStatusLoading || isReadOnly} style={{ ...actionBtn(true, "accent"), ...lockStyle(gmailStatusLoading || isReadOnly) }}>
                       {gmailStatusLoading ? "Checking..." : "Connect My Gmail"}
                     </button>
@@ -5640,12 +5810,42 @@ Requirements:
                     <div style={{ fontSize: 12, color: C.ts }}>Google OAuth is not configured yet.</div>
                   ) : (
                     <div style={{ display: "grid", gap: 10 }}>
-                      <div style={{ fontSize: 12, color: C.ts }}>
-                        <strong style={{ color: C.tx }}>My mailbox:</strong>{" "}
-                        {gmailStatus.currentUserConnected ? gmailStatus.currentUserGmail : "Not connected"}
+                      {gmailBanner && (
+                        <div style={{ padding: "10px 12px", borderRadius: 12, border: `1px solid ${gmailBannerTone.border}`, background: gmailBannerTone.bg }}>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: gmailBannerTone.fg }}>{gmailBanner.message}</div>
+                          {gmailBanner.details ? <div style={{ fontSize: 11, color: C.ts, marginTop: 4, lineHeight: 1.5 }}>{gmailBanner.details}</div> : null}
+                        </div>
+                      )}
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 8 }}>
+                        <div style={{ padding: "9px 10px", borderRadius: 10, border: `1px solid ${C.bd}`, background: C.sf }}>
+                          <div style={{ fontSize: 10, letterSpacing: 1.1, textTransform: "uppercase", color: C.tt, marginBottom: 4 }}>Connected</div>
+                          <div style={{ fontSize: 13, fontWeight: 700, color: gmailConnected ? C.gn : C.rd }}>{gmailConnected ? "Yes" : "No"}</div>
+                        </div>
+                        <div style={{ padding: "9px 10px", borderRadius: 10, border: `1px solid ${C.bd}`, background: C.sf }}>
+                          <div style={{ fontSize: 10, letterSpacing: 1.1, textTransform: "uppercase", color: C.tt, marginBottom: 4 }}>Provider Email</div>
+                          <div style={{ fontSize: 13, fontWeight: 700, color: C.tx }}>{gmailConnectionMeta?.provider_email || "Not connected"}</div>
+                        </div>
+                        <div style={{ padding: "9px 10px", borderRadius: 10, border: `1px solid ${C.bd}`, background: C.sf }}>
+                          <div style={{ fontSize: 10, letterSpacing: 1.1, textTransform: "uppercase", color: C.tt, marginBottom: 4 }}>Last Refresh</div>
+                          <div style={{ fontSize: 13, fontWeight: 700, color: C.tx }}>{fmtDateTime(gmailConnectionMeta?.last_refresh_at)}</div>
+                        </div>
+                        <div style={{ padding: "9px 10px", borderRadius: 10, border: `1px solid ${C.bd}`, background: C.sf }}>
+                          <div style={{ fontSize: 10, letterSpacing: 1.1, textTransform: "uppercase", color: C.tt, marginBottom: 4 }}>Last Sync</div>
+                          <div style={{ fontSize: 13, fontWeight: 700, color: C.tx }}>{fmtDateTime(gmailConnectionMeta?.last_sync_at)}</div>
+                        </div>
                       </div>
+                      <div style={{ fontSize: 11, color: C.tt, lineHeight: 1.5 }}>
+                        {(gmailConnectionMeta?.scopes || []).length
+                          ? `Granted scopes: ${gmailConnectionMeta.scopes.join(", ")}`
+                          : "Use a songfinch.com Google account. This OAuth app is internal to Songfinch."}
+                      </div>
+                      {gmailConnectionMeta?.last_error ? (
+                        <div style={{ padding: "9px 10px", borderRadius: 10, border: `1px solid ${C.rbd}`, background: C.rb, color: C.rd, fontSize: 11, lineHeight: 1.5 }}>
+                          {gmailConnectionMeta.last_error}
+                        </div>
+                      ) : null}
                       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                        {!gmailStatus.currentUserConnected ? (
+                        {!gmailConnected ? (
                           <button disabled={gmailStatusLoading || isReadOnly} onClick={connectGmail} style={{ ...actionBtn(true, "accent"), ...lockStyle(gmailStatusLoading || isReadOnly) }}>
                             {gmailStatusLoading ? "Checking..." : "Connect My Gmail"}
                           </button>
@@ -5654,6 +5854,12 @@ Requirements:
                             Disconnect My Gmail
                           </button>
                         )}
+                        <button disabled={gmailProfileTesting || !gmailConnected || isReadOnly} onClick={() => runGmailProfileCheck()} style={{ ...actionBtn(false, "neutral"), ...lockStyle(gmailProfileTesting || !gmailConnected || isReadOnly) }}>
+                          {gmailProfileTesting ? "Checking..." : "Test Profile"}
+                        </button>
+                        <button disabled={gmailListTesting || !gmailConnected || isReadOnly} onClick={runGmailListCheck} style={{ ...actionBtn(false, "neutral"), ...lockStyle(gmailListTesting || !gmailConnected || isReadOnly) }}>
+                          {gmailListTesting ? "Testing API..." : "Test Gmail API"}
+                        </button>
                       </div>
                       <div style={{ fontSize: 11, color: C.tt }}>Connected team mailboxes</div>
                       {(gmailStatus.connections || []).length ? (
@@ -5661,7 +5867,7 @@ Requirements:
                           {gmailStatus.connections.map(conn => (
                             <div key={conn.userId} style={{ display: "flex", justifyContent: "space-between", gap: 8, padding: "8px 10px", borderRadius: 10, border: `1px solid ${conn.userId === authUserId ? C.gd : C.bd}`, background: conn.userId === authUserId ? C.gb : C.sf, fontSize: 11, color: C.ts }}>
                               <span>{conn.workspaceEmail}</span>
-                              <span style={{ color: C.tx, fontWeight: 700 }}>{conn.gmailEmail}</span>
+                              <span style={{ color: C.tx, fontWeight: 700 }}>{conn.providerEmail || conn.gmailEmail}</span>
                             </div>
                           ))}
                         </div>

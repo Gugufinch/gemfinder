@@ -34,6 +34,10 @@ export interface GmailConnectionRecord {
   refreshToken: string;
   scopes: string[];
   historyId: string;
+  lastRefreshAt: string;
+  lastSyncAt: string;
+  tokenExpiresAt: string;
+  lastError: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -42,7 +46,13 @@ export interface PublicGmailConnection {
   userId: string;
   workspaceEmail: string;
   gmailEmail: string;
+  providerEmail: string;
   connected: boolean;
+  scopes: string[];
+  lastRefreshAt: string;
+  lastSyncAt: string;
+  tokenExpiresAt: string;
+  lastError: string;
   createdAt: string;
   updatedAt: string;
 }

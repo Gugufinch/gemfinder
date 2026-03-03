@@ -7,6 +7,7 @@ import {
   listArtistInbox,
   listWorkspaceGmailConnections,
   listWorkspacePrivateGmailConnections,
+  updateGmailConnectionMetadata,
   upsertArtistInbox,
 } from '@/lib/gemfinder/gmail-store';
 
@@ -43,10 +44,17 @@ export async function POST(req: NextRequest) {
   for (const connection of targets) {
     if (!connection) continue;
     try {
-      const { accessToken } = await refreshGoogleAccessToken(connection.refreshToken);
-      const threadIds = await gmailSearchThreadIds(accessToken, parsed.data.artistEmail, 12);
+      const refreshed = await refreshGoogleAccessToken(connection.refreshToken);
+      const refreshTime = new Date().toISOString();
+      await updateGmailConnectionMetadata(connection.userId, {
+        scopes: refreshed.scope.length ? refreshed.scope : connection.scopes,
+        lastRefreshAt: refreshTime,
+        tokenExpiresAt: refreshed.tokenExpiresAt || '',
+        lastError: '',
+      });
+      const threadIds = await gmailSearchThreadIds(refreshed.accessToken, parsed.data.artistEmail, 12);
       for (const threadId of threadIds) {
-        const gmailThread = await fetchGmailThread(accessToken, threadId);
+        const gmailThread = await fetchGmailThread(refreshed.accessToken, threadId);
         const records = threadToStoreRecords({
           projectId: parsed.data.projectId,
           artistName: parsed.data.artistName,
@@ -56,8 +64,15 @@ export async function POST(req: NextRequest) {
         });
         await upsertArtistInbox(records.thread, records.messages);
       }
+      await updateGmailConnectionMetadata(connection.userId, {
+        lastSyncAt: new Date().toISOString(),
+        lastError: '',
+      });
       syncedUsers.push(connection.gmailEmail);
     } catch (error) {
+      await updateGmailConnectionMetadata(connection.userId, {
+        lastError: error instanceof Error ? error.message : 'Sync failed',
+      }).catch(() => null);
       errors.push(`${connection.gmailEmail}: ${error instanceof Error ? error.message : 'Sync failed'}`);
     }
   }

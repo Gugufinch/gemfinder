@@ -59,6 +59,42 @@ OAuth callback URL:
 https://your-app.example.com/api/ar/gmail/callback
 ```
 
+### How to validate Gmail is working in production
+1. Confirm these env vars are set on the live deploy:
+   - `APP_URL`
+   - `NEXT_PUBLIC_APP_URL`
+   - `GOOGLE_CLIENT_ID`
+   - `GOOGLE_CLIENT_SECRET`
+   - `GMAIL_TOKEN_SECRET`
+2. In Google Cloud, confirm the OAuth client uses the exact live callback URL:
+   - `https://your-app.example.com/api/ar/gmail/callback`
+3. Sign into Gem Finder with an editor or admin account.
+4. Open a project, then open any artist with an email address.
+5. Go to the artist `Inbox` tab or the project `Mailboxes` settings panel.
+6. Click `Connect My Gmail`.
+7. After Google approval, Gem Finder should return to `/ar` and automatically validate the mailbox.
+8. Verify these fields show real values:
+   - `Connected: Yes`
+   - connected Gmail address
+   - last token refresh time
+   - granted scopes
+9. Run:
+   - `Test Profile`
+   - `Test Gmail API`
+10. Expected result:
+   - profile test shows `Gmail connected for {email}`
+   - Gmail API test returns success and sample message ids
+11. Then use `Sync Gmail` on an artist with a known email to pull threads into:
+   - the artist `Inbox` tab
+   - the project-wide `Inbox` view
+
+If Gmail connect fails:
+- `redirect_uri_mismatch`: callback URL in Google Cloud does not match `APP_URL`
+- `invalid_client`: wrong `GOOGLE_CLIENT_ID` or `GOOGLE_CLIENT_SECRET`
+- `invalid_grant`: refresh token revoked or expired, disconnect and reconnect
+- `No refresh token returned`: reconnect with consent and confirm `access_type=offline`
+- Google access blocked: for internal OAuth, use an allowed `songfinch.com` Google account
+
 ## Auth model
 - Gem Finder uses its own email/password auth.
 - Supabase Auth is not required.

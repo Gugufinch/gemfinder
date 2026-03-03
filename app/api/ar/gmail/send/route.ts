@@ -6,6 +6,7 @@ import {
   getPrivateGmailConnectionByUserId,
   listArtistInbox,
   listWorkspaceGmailConnections,
+  updateGmailConnectionMetadata,
   upsertArtistInbox,
 } from '@/lib/gemfinder/gmail-store';
 
@@ -52,9 +53,16 @@ export async function POST(req: NextRequest) {
   const inReplyTo = references[references.length - 1] || '';
 
   try {
-    const { accessToken } = await refreshGoogleAccessToken(sender.refreshToken);
+    const refreshed = await refreshGoogleAccessToken(sender.refreshToken);
+    const now = new Date().toISOString();
+    await updateGmailConnectionMetadata(sender.userId, {
+      scopes: refreshed.scope.length ? refreshed.scope : sender.scopes,
+      lastRefreshAt: now,
+      tokenExpiresAt: refreshed.tokenExpiresAt || '',
+      lastError: '',
+    });
     const sent = await sendGmailMessage({
-      accessToken,
+      accessToken: refreshed.accessToken,
       to: parsed.data.artistEmail,
       subject: parsed.data.subject,
       body: parsed.data.body,
@@ -62,7 +70,7 @@ export async function POST(req: NextRequest) {
       inReplyTo,
       references,
     });
-    const gmailThread = await fetchGmailThread(accessToken, sent.threadId);
+    const gmailThread = await fetchGmailThread(refreshed.accessToken, sent.threadId);
     const records = threadToStoreRecords({
       projectId: parsed.data.projectId,
       artistName: parsed.data.artistName,
@@ -73,6 +81,10 @@ export async function POST(req: NextRequest) {
       thread: gmailThread,
     });
     await upsertArtistInbox(records.thread, records.messages);
+    await updateGmailConnectionMetadata(sender.userId, {
+      lastSyncAt: new Date().toISOString(),
+      lastError: '',
+    });
     const inbox = await listArtistInbox(parsed.data.projectId, parsed.data.artistName);
     const connections = await listWorkspaceGmailConnections();
     return NextResponse.json({
@@ -84,6 +96,9 @@ export async function POST(req: NextRequest) {
       connections,
     });
   } catch (error) {
+    await updateGmailConnectionMetadata(sender.userId, {
+      lastError: error instanceof Error ? error.message : 'Could not send Gmail message',
+    }).catch(() => null);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Could not send Gmail message' },
       { status: 500 },

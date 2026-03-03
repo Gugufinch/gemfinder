@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAuthUserById } from '@/lib/gemfinder/auth-store';
-import { listWorkspaceGmailConnections } from '@/lib/gemfinder/gmail-store';
+import { getPrivateGmailConnectionByUserId, listWorkspaceGmailConnections } from '@/lib/gemfinder/gmail-store';
 
 async function getActor(req: NextRequest) {
   const userId = req.cookies.get('ar_user')?.value || '';
@@ -19,7 +19,7 @@ export async function GET(req: NextRequest) {
   }
 
   const connections = await listWorkspaceGmailConnections();
-  const current = connections.find((item) => item.userId === actor.userId) || null;
+  const current = await getPrivateGmailConnectionByUserId(actor.userId);
 
   return NextResponse.json({
     ok: true,
@@ -27,6 +27,29 @@ export async function GET(req: NextRequest) {
     currentUserId: actor.userId,
     currentUserConnected: !!current,
     currentUserGmail: current?.gmailEmail || '',
+    currentConnection: current
+      ? {
+          connected: true,
+          provider_email: current.gmailEmail,
+          gmailEmail: current.gmailEmail,
+          scopes: current.scopes || [],
+          token_expires_at: current.tokenExpiresAt || '',
+          last_refresh_at: current.lastRefreshAt || '',
+          last_sync_at: current.lastSyncAt || '',
+          last_error: current.lastError || '',
+          updated_at: current.updatedAt || '',
+        }
+      : {
+          connected: false,
+          provider_email: '',
+          gmailEmail: '',
+          scopes: [],
+          token_expires_at: '',
+          last_refresh_at: '',
+          last_sync_at: '',
+          last_error: '',
+          updated_at: '',
+        },
     connections,
   });
 }

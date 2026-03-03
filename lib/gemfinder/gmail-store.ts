@@ -29,9 +29,18 @@ create table if not exists gemfinder_gmail_connections (
   refresh_token_cipher text not null,
   scopes jsonb not null default '[]'::jsonb,
   history_id text not null default '',
+  last_refresh_at timestamptz,
+  last_sync_at timestamptz,
+  token_expires_at timestamptz,
+  last_error text not null default '',
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+alter table gemfinder_gmail_connections add column if not exists last_refresh_at timestamptz;
+alter table gemfinder_gmail_connections add column if not exists last_sync_at timestamptz;
+alter table gemfinder_gmail_connections add column if not exists token_expires_at timestamptz;
+alter table gemfinder_gmail_connections add column if not exists last_error text not null default '';
 
 create table if not exists gemfinder_gmail_threads (
   thread_key text primary key,
@@ -201,6 +210,10 @@ function normalizeConnection(value: Partial<GmailConnectionRecord>): GmailConnec
     refreshToken: String(value.refreshToken),
     scopes: normalizeStringArray(value.scopes),
     historyId: String(value.historyId || ''),
+    lastRefreshAt: normalizeIso(value.lastRefreshAt),
+    lastSyncAt: normalizeIso(value.lastSyncAt),
+    tokenExpiresAt: normalizeIso(value.tokenExpiresAt),
+    lastError: String(value.lastError || ''),
     createdAt: normalizeIso(value.createdAt) || now,
     updatedAt: normalizeIso(value.updatedAt) || now,
   };
@@ -298,7 +311,13 @@ function toPublicConnection(value: GmailConnectionRecord): PublicGmailConnection
     userId: value.userId,
     workspaceEmail: value.workspaceEmail,
     gmailEmail: value.gmailEmail,
+    providerEmail: value.gmailEmail,
     connected: true,
+    scopes: value.scopes,
+    lastRefreshAt: value.lastRefreshAt,
+    lastSyncAt: value.lastSyncAt,
+    tokenExpiresAt: value.tokenExpiresAt,
+    lastError: value.lastError,
     createdAt: value.createdAt,
     updatedAt: value.updatedAt,
   };
@@ -312,6 +331,10 @@ function mapDbConnection(row: Record<string, unknown>): GmailConnectionRecord {
     refreshToken: decryptToken(String(row.refresh_token_cipher || '')),
     scopes: normalizeStringArray(row.scopes),
     historyId: String(row.history_id || ''),
+    lastRefreshAt: normalizeIso(row.last_refresh_at),
+    lastSyncAt: normalizeIso(row.last_sync_at),
+    tokenExpiresAt: normalizeIso(row.token_expires_at),
+    lastError: String(row.last_error || ''),
     createdAt: normalizeIso(row.created_at) || new Date().toISOString(),
     updatedAt: normalizeIso(row.updated_at) || new Date().toISOString(),
   };
@@ -428,9 +451,10 @@ export async function upsertGmailConnection(value: GmailConnectionRecord): Promi
   await ensureSchema();
   await getPool().query(
     `insert into gemfinder_gmail_connections (
-      user_id, workspace_email, gmail_email, refresh_token_cipher, scopes, history_id, created_at, updated_at
+      user_id, workspace_email, gmail_email, refresh_token_cipher, scopes, history_id,
+      last_refresh_at, last_sync_at, token_expires_at, last_error, created_at, updated_at
     )
-    values ($1, $2, $3, $4, $5::jsonb, $6, $7::timestamptz, $8::timestamptz)
+    values ($1, $2, $3, $4, $5::jsonb, $6, $7::timestamptz, $8::timestamptz, $9::timestamptz, $10, $11::timestamptz, $12::timestamptz)
     on conflict (user_id)
     do update set
       workspace_email = excluded.workspace_email,
@@ -438,6 +462,10 @@ export async function upsertGmailConnection(value: GmailConnectionRecord): Promi
       refresh_token_cipher = excluded.refresh_token_cipher,
       scopes = excluded.scopes,
       history_id = excluded.history_id,
+      last_refresh_at = excluded.last_refresh_at,
+      last_sync_at = excluded.last_sync_at,
+      token_expires_at = excluded.token_expires_at,
+      last_error = excluded.last_error,
       updated_at = excluded.updated_at`,
     [
       normalized.userId,
@@ -446,10 +474,42 @@ export async function upsertGmailConnection(value: GmailConnectionRecord): Promi
       encryptToken(normalized.refreshToken),
       JSON.stringify(normalized.scopes),
       normalized.historyId,
+      normalized.lastRefreshAt || null,
+      normalized.lastSyncAt || null,
+      normalized.tokenExpiresAt || null,
+      normalized.lastError,
       normalized.createdAt,
       normalized.updatedAt,
     ],
   );
+}
+
+export async function updateGmailConnectionMetadata(
+  userId: string,
+  changes: Partial<Omit<GmailConnectionRecord, 'userId'>>,
+): Promise<GmailConnectionRecord | null> {
+  if (!userId) return null;
+  const existing = await getPrivateGmailConnectionByUserId(userId);
+  if (!existing) return null;
+  const merged = normalizeConnection({
+    ...existing,
+    ...changes,
+    userId: existing.userId,
+    workspaceEmail: changes.workspaceEmail ?? existing.workspaceEmail,
+    gmailEmail: changes.gmailEmail ?? existing.gmailEmail,
+    refreshToken: changes.refreshToken ?? existing.refreshToken,
+    scopes: changes.scopes ?? existing.scopes,
+    historyId: changes.historyId ?? existing.historyId,
+    lastRefreshAt: changes.lastRefreshAt !== undefined ? changes.lastRefreshAt : existing.lastRefreshAt,
+    lastSyncAt: changes.lastSyncAt !== undefined ? changes.lastSyncAt : existing.lastSyncAt,
+    tokenExpiresAt: changes.tokenExpiresAt !== undefined ? changes.tokenExpiresAt : existing.tokenExpiresAt,
+    lastError: changes.lastError !== undefined ? changes.lastError : existing.lastError,
+    createdAt: existing.createdAt,
+    updatedAt: changes.updatedAt || new Date().toISOString(),
+  });
+  if (!merged) return null;
+  await upsertGmailConnection(merged);
+  return merged;
 }
 
 export async function deleteGmailConnection(userId: string): Promise<void> {

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAuthUserById } from '@/lib/gemfinder/auth-store';
-import { exchangeGoogleCode, fetchGmailProfile } from '@/lib/gemfinder/gmail';
-import { getPrivateGmailConnectionByUserId, upsertGmailConnection } from '@/lib/gemfinder/gmail-store';
+import { exchangeGoogleCode, fetchGmailProfile, gmailErrorMeta, tokenExpiryFromSeconds } from '@/lib/gemfinder/gmail';
+import { getPrivateGmailConnectionByUserId, updateGmailConnectionMetadata, upsertGmailConnection } from '@/lib/gemfinder/gmail-store';
 
 type GmailStatePayload = {
   nonce: string;
@@ -32,9 +32,20 @@ function addQuery(pathname: string, key: string, value: string): string {
   return `${url.pathname}${url.search}`;
 }
 
+function addQueries(pathname: string, params: Record<string, string | undefined>): string {
+  let next = pathname;
+  Object.entries(params).forEach(([key, value]) => {
+    if (!value) return;
+    next = addQuery(next, key, value);
+  });
+  return next;
+}
+
 export async function GET(req: NextRequest) {
   const code = req.nextUrl.searchParams.get('code') || '';
   const state = req.nextUrl.searchParams.get('state') || '';
+  const googleError = req.nextUrl.searchParams.get('error') || '';
+  const googleErrorDescription = req.nextUrl.searchParams.get('error_description') || '';
   const cookieState = req.cookies.get('ar_gmail_state')?.value || '';
   const parsedState = decodeState(cookieState);
   const clearAndRedirect = (path: string) => {
@@ -47,6 +58,20 @@ export async function GET(req: NextRequest) {
     return clearAndRedirect('/ar?gmail=state_error');
   }
 
+  if (googleError) {
+    const message =
+      googleError === 'access_denied'
+        ? 'Google blocked this mailbox. Use an allowed songfinch.com account for this internal OAuth app.'
+        : decodeURIComponent(googleErrorDescription || googleError);
+    return clearAndRedirect(
+      addQueries(parsedState.returnTo || '/ar', {
+        gmail_error: message,
+        gmail_error_code: googleError,
+        gmail_error_details: googleErrorDescription || '',
+      }),
+    );
+  }
+
   const actor = await getAuthUserById(parsedState.userId);
   if (!actor || !actor.active) {
     return clearAndRedirect('/ar?gmail=auth_required');
@@ -54,25 +79,55 @@ export async function GET(req: NextRequest) {
 
   try {
     const tokens = await exchangeGoogleCode(code, req.nextUrl.origin);
+    if (!tokens.access_token) {
+      throw new Error('Google token exchange did not return an access token');
+    }
     const existing = await getPrivateGmailConnectionByUserId(actor.userId);
     const refreshToken = String(tokens.refresh_token || existing?.refreshToken || '').trim();
     if (!refreshToken) {
-      return clearAndRedirect(addQuery(parsedState.returnTo || '/ar', 'gmail', 'missing_refresh_token'));
+      await updateGmailConnectionMetadata(actor.userId, {
+        lastError: 'No refresh token returned; ensure prompt=consent + access_type=offline.',
+      }).catch(() => null);
+      return clearAndRedirect(
+        addQueries(parsedState.returnTo || '/ar', {
+          gmail: 'missing_refresh_token',
+          gmail_error: 'No refresh token returned; ensure prompt=consent + access_type=offline.',
+          gmail_error_code: 'missing_refresh_token',
+        }),
+      );
     }
-    const profile = await fetchGmailProfile(String(tokens.access_token || ''));
+    const profile = await fetchGmailProfile(tokens.access_token);
+    const now = new Date().toISOString();
+    const grantedScopes = String(tokens.scope || '')
+      .split(/\s+/)
+      .map((item) => item.trim())
+      .filter(Boolean);
     await upsertGmailConnection({
       userId: actor.userId,
       workspaceEmail: actor.email,
       gmailEmail: profile.emailAddress,
       refreshToken,
-      scopes: String(tokens.scope || '').split(/\s+/).filter(Boolean),
+      scopes: grantedScopes,
       historyId: profile.historyId,
+      lastRefreshAt: now,
+      lastSyncAt: existing?.lastSyncAt || '',
+      tokenExpiresAt: tokenExpiryFromSeconds(tokens.expires_in),
+      lastError: '',
       createdAt: existing?.createdAt || new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+      updatedAt: now,
     });
     return clearAndRedirect(addQuery(parsedState.returnTo || '/ar', 'gmail', 'connected'));
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'google_oauth_failed';
-    return clearAndRedirect(addQuery(parsedState.returnTo || '/ar', 'gmail_error', message));
+    const meta = gmailErrorMeta(error);
+    await updateGmailConnectionMetadata(actor.userId, {
+      lastError: meta.message,
+    }).catch(() => null);
+    return clearAndRedirect(
+      addQueries(parsedState.returnTo || '/ar', {
+        gmail_error: meta.message,
+        gmail_error_code: meta.code,
+        gmail_error_details: meta.details,
+      }),
+    );
   }
 }
