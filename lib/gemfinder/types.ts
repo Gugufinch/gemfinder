@@ -26,3 +26,65 @@ export interface PasswordResetTokenRecord {
   expiresAt: string;
   createdAt: string;
 }
+
+export interface GmailConnectionRecord {
+  userId: string;
+  workspaceEmail: string;
+  gmailEmail: string;
+  refreshToken: string;
+  scopes: string[];
+  historyId: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PublicGmailConnection {
+  userId: string;
+  workspaceEmail: string;
+  gmailEmail: string;
+  connected: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface GmailThreadRecord {
+  threadKey: string;
+  projectId: string;
+  artistName: string;
+  provider: 'gmail';
+  externalThreadId: string;
+  senderUserId: string;
+  senderGmailEmail: string;
+  subject: string;
+  participants: string[];
+  snippet: string;
+  lastMessageAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface GmailMessageRecord {
+  messageKey: string;
+  threadKey: string;
+  projectId: string;
+  artistName: string;
+  provider: 'gmail';
+  externalMessageId: string;
+  externalThreadId: string;
+  direction: 'inbound' | 'outbound';
+  senderUserId: string;
+  senderGmailEmail: string;
+  actorUserId: string;
+  actorEmail: string;
+  senderEmail: string;
+  fromName: string;
+  toEmails: string[];
+  ccEmails: string[];
+  subject: string;
+  snippet: string;
+  bodyText: string;
+  sentAt: string;
+  syncedAt: string;
+  messageIdHeader: string;
+  inReplyTo: string;
+}

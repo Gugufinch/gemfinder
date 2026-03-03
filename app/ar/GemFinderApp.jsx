@@ -1258,6 +1258,96 @@ async function apiSaveProjects(projects) {
   }
 }
 
+async function apiGetGmailStatus() {
+  try {
+    const res = await fetch("/api/ar/gmail/status", { cache: "no-store" });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return { ok: false, error: data.error || "Could not load Gmail status" };
+    return {
+      ok: true,
+      available: !!data.available,
+      currentUserConnected: !!data.currentUserConnected,
+      currentUserGmail: data.currentUserGmail || "",
+      connections: Array.isArray(data.connections) ? data.connections : [],
+    };
+  } catch {
+    return { ok: false, error: "Network error loading Gmail status" };
+  }
+}
+
+async function apiGetArtistInbox(projectId, artistName) {
+  try {
+    const params = new URLSearchParams({ projectId, artistName });
+    const res = await fetch(`/api/ar/gmail/threads?${params.toString()}`, { cache: "no-store" });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return { ok: false, error: data.error || "Could not load inbox" };
+    return {
+      ok: true,
+      threads: Array.isArray(data.threads) ? data.threads : [],
+      messages: Array.isArray(data.messages) ? data.messages : [],
+      connections: Array.isArray(data.connections) ? data.connections : [],
+    };
+  } catch {
+    return { ok: false, error: "Network error loading inbox" };
+  }
+}
+
+async function apiSyncArtistInbox(payload) {
+  try {
+    const res = await fetch("/api/ar/gmail/sync", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return { ok: false, error: data.error || "Could not sync inbox" };
+    return {
+      ok: true,
+      threads: Array.isArray(data.threads) ? data.threads : [],
+      messages: Array.isArray(data.messages) ? data.messages : [],
+      connections: Array.isArray(data.connections) ? data.connections : [],
+      syncedUsers: Array.isArray(data.syncedUsers) ? data.syncedUsers : [],
+      errors: Array.isArray(data.errors) ? data.errors : [],
+    };
+  } catch {
+    return { ok: false, error: "Network error syncing inbox" };
+  }
+}
+
+async function apiSendGmail(payload) {
+  try {
+    const res = await fetch("/api/ar/gmail/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return { ok: false, error: data.error || "Could not send Gmail message" };
+    return {
+      ok: true,
+      threadKey: data.threadKey || "",
+      externalThreadId: data.externalThreadId || "",
+      senderGmailEmail: data.senderGmailEmail || "",
+      threads: Array.isArray(data.threads) ? data.threads : [],
+      messages: Array.isArray(data.messages) ? data.messages : [],
+      connections: Array.isArray(data.connections) ? data.connections : [],
+    };
+  } catch {
+    return { ok: false, error: "Network error sending Gmail message" };
+  }
+}
+
+async function apiDisconnectGmail() {
+  try {
+    const res = await fetch("/api/ar/gmail/disconnect", { method: "POST" });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return { ok: false, error: data.error || "Could not disconnect Gmail" };
+    return { ok: true };
+  } catch {
+    return { ok: false, error: "Network error disconnecting Gmail" };
+  }
+}
+
 function parseCSV(text) {
   const lines = text.split(/\r?\n/).filter(l => l.trim());
   if (lines.length < 2) return [];
@@ -1464,6 +1554,16 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [followUpDraft, setFollowUpDraft] = useState("");
   const [followUpLoading, setFollowUpLoading] = useState(false);
   const [improveLoading, setImproveLoading] = useState(false);
+  const [detailTab, setDetailTab] = useState("outreach");
+  const [gmailStatus, setGmailStatus] = useState({ available: false, currentUserConnected: false, currentUserGmail: "", connections: [] });
+  const [gmailStatusLoading, setGmailStatusLoading] = useState(false);
+  const [artistInbox, setArtistInbox] = useState({ threads: [], messages: [], connections: [] });
+  const [inboxLoading, setInboxLoading] = useState(false);
+  const [syncingInbox, setSyncingInbox] = useState(false);
+  const [selectedThreadKey, setSelectedThreadKey] = useState("");
+  const [gmailSendUserId, setGmailSendUserId] = useState(authUserId || "");
+  const [gmailReplyDraft, setGmailReplyDraft] = useState("");
+  const [gmailSending, setGmailSending] = useState(false);
   const authLabel = authEmail || authUserId || "Signed in";
   const roleLabel = authRole === "admin" ? "admin" : authRole === "viewer" ? "viewer" : "editor";
   const canEdit = roleLabel !== "viewer";
@@ -1637,6 +1737,47 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     return () => clearTimeout(watchdog);
   }, [loading]);
 
+  useEffect(() => {
+    if (!authUserId) return;
+    let cancelled = false;
+    (async () => {
+      setGmailStatusLoading(true);
+      const result = await apiGetGmailStatus();
+      if (cancelled) return;
+      if (result.ok) {
+        setGmailStatus({
+          available: !!result.available,
+          currentUserConnected: !!result.currentUserConnected,
+          currentUserGmail: result.currentUserGmail || "",
+          connections: result.connections || [],
+        });
+      }
+      setGmailStatusLoading(false);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [authUserId]);
+
+  useEffect(() => {
+    if (!authUserId) return;
+    try {
+      const params = new URLSearchParams(window.location.search || "");
+      const gmailFlag = params.get("gmail");
+      const gmailError = params.get("gmail_error");
+      if (gmailFlag === "connected") flash("Gmail connected");
+      if (gmailFlag === "missing_refresh_token") flash("Google did not return a refresh token. Disconnect and reconnect Gmail.", "err");
+      if (gmailFlag === "not_configured") flash("Google OAuth is not configured on this deploy", "err");
+      if (gmailError) flash(decodeURIComponent(gmailError), "err");
+      if (gmailFlag || gmailError) {
+        params.delete("gmail");
+        params.delete("gmail_error");
+        const next = `${window.location.pathname}${params.toString() ? `?${params.toString()}` : ""}`;
+        window.history.replaceState(null, "", next);
+      }
+    } catch {}
+  }, [authUserId]);
+
   const persist = useCallback(async (np, la, dk, vm, lb, wu) => {
     const nextProjects = np || projects;
     await sSet(storageKey, {
@@ -1710,6 +1851,44 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       return { ...prev, [workspaceUser]: layout };
     });
   }, [loading, workspaceUser, showHealth, showModels, showTeam, showQueue, showFunnel, showAB, showFilters, focusMode]);
+
+  useEffect(() => {
+    const connected = Array.isArray(gmailStatus.connections) ? gmailStatus.connections : [];
+    if (!connected.length) {
+      setGmailSendUserId(authUserId || "");
+      return;
+    }
+    const preferred = connected.find((item) => item.userId === authUserId) || connected[0];
+    if (!gmailSendUserId || !connected.some((item) => item.userId === gmailSendUserId)) {
+      setGmailSendUserId(preferred?.userId || authUserId || "");
+    }
+  }, [gmailStatus.connections, authUserId, gmailSendUserId]);
+
+  useEffect(() => {
+    if (!proj?.id || !selA?.n) return;
+    let cancelled = false;
+    (async () => {
+      setInboxLoading(true);
+      const result = await apiGetArtistInbox(proj.id, selA.n);
+      if (cancelled) return;
+      if (result.ok) {
+        setArtistInbox({
+          threads: result.threads || [],
+          messages: result.messages || [],
+          connections: result.connections || gmailStatus.connections || [],
+        });
+        setSelectedThreadKey((prev) => {
+          const threadKeys = new Set((result.threads || []).map((item) => item.threadKey));
+          if (prev && threadKeys.has(prev)) return prev;
+          return result.threads?.[0]?.threadKey || "";
+        });
+      }
+      setInboxLoading(false);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [proj?.id, selA?.n]);
 
   useEffect(() => {
     if (loading) return;
@@ -2069,6 +2248,99 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     if (!proj) return;
     const nextProj = { ...proj, settings: { ...(proj.settings || {}), provider, autoLogCompose: autoLog } };
     await saveProject(nextProj);
+  };
+
+  const refreshGmailStatus = async () => {
+    setGmailStatusLoading(true);
+    const result = await apiGetGmailStatus();
+    if (result.ok) {
+      setGmailStatus({
+        available: !!result.available,
+        currentUserConnected: !!result.currentUserConnected,
+        currentUserGmail: result.currentUserGmail || "",
+        connections: result.connections || [],
+      });
+    } else {
+      flash(result.error || "Could not load Gmail status", "err");
+    }
+    setGmailStatusLoading(false);
+    return result;
+  };
+
+  const connectGmail = () => {
+    window.location.href = `/api/ar/gmail/connect?returnTo=${encodeURIComponent("/ar")}`;
+  };
+
+  const disconnectGmail = async () => {
+    if (!window.confirm("Disconnect your Gmail account from GEMFINDER?")) return;
+    const result = await apiDisconnectGmail();
+    if (!result.ok) {
+      flash(result.error || "Could not disconnect Gmail", "err");
+      return;
+    }
+    await refreshGmailStatus();
+    flash("Gmail disconnected");
+  };
+
+  const loadArtistInbox = async (artist) => {
+    if (!proj?.id || !artist?.n) return { ok: false, error: "No artist selected" };
+    setInboxLoading(true);
+    const result = await apiGetArtistInbox(proj.id, artist.n);
+    setInboxLoading(false);
+    if (!result.ok) {
+      flash(result.error || "Could not load inbox", "err");
+      return result;
+    }
+    setArtistInbox({
+      threads: result.threads || [],
+      messages: result.messages || [],
+      connections: result.connections || gmailStatus.connections || [],
+    });
+    setSelectedThreadKey((prev) => {
+      const threadKeys = new Set((result.threads || []).map((item) => item.threadKey));
+      if (prev && threadKeys.has(prev)) return prev;
+      return result.threads?.[0]?.threadKey || "";
+    });
+    return result;
+  };
+
+  const syncArtistInbox = async (artist, senderUserId = "") => {
+    if (!requireEditor()) return { ok: false, error: "Editor role required" };
+    if (!proj?.id || !artist?.e) {
+      flash("This artist does not have an email to sync", "err");
+      return { ok: false, error: "Missing artist email" };
+    }
+    setSyncingInbox(true);
+    const result = await apiSyncArtistInbox({
+      projectId: proj.id,
+      artistName: artist.n,
+      artistEmail: artist.e,
+      ...(senderUserId ? { senderUserId } : {}),
+    });
+    setSyncingInbox(false);
+    if (!result.ok) {
+      flash(result.error || "Inbox sync failed", "err");
+      return result;
+    }
+    setArtistInbox({
+      threads: result.threads || [],
+      messages: result.messages || [],
+      connections: result.connections || gmailStatus.connections || [],
+    });
+    setSelectedThreadKey((prev) => {
+      const threadKeys = new Set((result.threads || []).map((item) => item.threadKey));
+      if (prev && threadKeys.has(prev)) return prev;
+      return result.threads?.[0]?.threadKey || "";
+    });
+    if (result.connections) {
+      setGmailStatus((prev) => ({ ...prev, connections: result.connections }));
+    }
+    if (result.errors?.length) {
+      flash(result.errors[0], "err");
+    } else {
+      flash(result.syncedUsers?.length ? `Synced ${result.syncedUsers.length} Gmail inbox${result.syncedUsers.length === 1 ? "" : "es"}` : "Inbox synced");
+    }
+    return result;
   };
 
   const createProj = async (name, desc) => {
@@ -2443,6 +2715,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     const bucket = bucketGenre(a.g);
     const plan = buildABPlan(proj?.abStats || {}, a, bucket);
     const defaultPlatform = a.e ? "email" : "instagram_dm";
+    setDetailTab(a.e ? "outreach" : "overview");
     setDraftPlatform(defaultPlatform);
     setSelA(a);
     setDrafts(genQuickDrafts(a, bucket, plan, defaultPlatform));
@@ -2462,6 +2735,9 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     setReplyResult(existingReply);
     setReplyInput("");
     setFollowUpDraft("");
+    setGmailReplyDraft("");
+    setArtistInbox({ threads: [], messages: [], connections: gmailStatus.connections || [] });
+    setSelectedThreadKey("");
   };
 
   const openQuickArtist = a => {
@@ -2634,6 +2910,74 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     window.open(url, "_blank", "noopener,noreferrer");
     flash(`${provider === "outlook" ? "Outlook" : "Gmail"} compose opened`);
     if (autoLogCompose) await trackSend(artist, draft, provider, { subject: parsed.subject });
+  };
+
+  const sendDraftViaGmail = async (artist, draft) => {
+    if (!requireEditor()) return;
+    if (!artist?.e) { flash("No email on file for this artist", "err"); return; }
+    if (!gmailSendUserId) { flash("Select a connected Gmail sender first", "err"); return; }
+    const parsed = parseDraftSubject(draft?.text || "", `Idea for ${artist.n}`);
+    setGmailSending(true);
+    const result = await apiSendGmail({
+      projectId: proj.id,
+      artistName: artist.n,
+      artistEmail: artist.e,
+      senderUserId: gmailSendUserId,
+      subject: parsed.subject,
+      body: parsed.body,
+    });
+    setGmailSending(false);
+    if (!result.ok) {
+      flash(result.error || "Could not send email", "err");
+      return;
+    }
+    setArtistInbox({
+      threads: result.threads || [],
+      messages: result.messages || [],
+      connections: result.connections || gmailStatus.connections || [],
+    });
+    setSelectedThreadKey(result.threadKey || result.threads?.[0]?.threadKey || "");
+    setDetailTab("inbox");
+    await trackSend(artist, draft, "gmail_api", { subject: parsed.subject });
+    flash(`Email sent from ${result.senderGmailEmail || "Gmail"}`);
+  };
+
+  const sendInboxReply = async artist => {
+    if (!requireEditor()) return;
+    if (!artist?.e) { flash("No email on file for this artist", "err"); return; }
+    if (!gmailSendUserId) { flash("Select a connected Gmail sender first", "err"); return; }
+    const body = gmailReplyDraft.trim();
+    if (!body) { flash("Reply body is empty", "err"); return; }
+    const selectedThread = artistInbox.threads.find((item) => item.threadKey === selectedThreadKey) || null;
+    const selectedMessages = selectedThread
+      ? artistInbox.messages.filter((item) => item.threadKey === selectedThread.threadKey)
+      : [];
+    const latestSubject = selectedMessages[selectedMessages.length - 1]?.subject || selectedThread?.subject || `Re: ${artist.n}`;
+    const subject = /^re:/i.test(latestSubject) ? latestSubject : `Re: ${latestSubject}`;
+    setGmailSending(true);
+    const result = await apiSendGmail({
+      projectId: proj.id,
+      artistName: artist.n,
+      artistEmail: artist.e,
+      senderUserId: gmailSendUserId,
+      subject,
+      body,
+      ...(selectedThread ? { threadKey: selectedThread.threadKey, externalThreadId: selectedThread.externalThreadId } : {}),
+    });
+    setGmailSending(false);
+    if (!result.ok) {
+      flash(result.error || "Could not send reply", "err");
+      return;
+    }
+    setArtistInbox({
+      threads: result.threads || [],
+      messages: result.messages || [],
+      connections: result.connections || gmailStatus.connections || [],
+    });
+    setSelectedThreadKey(result.threadKey || selectedThreadKey || result.threads?.[0]?.threadKey || "");
+    setGmailReplyDraft("");
+    await trackSend(artist, { key: "gmail_reply", channel: "email", text: `Subject: ${subject}\n\n${body}`, variantId: "GMAIL" }, "gmail_api", { subject, sequenceStep: "Inbox reply" });
+    flash(`Reply sent from ${result.senderGmailEmail || "Gmail"}`);
   };
 
   const enrollSeq = async (artist, sequenceId) => {
@@ -3075,6 +3419,13 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     const lastSeqTouch = seqHistory[seqHistory.length - 1] || null;
     const remainingSeqSteps = seq ? seq.steps.slice(Math.max(ss?.stepIndex || 0, 0)) : [];
     const sendHistory = (proj?.sendLog || []).filter(s => s.artist === a.n).slice(-8).reverse();
+    const connectedGmailAccounts = ((artistInbox.connections?.length ? artistInbox.connections : gmailStatus.connections) || []).filter(item => item?.connected);
+    const inboxThreads = (artistInbox.threads || []).slice().sort((x, y) => (y.lastMessageAt || "").localeCompare(x.lastMessageAt || ""));
+    const selectedThread = inboxThreads.find((item) => item.threadKey === selectedThreadKey) || inboxThreads[0] || null;
+    const selectedThreadMessages = selectedThread
+      ? (artistInbox.messages || []).filter((item) => item.threadKey === selectedThread.threadKey).sort((x, y) => (x.sentAt || "").localeCompare(y.sentAt || ""))
+      : [];
+    const latestInboundMessage = [...selectedThreadMessages].reverse().find((item) => item.direction === "inbound") || null;
 
     const d = drafts[draftTab] || null;
     const savedTemplates = sanitizeSavedTemplates(proj?.settings?.savedTemplates || []);
@@ -3197,7 +3548,53 @@ Requirements:
             Pipeline flow: Prospect → Draft Ready → Sent → Replied → Engaged → Won or Dead.
           </div>
 
-          <div style={{ ...cS, padding: "18px 22px", marginBottom: 16 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10, marginBottom: 16 }}>
+            <div style={{ ...cS, padding: "12px 14px" }}>
+              <div style={{ fontSize: 10, color: C.tt, textTransform: "uppercase", letterSpacing: 1.2 }}>Stage</div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: sc(stage, C), marginTop: 4 }}>{SM[stage]?.label || "Prospect"}</div>
+            </div>
+            <div style={{ ...cS, padding: "12px 14px" }}>
+              <div style={{ fontSize: 10, color: C.tt, textTransform: "uppercase", letterSpacing: 1.2 }}>Owner</div>
+              <div style={{ fontSize: 14, fontWeight: 700, marginTop: 4 }}>{proj?.assignments?.[a.n] || "Unassigned"}</div>
+            </div>
+            <div style={{ ...cS, padding: "12px 14px" }}>
+              <div style={{ fontSize: 10, color: C.tt, textTransform: "uppercase", letterSpacing: 1.2 }}>Next Follow-up</div>
+              <div style={{ fontSize: 14, fontWeight: 700, marginTop: 4 }}>{aFU ? sD(aFU) : "Not set"}</div>
+            </div>
+            <div style={{ ...cS, padding: "12px 14px" }}>
+              <div style={{ fontSize: 10, color: C.tt, textTransform: "uppercase", letterSpacing: 1.2 }}>Shared Inbox</div>
+              <div style={{ fontSize: 14, fontWeight: 700, marginTop: 4 }}>{inboxThreads.length} thread{inboxThreads.length === 1 ? "" : "s"}</div>
+            </div>
+          </div>
+
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
+            {[
+              ["overview", "Overview"],
+              ["outreach", "Outreach"],
+              ["inbox", `Inbox${inboxThreads.length ? ` (${inboxThreads.length})` : ""}`],
+              ["activity", "Activity"],
+            ].map(([id, label]) => (
+              <button
+                key={id}
+                onClick={() => setDetailTab(id)}
+                style={{
+                  padding: "8px 14px",
+                  borderRadius: 10,
+                  border: `1px solid ${detailTab === id ? C.ac : C.bd}`,
+                  background: detailTab === id ? C.al : C.sf,
+                  color: detailTab === id ? C.ac : C.ts,
+                  cursor: "pointer",
+                  fontSize: 12,
+                  fontWeight: 600,
+                  fontFamily: ft,
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {detailTab === "outreach" && <div style={{ ...cS, padding: "18px 22px", marginBottom: 16 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
               <div style={{ fontSize: 14, fontWeight: 700 }}>🧭 Follow-up Plan</div>
               {postSendUnlocked && (
@@ -3261,9 +3658,9 @@ Requirements:
                 </div>
               </div>
             )}
-          </div>
+          </div>}
 
-          <div style={{ ...cS, padding: "20px 24px", marginBottom: 16 }}>
+          {detailTab === "overview" && <div style={{ ...cS, padding: "20px 24px", marginBottom: 16 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: intel ? 12 : 0 }}>
               <div>
                 <div style={{ fontSize: 14, fontWeight: 700 }}>🧠 AI Intel</div>
@@ -3273,9 +3670,14 @@ Requirements:
             </div>
             {intelLoading && <div style={{ fontSize: 12, color: C.ts, padding: "12px 0" }}>🔄 Running AI analysis on {a.n}...</div>}
             {intel && <div style={{ fontSize: 13, lineHeight: 1.7, color: C.tx, whiteSpace: "pre-wrap", padding: "12px 16px", background: C.sa, borderRadius: 10, marginTop: 8, border: `1px solid ${C.bd}` }}>{intel.text}</div>}
-          </div>
+            {!intel && !intelLoading && (
+              <div style={{ fontSize: 12, color: C.ts, paddingTop: 10 }}>
+                Use AI Intel when you need fit analysis and tailored talking points. Keep the daily workflow in Outreach and Inbox.
+              </div>
+            )}
+          </div>}
 
-          <div style={{ ...cS, padding: "20px 24px", marginBottom: 16 }}>
+          {detailTab === "outreach" && <div style={{ ...cS, padding: "20px 24px", marginBottom: 16 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
               <div>
                 <div style={{ fontSize: 14, fontWeight: 700 }}>✉ Outreach Drafts</div>
@@ -3382,20 +3784,31 @@ Requirements:
                     </button>
                   )}
 
-                  <select value={sendProvider} disabled={isReadOnly} onChange={e => { const v = e.target.value; setSendProvider(v); saveSendPrefs(v, autoLogCompose); }} style={{ ...iS, padding: "6px 10px", fontSize: 11, ...lockStyle(isReadOnly) }}>
-                    <option value="gmail">Gmail</option>
-                    <option value="outlook">Outlook</option>
-                  </select>
-
-                  <label style={{ fontSize: 11, color: C.ts, display: "inline-flex", alignItems: "center", gap: 5 }}>
-                    <input type="checkbox" disabled={isReadOnly} checked={autoLogCompose} onChange={e => { const v = e.target.checked; setAutoLogCompose(v); saveSendPrefs(sendProvider, v); }} />
-                    Auto-log on compose
-                  </label>
-
                   {d.channel === "email" && (
-                    <button onClick={() => { if (!gateDraftAction("send this draft")) return; openCompose(a, d, sendProvider); }} disabled={!a.e || isReadOnly} style={{ padding: "7px 12px", borderRadius: 10, border: `1.5px solid ${C.bu}`, background: C.bb, color: C.bu, cursor: a.e && !isReadOnly ? "pointer" : "not-allowed", fontSize: 11, fontWeight: 600, fontFamily: ft, opacity: a.e && !isReadOnly ? 1 : 0.45 }}>
-                      Open in {sendProvider === "outlook" ? "Outlook" : "Gmail"}
-                    </button>
+                    <>
+                      <select value={gmailSendUserId} disabled={isReadOnly || !connectedGmailAccounts.length} onChange={e => setGmailSendUserId(e.target.value)} style={{ ...iS, padding: "6px 10px", fontSize: 11, minWidth: 220, ...lockStyle(isReadOnly || !connectedGmailAccounts.length) }}>
+                        <option value="">Send as Gmail mailbox</option>
+                        {connectedGmailAccounts.map((conn) => (
+                          <option key={conn.userId} value={conn.userId}>
+                            {conn.workspaceEmail.split("@")[0]} · {conn.gmailEmail}
+                          </option>
+                        ))}
+                      </select>
+                      <button onClick={() => { if (!gateDraftAction("send this draft")) return; sendDraftViaGmail(a, d); }} disabled={!a.e || !gmailSendUserId || gmailSending || isReadOnly} style={{ padding: "7px 12px", borderRadius: 10, border: `1.5px solid ${C.gn}`, background: C.gb, color: C.gn, cursor: !a.e || !gmailSendUserId || gmailSending || isReadOnly ? "not-allowed" : "pointer", fontSize: 11, fontWeight: 600, fontFamily: ft, opacity: !a.e || !gmailSendUserId || isReadOnly ? 0.45 : 1, ...lockStyle(!a.e || !gmailSendUserId || gmailSending || isReadOnly) }}>
+                        {gmailSending ? "Sending..." : "Send in GEMFINDER"}
+                      </button>
+                      <select value={sendProvider} disabled={isReadOnly} onChange={e => { const v = e.target.value; setSendProvider(v); saveSendPrefs(v, autoLogCompose); }} style={{ ...iS, padding: "6px 10px", fontSize: 11, ...lockStyle(isReadOnly) }}>
+                        <option value="gmail">Gmail</option>
+                        <option value="outlook">Outlook</option>
+                      </select>
+                      <label style={{ fontSize: 11, color: C.ts, display: "inline-flex", alignItems: "center", gap: 5 }}>
+                        <input type="checkbox" disabled={isReadOnly} checked={autoLogCompose} onChange={e => { const v = e.target.checked; setAutoLogCompose(v); saveSendPrefs(sendProvider, v); }} />
+                        Auto-log on compose
+                      </label>
+                      <button onClick={() => { if (!gateDraftAction("send this draft")) return; openCompose(a, d, sendProvider); }} disabled={!a.e || isReadOnly} style={{ padding: "7px 12px", borderRadius: 10, border: `1.5px solid ${C.bu}`, background: C.bb, color: C.bu, cursor: a.e && !isReadOnly ? "pointer" : "not-allowed", fontSize: 11, fontWeight: 600, fontFamily: ft, opacity: a.e && !isReadOnly ? 1 : 0.45 }}>
+                        Open in {sendProvider === "outlook" ? "Outlook" : "Gmail"}
+                      </button>
+                    </>
                   )}
 
                   <button disabled={isReadOnly} onClick={() => { if (!gateDraftAction("log this as sent")) return; trackSend(a, d, "manual"); }} style={{ padding: "7px 12px", borderRadius: 10, border: `1.5px solid ${C.gn}`, background: C.gb, color: C.gn, cursor: isReadOnly ? "not-allowed" : "pointer", fontSize: 11, fontWeight: 600, fontFamily: ft, ...lockStyle(isReadOnly) }}>Log Sent + Advance</button>
@@ -3411,9 +3824,147 @@ Requirements:
                 )}
               </div>
             )}
-          </div>
+          </div>}
 
-          {postSendUnlocked ? (
+          {detailTab === "inbox" && (
+            <div style={{ ...cS, padding: "20px 24px", marginBottom: 16 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+                <div>
+                  <div style={{ fontSize: 14, fontWeight: 700 }}>📬 Shared Gmail Inbox</div>
+                  <div style={{ fontSize: 11, color: C.tt }}>
+                    Connect one Gmail mailbox per team member. Synced threads stay visible here for the whole team.
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  {!gmailStatus.currentUserConnected ? (
+                    <button onClick={connectGmail} disabled={gmailStatusLoading || isReadOnly} style={{ padding: "6px 12px", borderRadius: 9, border: `1.5px solid ${C.ac}`, background: C.al, color: C.ac, cursor: gmailStatusLoading || isReadOnly ? "not-allowed" : "pointer", fontSize: 11, fontWeight: 600, fontFamily: ft, ...lockStyle(gmailStatusLoading || isReadOnly) }}>
+                      Connect My Gmail
+                    </button>
+                  ) : (
+                    <button onClick={disconnectGmail} disabled={gmailStatusLoading || isReadOnly} style={{ padding: "6px 12px", borderRadius: 9, border: `1px solid ${C.rbd}`, background: C.rb, color: C.rd, cursor: gmailStatusLoading || isReadOnly ? "not-allowed" : "pointer", fontSize: 11, fontWeight: 600, fontFamily: ft, ...lockStyle(gmailStatusLoading || isReadOnly) }}>
+                      Disconnect My Gmail
+                    </button>
+                  )}
+                  <button onClick={() => syncArtistInbox(a)} disabled={!a.e || syncingInbox || isReadOnly} style={{ padding: "6px 12px", borderRadius: 9, border: `1px solid ${C.bd}`, background: syncingInbox ? C.sa : C.sf, color: C.ts, cursor: !a.e || syncingInbox || isReadOnly ? "not-allowed" : "pointer", fontSize: 11, fontWeight: 600, fontFamily: ft, ...lockStyle(!a.e || syncingInbox || isReadOnly) }}>
+                    {syncingInbox ? "Syncing..." : "Sync Gmail"}
+                  </button>
+                </div>
+              </div>
+
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+                {connectedGmailAccounts.length ? connectedGmailAccounts.map((conn) => (
+                  <span key={conn.userId} style={{ ...mkP(true, conn.userId === authUserId ? C.gn : C.ts, conn.userId === authUserId ? C.gb : C.sa), cursor: "default" }}>
+                    {conn.workspaceEmail.split("@")[0]} · {conn.gmailEmail}
+                  </span>
+                )) : (
+                  <span style={{ fontSize: 12, color: C.ts }}>No Gmail accounts connected yet.</span>
+                )}
+              </div>
+
+              {!a.e ? (
+                <div style={{ fontSize: 12, color: C.ts }}>Add an artist email to unlock Gmail sync and in-app sending.</div>
+              ) : (
+                <div style={{ display: "grid", gridTemplateColumns: selectedThread ? "280px 1fr" : "1fr", gap: 14 }}>
+                  <div style={{ border: `1px solid ${C.bd}`, borderRadius: 12, background: C.sa, padding: 10, maxHeight: 520, overflowY: "auto" }}>
+                    <div style={{ fontSize: 11, color: C.tt, marginBottom: 8 }}>Threads for {a.e}</div>
+                    {inboxLoading ? (
+                      <div style={{ fontSize: 12, color: C.ts }}>Loading inbox...</div>
+                    ) : inboxThreads.length ? (
+                      <div style={{ display: "grid", gap: 8 }}>
+                        {inboxThreads.map((thread) => (
+                          <button
+                            key={thread.threadKey}
+                            onClick={() => setSelectedThreadKey(thread.threadKey)}
+                            style={{
+                              textAlign: "left",
+                              padding: "10px 12px",
+                              borderRadius: 10,
+                              border: `1px solid ${selectedThread?.threadKey === thread.threadKey ? C.ac : C.bd}`,
+                              background: selectedThread?.threadKey === thread.threadKey ? C.al : C.sf,
+                              cursor: "pointer",
+                              fontFamily: ft,
+                            }}
+                          >
+                            <div style={{ fontSize: 12, fontWeight: 700, color: C.tx, marginBottom: 4 }}>{thread.subject || "No subject"}</div>
+                            <div style={{ fontSize: 11, color: C.ts, marginBottom: 4 }}>{thread.senderGmailEmail}</div>
+                            <div style={{ fontSize: 11, color: C.tt, lineHeight: 1.5 }}>{thread.snippet || "No preview yet."}</div>
+                            <div style={{ fontSize: 10, color: C.tt, marginTop: 6 }}>{rD(thread.lastMessageAt)}</div>
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <div style={{ fontSize: 12, color: C.ts }}>No synced threads yet. Connect Gmail and sync, or send the first email from GEMFINDER.</div>
+                    )}
+                  </div>
+
+                  {selectedThread && (
+                    <div style={{ border: `1px solid ${C.bd}`, borderRadius: 12, background: C.sf, overflow: "hidden" }}>
+                      <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.bd}`, background: C.sa }}>
+                        <div style={{ fontSize: 14, fontWeight: 700 }}>{selectedThread.subject || "No subject"}</div>
+                        <div style={{ fontSize: 11, color: C.tt, marginTop: 3 }}>
+                          Mailbox: {selectedThread.senderGmailEmail} · {selectedThreadMessages.length} message{selectedThreadMessages.length === 1 ? "" : "s"}
+                        </div>
+                      </div>
+
+                      <div style={{ maxHeight: 320, overflowY: "auto", padding: 16, display: "grid", gap: 10 }}>
+                        {selectedThreadMessages.map((message) => (
+                          <div key={message.messageKey} style={{ border: `1px solid ${message.direction === "inbound" ? C.bd : C.gd}`, borderRadius: 12, padding: "10px 12px", background: message.direction === "inbound" ? C.sa : C.gb }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, marginBottom: 6, flexWrap: "wrap" }}>
+                              <div style={{ fontSize: 11, fontWeight: 700, color: C.tx }}>
+                                {message.direction === "inbound" ? "Artist reply" : "Team send"} · {message.senderEmail || message.senderGmailEmail}
+                              </div>
+                              <div style={{ fontSize: 10, color: C.tt }}>{new Date(message.sentAt).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</div>
+                            </div>
+                            <div style={{ fontSize: 12, color: C.ts, whiteSpace: "pre-wrap", lineHeight: 1.6 }}>
+                              {message.bodyText || message.snippet || "No message body"}
+                            </div>
+                            {message.direction === "inbound" && (
+                              <div style={{ marginTop: 8 }}>
+                                <button onClick={() => setReplyInput(message.bodyText || message.snippet || "")} style={{ padding: "5px 10px", borderRadius: 8, border: `1px solid ${C.ac}`, background: C.al, color: C.ac, cursor: "pointer", fontSize: 11, fontFamily: ft }}>
+                                  Use for Reply Intel
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+
+                      <div style={{ padding: 16, borderTop: `1px solid ${C.bd}`, background: C.sa }}>
+                        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
+                          <span style={{ fontSize: 11, color: C.ts }}>Send as</span>
+                          <select value={gmailSendUserId} disabled={isReadOnly || !connectedGmailAccounts.length} onChange={e => setGmailSendUserId(e.target.value)} style={{ ...iS, padding: "6px 10px", fontSize: 11, minWidth: 220, ...lockStyle(isReadOnly || !connectedGmailAccounts.length) }}>
+                            <option value="">Select mailbox</option>
+                            {connectedGmailAccounts.map((conn) => (
+                              <option key={conn.userId} value={conn.userId}>
+                                {conn.workspaceEmail.split("@")[0]} · {conn.gmailEmail}
+                              </option>
+                            ))}
+                          </select>
+                          {latestInboundMessage && <span style={{ fontSize: 11, color: C.tt }}>Latest inbound: {rD(latestInboundMessage.sentAt)}</span>}
+                        </div>
+                        <textarea value={gmailReplyDraft} readOnly={isReadOnly} onChange={e => setGmailReplyDraft(e.target.value)} placeholder="Write a Gmail reply here. The team will see the thread after send." style={{ ...iS, width: "100%", minHeight: 120, resize: "vertical", fontSize: 12, ...lockStyle(isReadOnly) }} />
+                        <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+                          <button onClick={() => sendInboxReply(a)} disabled={gmailSending || !gmailSendUserId || isReadOnly} style={{ padding: "7px 14px", borderRadius: 10, border: "none", background: gmailSending ? C.bl : C.ac, color: "#fff", cursor: gmailSending || !gmailSendUserId || isReadOnly ? "not-allowed" : "pointer", fontSize: 12, fontWeight: 600, fontFamily: ft, ...lockStyle(gmailSending || !gmailSendUserId || isReadOnly) }}>
+                            {gmailSending ? "Sending..." : "Send Reply"}
+                          </button>
+                          <button onClick={() => latestInboundMessage && setReplyInput(latestInboundMessage.bodyText || latestInboundMessage.snippet || "")} disabled={!latestInboundMessage} style={{ padding: "7px 12px", borderRadius: 10, border: `1px solid ${C.bd}`, background: "transparent", color: C.ts, cursor: latestInboundMessage ? "pointer" : "not-allowed", fontSize: 11, fontFamily: ft, opacity: latestInboundMessage ? 1 : 0.55 }}>
+                            Use Latest Inbound
+                          </button>
+                          {replyResult?.draftResponse && (
+                            <button onClick={() => setGmailReplyDraft(replyResult.draftResponse)} style={{ padding: "7px 12px", borderRadius: 10, border: `1px solid ${C.pr}`, background: C.pb, color: C.pr, cursor: "pointer", fontSize: 11, fontFamily: ft }}>
+                              Load AI Reply Draft
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {detailTab === "inbox" && (postSendUnlocked ? (
             <>
               <div style={{ ...cS, padding: "20px 24px", marginBottom: 16 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
@@ -3458,9 +4009,9 @@ Requirements:
             <div style={{ ...cS, padding: "14px 16px", marginBottom: 16, fontSize: 12, color: C.ts }}>
               Reply intelligence and follow-up writer unlock once stage is <strong style={{ color: C.tx }}>Sent</strong> or later.
             </div>
-          )}
+          ))}
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
+          {detailTab === "activity" && <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
             <div style={{ ...cS, padding: "16px 20px" }}>
               <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>📝 Notes</div>
               <textarea value={aNote} readOnly={isReadOnly} onChange={e => setANote(e.target.value)} onBlur={() => { if (!isReadOnly) saveN(a.n, aNote); }} placeholder="Add notes..." style={{ ...iS, width: "100%", minHeight: 80, fontSize: 12, resize: "vertical", boxSizing: "border-box", ...lockStyle(isReadOnly) }} />
@@ -3470,9 +4021,9 @@ Requirements:
               <input type="date" value={aFU} disabled={isReadOnly} onChange={e => { setAFU(e.target.value); saveFU(a.n, e.target.value); }} style={{ ...iS, width: "100%", boxSizing: "border-box", ...lockStyle(isReadOnly) }} />
               {aFU && !isReadOnly && <button onClick={() => { setAFU(""); saveFU(a.n, ""); }} style={{ fontSize: 11, color: C.rd, background: "none", border: "none", cursor: "pointer", marginTop: 6, fontFamily: ft }}>Clear follow-up</button>}
             </div>
-          </div>
+          </div>}
 
-          {!isReadOnly && (
+          {detailTab === "activity" && !isReadOnly && (
             <div style={{ ...cS, padding: "16px 20px", marginBottom: 16, borderColor: C.rbd, background: dark ? C.sf : "#fffafa" }}>
               <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6, color: C.tx }}>Artist Controls</div>
               <div style={{ fontSize: 11, color: C.ts, marginBottom: 10 }}>
@@ -3489,7 +4040,7 @@ Requirements:
             </div>
           )}
 
-          <div style={{ ...cS, padding: "16px 20px", marginBottom: 16 }}>
+          {detailTab === "activity" && <div style={{ ...cS, padding: "16px 20px", marginBottom: 16 }}>
             <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>📨 Send Log ({sendHistory.length})</div>
             {sendHistory.length ? (
               <div style={{ display: "grid", gap: 6 }}>
@@ -3503,9 +4054,9 @@ Requirements:
                 ))}
               </div>
             ) : <div style={{ fontSize: 12, color: C.tt }}>No sends logged yet.</div>}
-          </div>
+          </div>}
 
-          <div style={{ ...cS, padding: "16px 20px" }}>
+          {detailTab === "activity" && <div style={{ ...cS, padding: "16px 20px" }}>
             <button onClick={() => setShowLog(!showLog)} style={{ fontSize: 13, fontWeight: 700, background: "none", border: "none", cursor: "pointer", color: C.tx, fontFamily: ft, width: "100%", textAlign: "left", padding: 0 }}>📋 Activity Log ({logs.length}) {showLog ? "▾" : "▸"}</button>
             {showLog && (
               <>
@@ -3587,7 +4138,7 @@ Requirements:
                 )}
               </>
             )}
-          </div>
+          </div>}
         </div>
       </div>
     );

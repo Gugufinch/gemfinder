@@ -28,6 +28,9 @@ Optional:
 - `AR_ALLOWED_EMAILS`
 - `OPENAI_API_KEY`
 - `ANTHROPIC_API_KEY`
+- `GOOGLE_CLIENT_ID`
+- `GOOGLE_CLIENT_SECRET`
+- `GMAIL_TOKEN_SECRET`
 - `SMTP_*`
 
 ## Production deploy
@@ -44,6 +47,17 @@ npm run start
 ```
 
 Use any standard Node host such as Render, Railway, Fly.io, or Vercel.
+
+## Gmail integration
+To enable Gmail connect, in-app email sending, and inbox sync you also need:
+- `GOOGLE_CLIENT_ID`
+- `GOOGLE_CLIENT_SECRET`
+- `GMAIL_TOKEN_SECRET`
+
+OAuth callback URL:
+```text
+https://your-app.example.com/api/ar/gmail/callback
+```
 
 ## Auth model
 - Gem Finder uses its own email/password auth.
