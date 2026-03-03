@@ -8,7 +8,6 @@ import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 
 const STAGES = [
   { id: "prospect", label: "Prospect", icon: "◎", description: "Target is identified but not worked yet." },
-  { id: "researched", label: "Researched", icon: "◉", description: "Context is gathered and fit is clearer." },
   { id: "drafted", label: "Draft Ready", icon: "✎", description: "Initial message is ready to send." },
   { id: "sent", label: "Sent", icon: "→", description: "First outreach has gone out." },
   { id: "replied", label: "Replied", icon: "←", description: "The artist or team has responded." },
@@ -17,6 +16,7 @@ const STAGES = [
   { id: "dead", label: "Dead", icon: "✕", description: "Closed out or not moving forward." },
 ];
 const SM = Object.fromEntries(STAGES.map(s => [s.id, s]));
+const VALID_STAGE_IDS = new Set(STAGES.map(s => s.id));
 
 const SEQUENCES = [
   {
@@ -180,8 +180,13 @@ const AB_VARIANTS = {
   ],
 };
 
-function sc(id, C) { return { prospect: C.tt, researched: C.ac, drafted: C.ab, sent: C.bu, replied: C.gn, engaged: C.pr, won: C.ac, dead: C.rd }[id] || C.tt; }
-function sb(id, C) { return { prospect: C.sa, researched: C.al, drafted: C.abb, sent: C.bb, replied: C.gb, engaged: C.pb, won: C.al, dead: C.rb }[id] || C.sa; }
+function sc(id, C) { return { prospect: C.tt, drafted: C.ab, sent: C.bu, replied: C.gn, engaged: C.pr, won: C.ac, dead: C.rd }[id] || C.tt; }
+function sb(id, C) { return { prospect: C.sa, drafted: C.abb, sent: C.bb, replied: C.gb, engaged: C.pb, won: C.al, dead: C.rb }[id] || C.sa; }
+function normalizeStageId(stage) {
+  if (stage === "researched") return "drafted";
+  if (VALID_STAGE_IDS.has(stage)) return stage;
+  return "prospect";
+}
 function bucketGenre(g) { if (!g) return "Other"; const l = g.toLowerCase(); if (/country|americana|bluegrass/.test(l)) return "Country"; if (/hip.?hop|rap/.test(l)) return "Hip Hop"; if (/r&b|soul|neo.?soul/.test(l)) return "R&B / Soul"; if (/^indie/.test(l)) return "Indie"; if (/folk/.test(l)) return "Folk"; if (/punk|emo|hardcore/.test(l)) return "Punk / Emo"; if (/rock|grunge|metal/.test(l)) return "Rock"; if (/electronic|edm|house|techno|hyperpop|synth/.test(l)) return "Electronic"; if (/pop/.test(l)) return "Pop"; if (/jazz/.test(l)) return "Jazz"; if (/christian|gospel|worship/.test(l)) return "Christian"; if (/latin|reggaeton/.test(l)) return "Latin"; if (/singer.?songwriter/.test(l)) return "Singer-Songwriter"; if (/^alt/.test(l)) return "Alternative"; return "Other"; }
 function parseMl(s) { if (!s) return 0; const m = s.replace(/[\,\s]/g, "").match(/([\d.]+)(k|m)?/i); if (!m) return 0; let v = parseFloat(m[1]); if (m[2]?.toLowerCase() === "m") v *= 1e6; else if (m[2]?.toLowerCase() === "k") v *= 1e3; return v; }
 function fmtCompact(n) { if (!n || Number.isNaN(n)) return "0"; if (n >= 1e6) return `${(n / 1e6).toFixed(1).replace(/\.0$/, "")}M`; if (n >= 1e3) return `${Math.round(n / 1e3)}K`; return `${Math.round(n)}`; }
@@ -533,7 +538,12 @@ function normalizeProject(p) {
   return {
     ...p,
     artists: p.artists || [],
-    pipeline: p.pipeline || {},
+    pipeline: Object.fromEntries(
+      Object.entries(p.pipeline || {}).map(([artistName, state]) => [
+        artistName,
+        { ...(state || {}), stage: normalizeStageId(state?.stage) },
+      ]),
+    ),
     notes: p.notes || {},
     followUps: p.followUps || {},
     activityLog: p.activityLog || {},
@@ -2516,7 +2526,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
 
     const pipeline = { ...proj.pipeline };
     const prevStage = pipeline[artist.n]?.stage || "prospect";
-    if (["prospect", "researched", "drafted"].includes(prevStage)) {
+    if (["prospect", "drafted"].includes(prevStage)) {
       pipeline[artist.n] = { ...(pipeline[artist.n] || {}), stage: "sent", date: now };
     }
 
@@ -3146,7 +3156,7 @@ Requirements:
             ))}
           </div>
           <div style={{ fontSize: 11, color: C.tt, marginTop: -10, marginBottom: 14 }}>
-            Pipeline flow: Prospect → Researched → Draft Ready → Sent → Replied → Engaged → Won or Dead.
+            Pipeline flow: Prospect → Draft Ready → Sent → Replied → Engaged → Won or Dead.
           </div>
 
           <div style={{ ...cS, padding: "18px 22px", marginBottom: 16 }}>
@@ -4031,16 +4041,15 @@ Requirements:
         )}
 
         {viewMode === "kanban" && (
-          <div style={{ display: "flex", gap: 12, overflowX: "auto", paddingBottom: 20 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12, alignItems: "start", paddingBottom: 20 }}>
             {STAGES.map(s => {
               const col = filtered.filter(a => a.stage === s.id);
               return (
                 <div
                   key={s.id}
                   style={{
-                    minWidth: 220,
-                    maxWidth: 260,
-                    flex: "0 0 auto",
+                    minWidth: 0,
+                    width: "100%",
                     border: dragOverStage === s.id ? `2px dashed ${C.ac}` : "2px dashed transparent",
                     borderRadius: 10,
                     padding: 4,
