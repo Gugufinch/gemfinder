@@ -13,10 +13,17 @@ const STAGES = [
   { id: "replied", label: "Replied", icon: "←", description: "The artist or team has responded." },
   { id: "engaged", label: "Engaged", icon: "◆", description: "There is active interest and momentum." },
   { id: "won", label: "Won", icon: "★", description: "Positive close or platform conversion." },
+  { id: "live", label: "Live", icon: "⬢", description: "Profile is fully set up and active on platform." },
   { id: "dead", label: "Dead", icon: "✕", description: "Closed out or not moving forward." },
 ];
 const SM = Object.fromEntries(STAGES.map(s => [s.id, s]));
 const VALID_STAGE_IDS = new Set(STAGES.map(s => s.id));
+const CONTACTED_STAGE_IDS = ["sent", "replied", "engaged", "won", "live"];
+const REPLIED_STAGE_IDS = ["replied", "engaged", "won", "live"];
+const ENGAGED_STAGE_IDS = ["engaged", "won", "live"];
+const WON_STAGE_IDS = ["won", "live"];
+const CLOSED_STAGE_IDS = ["won", "live", "dead"];
+const OPEN_STAGE_IDS = STAGES.map(s => s.id).filter(id => !CLOSED_STAGE_IDS.includes(id));
 
 const SEQUENCES = [
   {
@@ -121,6 +128,7 @@ const LT = {
   tx: "#111827", ts: "#5f6b84", tt: "#8a94aa",
   ac: "#2563eb", al: "#eaf1ff", am: "#4f7ff3", at: "#1e40af",
   gn: "#1f9d6a", gb: "#e9f8f1", gd: "#a6e2c9",
+  lv: "#0f766e", lvb: "#e7fbf8", lvd: "#a6ebe2",
   bu: "#1a73e8", bb: "#e8f0fe", bd2: "#afc9f7",
   rd: "#dc3f35", rb: "#fdeceb", rbd: "#f6bab6",
   ab: "#d97706", abb: "#fff4e6", abd: "#f4d09a",
@@ -132,6 +140,7 @@ const DK = {
   tx: "#e6edf9", ts: "#9eb1d0", tt: "#7487aa",
   ac: "#5b8bff", al: "#1c2f55", am: "#759cff", at: "#b3ccff",
   gn: "#35c58b", gb: "#102d24", gd: "#1e5a48",
+  lv: "#2dd4bf", lvb: "#123633", lvd: "#2c6f67",
   bu: "#6ea8ff", bb: "#132c52", bd2: "#23467c",
   rd: "#ff8c84", rb: "#371616", rbd: "#6a2c2c",
   ab: "#ffc063", abb: "#3b2a0f", abd: "#78552c",
@@ -181,12 +190,59 @@ const AB_VARIANTS = {
   ],
 };
 
-function sc(id, C) { return { prospect: C.tt, drafted: C.ab, sent: C.bu, replied: C.gn, engaged: C.pr, won: C.ac, dead: C.rd }[id] || C.tt; }
-function sb(id, C) { return { prospect: C.sa, drafted: C.abb, sent: C.bb, replied: C.gb, engaged: C.pb, won: C.al, dead: C.rb }[id] || C.sa; }
+function sc(id, C) { return { prospect: C.tt, drafted: C.ab, sent: C.bu, replied: C.gn, engaged: C.pr, won: C.ac, live: C.lv, dead: C.rd }[id] || C.tt; }
+function sb(id, C) { return { prospect: C.sa, drafted: C.abb, sent: C.bb, replied: C.gb, engaged: C.pb, won: C.al, live: C.lvb, dead: C.rb }[id] || C.sa; }
 function normalizeStageId(stage) {
   if (stage === "researched") return "drafted";
   if (VALID_STAGE_IDS.has(stage)) return stage;
   return "prospect";
+}
+function normalizeStageFilterId(filterId) {
+  if (filterId === "contacted") return "contacted";
+  if (VALID_STAGE_IDS.has(filterId)) return filterId;
+  return "all";
+}
+function isContactedStage(stage) {
+  return CONTACTED_STAGE_IDS.includes(stage);
+}
+function isRepliedStage(stage) {
+  return REPLIED_STAGE_IDS.includes(stage);
+}
+function isEngagedStage(stage) {
+  return ENGAGED_STAGE_IDS.includes(stage);
+}
+function isWonStage(stage) {
+  return WON_STAGE_IDS.includes(stage);
+}
+function isClosedStage(stage) {
+  return CLOSED_STAGE_IDS.includes(stage);
+}
+function matchesStageFilter(stage, filterId) {
+  if (filterId === "all") return true;
+  if (filterId === "contacted") return isContactedStage(stage);
+  return stage === filterId;
+}
+function normalizeActorKey(value) {
+  return String(value || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+function resolveSessionUserName(authEmail, authUserId, teamUsers = DEFAULT_TEAM_USERS) {
+  const pool = Array.isArray(teamUsers) && teamUsers.length ? teamUsers : DEFAULT_TEAM_USERS;
+  const emailLocal = String(authEmail || "").split("@")[0] || "";
+  const raw = emailLocal || authUserId || "";
+  const rawKey = normalizeActorKey(raw);
+  if (!rawKey) return pool[0] || "Unknown";
+  const exact = pool.find(name => normalizeActorKey(name) === rawKey);
+  if (exact) return exact;
+  const prefix = pool.find(name => rawKey.startsWith(normalizeActorKey(name)) || normalizeActorKey(name).startsWith(rawKey));
+  if (prefix) return prefix;
+  const first = raw.replace(/[._-]+/g, " ").trim().split(/\s+/)[0] || "";
+  const firstKey = normalizeActorKey(first);
+  if (firstKey) {
+    const firstMatch = pool.find(name => firstKey === normalizeActorKey(name) || firstKey.startsWith(normalizeActorKey(name)) || normalizeActorKey(name).startsWith(firstKey));
+    if (firstMatch) return firstMatch;
+    return first.charAt(0).toUpperCase() + first.slice(1);
+  }
+  return pool[0] || "Unknown";
 }
 function bucketGenre(g) { if (!g) return "Other"; const l = g.toLowerCase(); if (/country|americana|bluegrass/.test(l)) return "Country"; if (/hip.?hop|rap/.test(l)) return "Hip Hop"; if (/r&b|soul|neo.?soul/.test(l)) return "R&B / Soul"; if (/^indie/.test(l)) return "Indie"; if (/folk/.test(l)) return "Folk"; if (/punk|emo|hardcore/.test(l)) return "Punk / Emo"; if (/rock|grunge|metal/.test(l)) return "Rock"; if (/electronic|edm|house|techno|hyperpop|synth/.test(l)) return "Electronic"; if (/pop/.test(l)) return "Pop"; if (/jazz/.test(l)) return "Jazz"; if (/christian|gospel|worship/.test(l)) return "Christian"; if (/latin|reggaeton/.test(l)) return "Latin"; if (/singer.?songwriter/.test(l)) return "Singer-Songwriter"; if (/^alt/.test(l)) return "Alternative"; return "Other"; }
 function parseMl(s) { if (!s) return 0; const m = s.replace(/[\,\s]/g, "").match(/([\d.]+)(k|m)?/i); if (!m) return 0; let v = parseFloat(m[1]); if (m[2]?.toLowerCase() === "m") v *= 1e6; else if (m[2]?.toLowerCase() === "k") v *= 1e3; return v; }
@@ -515,9 +571,9 @@ function creditABOutcome(project, artistName, nextStage, prevStage) {
     abCredits[key] = true;
     abStats = bumpABStat(abStats, last.bucket || "Other", last.channel, last.variantId, kind === "replied" ? { replied: 1 } : { won: 1 });
   };
-  if ((nextStage === "replied" || nextStage === "engaged") && !["replied", "engaged", "won"].includes(prevStage)) credit("replied");
-  if (nextStage === "won" && prevStage !== "won") {
-    if (!["replied", "engaged"].includes(prevStage)) credit("replied");
+  if ((nextStage === "replied" || nextStage === "engaged") && !REPLIED_STAGE_IDS.includes(prevStage)) credit("replied");
+  if ((nextStage === "won" || nextStage === "live") && !WON_STAGE_IDS.includes(prevStage)) {
+    if (!["replied", "engaged", "won", "live"].includes(prevStage)) credit("replied");
     credit("won");
   }
   return { abStats, abCredits };
@@ -1079,6 +1135,9 @@ function buildHealthAlerts(enriched, proj) {
   const engagedNoFollowUp = enriched.filter(a => a.stage === "engaged" && !a.followUp).length;
   if (engagedNoFollowUp > 0) alerts.push({ level: "medium", label: `${engagedNoFollowUp} engaged artists missing next-step dates`, action: "Set next action dates for interested artists so deals do not stall." });
 
+  const wonNoLive = enriched.filter(a => a.stage === "won").length;
+  if (wonNoLive > 0) alerts.push({ level: "low", label: `${wonNoLive} won artists not marked live yet`, action: "Move fully launched artists into Live once their profile is set up." });
+
   const stuckProspects = enriched.filter(a => a.stage === "prospect" && a.priority >= 5).length;
   if (stuckProspects > 0) alerts.push({ level: "low", label: `${stuckProspects} HOT artists still in Prospect`, action: "Move top HOT artists into drafted and send lane." });
 
@@ -1151,7 +1210,7 @@ function buildQueue(enriched, sequenceState) {
   const byName = Object.fromEntries(enriched.map(a => [a.n, a]));
 
   enriched.forEach(a => {
-    if (a.followUp && a.followUp <= today && a.stage !== "won" && a.stage !== "dead") {
+    if (a.followUp && a.followUp <= today && !isClosedStage(a.stage)) {
       const d = daysBetween(a.followUp, today);
       items.push({ type: "overdue", artist: a, priority: 10 + d, label: `Follow-up overdue ${d}d`, icon: "🔴" });
     } else if (a.followUp && a.followUp > today) {
@@ -1171,7 +1230,7 @@ function buildQueue(enriched, sequenceState) {
       items.push({ type: "engaged", artist: a, priority: 8, label: "Engaged - set next step", icon: "🤝" });
     }
     if (a.priority >= 3 && a.priority < 5 && a.stage === "prospect" && a.e) items.push({ type: "warm", artist: a, priority: 4, label: "WARM + email - start outreach", icon: "📧" });
-    if (!a.owner && a.stage !== "won" && a.stage !== "dead") items.push({ type: "owner", artist: a, priority: 3, label: "No owner assigned", icon: "👤" });
+    if (!a.owner && !isClosedStage(a.stage)) items.push({ type: "owner", artist: a, priority: 3, label: "No owner assigned", icon: "👤" });
   });
 
   Object.entries(sequenceState || {}).forEach(([name, ss]) => {
@@ -1472,6 +1531,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
 
   const fr = useRef(null);
   const rosterRef = useRef(null);
+  const workSurfaceRef = useRef(null);
 
   const [search, setSearch] = useState("");
   const [gf, setGf] = useState("All");
@@ -1570,16 +1630,13 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const isAdmin = roleLabel === "admin";
   const isReadOnly = !canEdit;
   const storageKey = authUserId ? `${STORAGE_PREFIX}:${authUserId}` : STORAGE_PREFIX;
-  const defaultWorkspaceUser = (() => {
-    const local = (authEmail || "").split("@")[0] || "";
-    const cleaned = local.replace(/[._-]+/g, " ").trim();
-    if (!cleaned) return "Greg";
-    return cleaned
-      .split(/\s+/)
-      .map(part => part.slice(0, 1).toUpperCase() + part.slice(1))
-      .join(" ");
-  })();
-  const currentActor = defaultWorkspaceUser || authEmail || authUserId || "Unknown";
+  const proj = projects.find(p => p.id === apId);
+  const sessionUserName = useMemo(
+    () => resolveSessionUserName(authEmail, authUserId, proj?.teamUsers || DEFAULT_TEAM_USERS),
+    [authEmail, authUserId, proj?.teamUsers],
+  );
+  const defaultWorkspaceUser = sessionUserName || "Greg";
+  const currentActor = sessionUserName || authEmail || authUserId || "Unknown";
   const reportScopeMode = workspaceUser === ALL_USER_VIEW ? "team" : "workspace";
   const reportViewLabel = workspaceUser === ALL_USER_VIEW ? "All" : workspaceUser === UNASSIGNED_USER_VIEW ? "Unassigned" : workspaceUser;
 
@@ -1624,7 +1681,6 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     };
   };
   const lockStyle = locked => (locked ? { opacity: 0.55, cursor: "not-allowed" } : {});
-  const proj = projects.find(p => p.id === apId);
   const logAction = useCallback((project, artistName, action, kind = "event", extra = {}) => {
     return addLog(project, artistName, action, kind, { ...extra, actor: extra.actor || currentActor });
   }, [currentActor]);
@@ -1652,6 +1708,20 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       setReportEnd(end);
     }
   };
+  const drillDownToStatus = useCallback((filterId = "all") => {
+    const nextFilter = normalizeStageFilterId(filterId);
+    setProjectMode("work");
+    setOwnerFilter("__view__");
+    setSf(nextFilter);
+    setShowFilters(true);
+    setViewMode("table");
+    setShowQuickDrawer(false);
+    if (typeof window !== "undefined") {
+      window.requestAnimationFrame(() => {
+        workSurfaceRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    }
+  }, []);
   const resetArtistForm = () => setArtistForm({
     name: "",
     genre: "",
@@ -2164,6 +2234,23 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     flash(owner ? `${artistName} assigned to ${owner}` : `${artistName} unassigned`);
   };
 
+  const batchAssignOwner = async owner => {
+    if (!requireEditor()) return;
+    if (!proj || bSel.size === 0) return;
+    const nextAssignments = { ...(proj.assignments || {}) };
+    let al = proj.activityLog || {};
+    bSel.forEach(name => {
+      if (owner) nextAssignments[name] = owner;
+      else delete nextAssignments[name];
+      al = logAction({ ...proj, activityLog: al }, name, owner ? `Assigned to ${owner} (batch)` : "Owner cleared (batch)");
+    });
+    const nextProj = { ...proj, assignments: nextAssignments, activityLog: al };
+    await saveProject(nextProj);
+    flash(owner ? `${bSel.size} artists assigned to ${owner}` : `${bSel.size} artists unassigned`);
+    setBSel(new Set());
+    setBatch(false);
+  };
+
   const runReplyClassifier = async artist => {
     if (!requireEditor()) return;
     if (!replyInput.trim()) { flash("Paste a reply first", "err"); return; }
@@ -2606,7 +2693,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     const nl = { ...proj.pipeline, [n]: { ...(proj.pipeline[n] || {}), stage: sid, date: new Date().toISOString() } };
     let al = logAction(proj, n, `Stage → ${SM[sid]?.label}`);
     const credited = creditABOutcome(proj, n, sid, prevStage);
-    if ((sid === "replied" || sid === "won") && credited.abStats !== proj.abStats) {
+    if ((sid === "replied" || sid === "won" || sid === "live") && credited.abStats !== proj.abStats) {
       al = logAction({ ...proj, activityLog: al }, n, `A/B outcome credited (${sid})`);
     }
     const nextProj = { ...proj, pipeline: nl, activityLog: al, abStats: credited.abStats, abCredits: credited.abCredits };
@@ -3135,7 +3222,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
 
   const filtered = useMemo(() => {
     let l = stageBase;
-    if (sf !== "all") l = l.filter(a => a.stage === sf);
+    if (sf !== "all") l = l.filter(a => matchesStageFilter(a.stage, sf));
     if (sortBy === "priority") l = [...l].sort((a, b) => b.priority - a.priority);
     else if (sortBy === "name") l = [...l].sort((a, b) => a.n.localeCompare(b.n));
     else if (sortBy === "listeners") l = [...l].sort((a, b) => parseMl(b.l) - parseMl(a.l));
@@ -3149,6 +3236,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     stageBase.forEach(a => { c[a.stage] = (c[a.stage] || 0) + 1; });
     return c;
   }, [stageBase]);
+  const contactedCount = useMemo(() => stageBase.filter(a => isContactedStage(a.stage)).length, [stageBase]);
 
   const reportScopedArtists = useMemo(() => {
     if (reportScopeMode === "team") return enriched;
@@ -3164,21 +3252,28 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     reportScopedArtists.forEach(a => { c[a.stage] = (c[a.stage] || 0) + 1; });
     return c;
   }, [reportScopedArtists]);
+  const reportContactedCount = useMemo(() => reportScopedArtists.filter(a => isContactedStage(a.stage)).length, [reportScopedArtists]);
 
   const reportFunnel = useMemo(() => {
     const t = reportScopedArtists.length || 1;
-    const contacted = (reportStageCounts.sent || 0) + (reportStageCounts.replied || 0) + (reportStageCounts.engaged || 0) + (reportStageCounts.won || 0);
-    const replied = (reportStageCounts.replied || 0) + (reportStageCounts.engaged || 0) + (reportStageCounts.won || 0);
-    const engaged = (reportStageCounts.engaged || 0) + (reportStageCounts.won || 0);
+    const contacted = reportContactedCount;
+    const replied = reportScopedArtists.filter(a => isRepliedStage(a.stage)).length;
+    const engaged = reportScopedArtists.filter(a => isEngagedStage(a.stage)).length;
     const won = reportStageCounts.won || 0;
+    const live = reportStageCounts.live || 0;
     return [
-      { l: "Total", c: reportScopedArtists.length, p: 100 },
-      { l: "Contacted", c: contacted, p: Math.round((contacted / t) * 100) },
-      { l: "Replied", c: replied, p: Math.round((replied / t) * 100) },
-      { l: "Engaged", c: engaged, p: Math.round((engaged / t) * 100) },
-      { l: "Won", c: won, p: Math.round((won / t) * 100) },
+      { id: "all", l: "All", c: reportScopedArtists.length, p: 100, hint: "All artists in current scope" },
+      { id: "contacted", l: "Contacted", c: contacted, p: Math.round((contacted / t) * 100), hint: "Sent or later" },
+      { id: "prospect", l: "Prospect", c: reportStageCounts.prospect || 0, p: Math.round(((reportStageCounts.prospect || 0) / t) * 100), hint: "Not worked yet" },
+      { id: "drafted", l: "Draft Ready", c: reportStageCounts.drafted || 0, p: Math.round(((reportStageCounts.drafted || 0) / t) * 100), hint: "Ready to send" },
+      { id: "sent", l: "Sent", c: reportStageCounts.sent || 0, p: Math.round(((reportStageCounts.sent || 0) / t) * 100), hint: "Initial outreach sent" },
+      { id: "replied", l: "Replied", c: reportStageCounts.replied || 0, p: Math.round(((reportStageCounts.replied || 0) / t) * 100), hint: "Exact replied stage" },
+      { id: "engaged", l: "Engaged", c: reportStageCounts.engaged || 0, p: Math.round(((reportStageCounts.engaged || 0) / t) * 100), hint: "Interested and active" },
+      { id: "won", l: "Won", c: won, p: Math.round((won / t) * 100), hint: "Closed but not yet live" },
+      { id: "live", l: "Live", c: live, p: Math.round((live / t) * 100), hint: "Profile fully set up" },
+      { id: "dead", l: "Dead", c: reportStageCounts.dead || 0, p: Math.round(((reportStageCounts.dead || 0) / t) * 100), hint: "Closed out" },
     ];
-  }, [reportScopedArtists, reportStageCounts]);
+  }, [reportScopedArtists, reportStageCounts, reportContactedCount]);
 
   const reportActivityEntries = useMemo(() => {
     const rows = [];
@@ -3272,6 +3367,18 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const dueSeqCount = useMemo(() => Object.values(proj?.sequenceState || {}).filter(ss => ss?.status === "active" && ss.nextDue && ss.nextDue <= todayISO()).length, [proj]);
   const healthAlerts = useMemo(() => buildHealthAlerts(reportScopedArtists, proj || {}), [reportScopedArtists, proj]);
   const internalMatchCount = useMemo(() => enriched.filter(a => a.onPlatform).length, [enriched]);
+  const workspaceOverview = useMemo(() => {
+    return projects.reduce((acc, project) => {
+      acc.projects += 1;
+      acc.artists += project.artists?.length || 0;
+      Object.values(project.pipeline || {}).forEach(state => {
+        if (isContactedStage(state?.stage)) acc.contacted += 1;
+        if (state?.stage === "live") acc.live += 1;
+      });
+      acc.due += Object.values(project.sequenceState || {}).filter(ss => ss?.status === "active" && ss.nextDue && ss.nextDue <= todayISO()).length;
+      return acc;
+    }, { projects: 0, artists: 0, contacted: 0, live: 0, due: 0 });
+  }, [projects]);
   const handleKanbanDrop = async (stageId, droppedName = "") => {
     if (!canEdit) {
       flash("Viewer role is read-only", "err");
@@ -3303,7 +3410,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     <div style={{ fontFamily: ft, background: C.bg, minHeight: "100vh", color: C.tx }}>
       <Toast /><style>{css}</style>
       <div style={{ borderBottom: `1px solid ${C.bd}`, background: C.sf }}>
-        <div style={{ maxWidth: 960, margin: "0 auto", padding: "24px 24px 20px", display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+        <div style={{ maxWidth: 1100, margin: "0 auto", padding: "24px 24px 20px", display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
           <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
             <img src="/gemfinder-logo.png" alt="GEMFINDER logo" style={{ width: 44, height: 44, objectFit: "contain", marginTop: 2 }} />
             <div>
@@ -3332,33 +3439,86 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
           </div>
         </div>
       </div>
-      <div style={{ maxWidth: 960, margin: "0 auto", padding: "28px 24px" }}>
+      <div style={{ maxWidth: 1100, margin: "0 auto", padding: "28px 24px 40px" }}>
         {isReadOnly && (
           <div style={{ ...cS, padding: "10px 14px", marginBottom: 12, fontSize: 12, color: C.ts }}>
             Viewer mode is active. You can review data but cannot make edits.
           </div>
         )}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(280px,1fr))", gap: 16 }}>
+        <div style={{ ...cS, marginBottom: 20, padding: "22px 24px", background: dark ? "linear-gradient(135deg, #111a2b 0%, #162238 100%)" : "linear-gradient(135deg, #ffffff 0%, #eef4ff 100%)" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(280px, 1.4fr) minmax(280px, 1fr)", gap: 18, alignItems: "stretch" }}>
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 3, textTransform: "uppercase", color: C.ac, marginBottom: 8 }}>Workspace</div>
+              <div style={{ fontSize: 30, fontWeight: 800, letterSpacing: "-0.04em", marginBottom: 8 }}>Project Home</div>
+              <div style={{ fontSize: 13, lineHeight: 1.6, color: C.ts, maxWidth: 520 }}>
+                Shared outreach projects, live pipeline counts, and team mailbox visibility in one place. Open a project to work the list or review reporting.
+              </div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 14 }}>
+                <span style={{ ...mkP(true, C.ac, C.al) }}>{workspaceOverview.projects} projects</span>
+                <span style={{ ...mkP(true, C.ts, C.sa) }}>{workspaceOverview.artists} artists</span>
+                <span style={{ ...mkP(true, C.bu, C.bb) }}>{workspaceOverview.contacted} contacted</span>
+                <span style={{ ...mkP(true, C.lv, C.lvb) }}>{workspaceOverview.live} live</span>
+                <span style={{ ...mkP(true, C.ab, C.abb) }}>{workspaceOverview.due} follow-ups due</span>
+                {gmailStatus.available && <span style={{ ...mkP(true, gmailStatus.connections?.length ? C.gn : C.tt, gmailStatus.connections?.length ? C.gb : C.sa) }}>{gmailStatus.connections?.length || 0} connected mailboxes</span>}
+              </div>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(120px, 1fr))", gap: 10 }}>
+              {[
+                ["Projects", workspaceOverview.projects, C.ac, C.al],
+                ["Artists", workspaceOverview.artists, C.tx, C.sa],
+                ["Contacted", workspaceOverview.contacted, C.bu, C.bb],
+                ["Live", workspaceOverview.live, C.lv, C.lvb],
+              ].map(([label, value, tone, bg]) => (
+                <div key={label} style={{ borderRadius: 14, border: `1px solid ${C.bd}`, background: bg, padding: "14px 16px" }}>
+                  <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 1.2, color: C.tt, marginBottom: 8 }}>{label}</div>
+                  <div style={{ fontSize: 26, fontWeight: 800, color: tone, lineHeight: 1 }}>{value}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 700 }}>Projects</div>
+            <div style={{ fontSize: 12, color: C.tt }}>Open an existing workspace or create a new one.</div>
+          </div>
+          <div style={{ fontSize: 11, color: C.tt }}>{gmailStatus.currentUserConnected ? `Your Gmail: ${gmailStatus.currentUserGmail}` : "Your Gmail is not connected yet"}</div>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(300px,1fr))", gap: 16 }}>
           {projects.map((p, i) => {
             const ac = p.artists?.length || 0;
             const pl = p.pipeline || {};
-            const sent = Object.values(pl).filter(v => ["sent", "replied", "engaged", "won"].includes(v.stage)).length;
-            const replied = Object.values(pl).filter(v => ["replied", "engaged", "won"].includes(v.stage)).length;
-            const won = Object.values(pl).filter(v => v.stage === "won").length;
+            const sent = Object.values(pl).filter(v => isContactedStage(v.stage)).length;
+            const replied = Object.values(pl).filter(v => isRepliedStage(v.stage)).length;
+            const live = Object.values(pl).filter(v => v.stage === "live").length;
             const seqDue = Object.values(p.sequenceState || {}).filter(ss => ss?.status === "active" && ss.nextDue && ss.nextDue <= todayISO()).length;
             return (
               <div key={p.id} onClick={() => { setApId(p.id); setScreen("project"); setSearch(""); setGf("All"); setSf("all"); setPf("all"); setOwnerFilter("__view__"); persist(projects, p.id); }}
-                style={{ ...cS, padding: "22px 24px", cursor: "pointer", transition: "all 0.2s", animation: `fu 0.3s ease ${i * 0.06}s both` }}
+                style={{ ...cS, padding: "22px 24px", cursor: "pointer", transition: "all 0.2s", animation: `fu 0.3s ease ${i * 0.06}s both`, background: dark ? "linear-gradient(180deg, #111a2b 0%, #0f1729 100%)" : "linear-gradient(180deg, #ffffff 0%, #f8fbff 100%)" }}
                 onMouseEnter={e => { e.currentTarget.style.borderColor = C.ac; e.currentTarget.style.boxShadow = C.sm; }}
                 onMouseLeave={e => { e.currentTarget.style.borderColor = C.bd; e.currentTarget.style.boxShadow = C.sw; }}>
-                <div style={{ fontSize: 17, fontWeight: 700, marginBottom: 3 }}>{p.name}</div>
-                {p.desc && <div style={{ fontSize: 12, color: C.ts, marginBottom: 12, lineHeight: 1.5 }}>{p.desc}</div>}
-                <div style={{ display: "flex", gap: 16, fontSize: 12, color: C.ts, flexWrap: "wrap" }}>
-                  <span><strong style={{ color: C.tx }}>{ac}</strong> artists</span>
-                  <span><strong style={{ color: C.bu }}>{sent}</strong> contacted</span>
-                  <span><strong style={{ color: C.gn }}>{replied}</strong> replied</span>
-                  {won > 0 && <span><strong style={{ color: C.pr }}>{won}</strong> won</span>}
-                  {seqDue > 0 && <span><strong style={{ color: C.ab }}>{seqDue}</strong> follow-ups due</span>}
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, marginBottom: 12 }}>
+                  <div>
+                    <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 4 }}>{p.name}</div>
+                    {p.desc && <div style={{ fontSize: 12, color: C.ts, lineHeight: 1.5 }}>{p.desc}</div>}
+                  </div>
+                  {seqDue > 0 && <span style={{ ...mkP(true, C.ab, C.abb), cursor: "default" }}>{seqDue} due</span>}
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10, marginBottom: 12 }}>
+                  {[
+                    ["Artists", ac, C.tx, C.sa],
+                    ["Contacted", sent, C.bu, C.bb],
+                    ["Replied", replied, C.gn, C.gb],
+                    ["Live", live, C.lv, C.lvb],
+                  ].map(([label, value, tone, bg]) => (
+                    <div key={label} style={{ borderRadius: 12, border: `1px solid ${C.bd}`, background: bg, padding: "10px 12px" }}>
+                      <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 1, color: C.tt, marginBottom: 6 }}>{label}</div>
+                      <div style={{ fontSize: 20, fontWeight: 800, color: tone, lineHeight: 1 }}>{value}</div>
+                    </div>
+                  ))}
                 </div>
                 <div style={{ display: "flex", justifyContent: "space-between", marginTop: 10 }}>
                   <span style={{ fontSize: 11, color: C.tt }}>Created {sD(p.created)}</span>
@@ -3377,11 +3537,14 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
               </div>
             );
           })}
-          <div onClick={() => { if (requireEditor()) setShowNew(true); }} style={{ background: C.sa, border: `2px dashed ${C.bd}`, borderRadius: 14, padding: "22px 24px", cursor: canEdit ? "pointer" : "not-allowed", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: 140, transition: "all 0.2s", ...lockStyle(isReadOnly) }}
+          <div onClick={() => { if (requireEditor()) setShowNew(true); }} style={{ background: dark ? "linear-gradient(180deg, #111a2b 0%, #17243b 100%)" : "linear-gradient(180deg, #f8fbff 0%, #eef4ff 100%)", border: `2px dashed ${C.bd}`, borderRadius: 18, padding: "22px 24px", cursor: canEdit ? "pointer" : "not-allowed", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: 188, transition: "all 0.2s", ...lockStyle(isReadOnly) }}
             onMouseEnter={e => { if (!canEdit) return; e.currentTarget.style.borderColor = C.ac; e.currentTarget.style.background = C.al; }}
-            onMouseLeave={e => { e.currentTarget.style.borderColor = C.bd; e.currentTarget.style.background = C.sa; }}>
-            <div style={{ fontSize: 28, color: C.tt, marginBottom: 6 }}>+</div>
-            <div style={{ fontSize: 13, fontWeight: 600, color: C.ts }}>{canEdit ? "New Project" : "Read-only"}</div>
+            onMouseLeave={e => { e.currentTarget.style.borderColor = C.bd; e.currentTarget.style.background = dark ? "linear-gradient(180deg, #111a2b 0%, #17243b 100%)" : "linear-gradient(180deg, #f8fbff 0%, #eef4ff 100%)"; }}>
+            <div style={{ fontSize: 32, color: C.tt, marginBottom: 8 }}>+</div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: C.tx, marginBottom: 4 }}>{canEdit ? "New Project" : "Read-only"}</div>
+            <div style={{ fontSize: 12, color: C.tt, textAlign: "center", maxWidth: 220 }}>
+              {canEdit ? "Create a dedicated workspace for a new roster, campaign, or genre push." : "View-only access is enabled for this workspace."}
+            </div>
           </div>
         </div>
 
@@ -3409,7 +3572,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     const pri = pS(a);
     const pt = pT(pri, C);
     const stage = proj?.pipeline?.[a.n]?.stage || "prospect";
-    const postSendUnlocked = ["sent", "replied", "engaged", "won"].includes(stage);
+    const postSendUnlocked = isContactedStage(stage);
     const logs = (proj?.activityLog || {})[a.n] || [];
 
     const ss = proj?.sequenceState?.[a.n] || null;
@@ -3545,7 +3708,7 @@ Requirements:
             ))}
           </div>
           <div style={{ fontSize: 11, color: C.tt, marginTop: -10, marginBottom: 14 }}>
-            Pipeline flow: Prospect → Draft Ready → Sent → Replied → Engaged → Won or Dead.
+            Pipeline flow: Prospect → Draft Ready → Sent → Replied → Engaged → Won → Live or Dead.
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10, marginBottom: 16 }}>
@@ -4157,8 +4320,9 @@ Requirements:
               <div style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-0.02em" }}>{proj.name}</div>
               <div style={{ fontSize: 12, color: C.ts, marginTop: 4, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
                 <span>{enriched.length} artists</span>
-                <span>{stCounts.sent + stCounts.replied + stCounts.engaged + stCounts.won} contacted</span>
+                <span>{contactedCount} contacted</span>
                 <span>{stCounts.won} won</span>
+                <span>{stCounts.live || 0} live</span>
                 <span>{(proj.sendLog || []).length} sends logged</span>
                 <span>{dueSeqCount} follow-ups due</span>
                 {!!proj.archivedArtists?.length && <span>{proj.archivedArtists.length} archived</span>}
@@ -4391,16 +4555,32 @@ Requirements:
               </div>
             </div>
 
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(120px,1fr))", gap: 12, marginBottom: 18 }}>
-              {reportFunnel.map((f, i) => (
-                <div key={i} style={{ textAlign: "center" }}>
-                  <div style={{ height: 88, display: "flex", alignItems: "flex-end", justifyContent: "center", marginBottom: 6 }}>
-                    <div style={{ width: "100%", maxWidth: 78, height: Math.max(8, f.p * 0.72), background: i === 4 ? C.gn : i === 3 ? C.pr : i === 0 ? C.ac : C.am, borderRadius: "8px 8px 0 0", transition: "height 0.4s" }} />
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
+              <div style={{ fontSize: 12, fontWeight: 700 }}>Status Drilldown</div>
+              <div style={{ fontSize: 11, color: C.tt }}>Click any card to open the matching artist list in work view.</div>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(130px,1fr))", gap: 10, marginBottom: 18 }}>
+              {reportFunnel.map(card => (
+                <button
+                  key={card.id}
+                  onClick={() => drillDownToStatus(card.id)}
+                  style={{
+                    textAlign: "left",
+                    padding: "12px 14px",
+                    borderRadius: 12,
+                    border: `1px solid ${card.id === "contacted" ? C.ac : card.id === "live" ? C.lvd : card.id === "dead" ? C.rbd : C.bd}`,
+                    background: card.id === "contacted" ? C.al : card.id === "live" ? C.lvb : card.id === "dead" ? C.rb : C.sa,
+                    cursor: "pointer",
+                    fontFamily: ft,
+                  }}
+                >
+                  <div style={{ fontSize: 11, color: card.id === "contacted" ? C.ac : card.id === "live" ? C.lv : card.id === "dead" ? C.rd : C.ts, fontWeight: 700, marginBottom: 8 }}>
+                    {card.l}
                   </div>
-                  <div style={{ fontSize: 20, fontWeight: 800, color: C.tx }}>{f.c}</div>
-                  <div style={{ fontSize: 11, color: C.ts }}>{f.l}</div>
-                  {i > 0 && <div style={{ fontSize: 10, color: C.tt }}>{f.p}%</div>}
-                </div>
+                  <div style={{ fontSize: 22, fontWeight: 800, color: C.tx, lineHeight: 1.05 }}>{card.c}</div>
+                  <div style={{ fontSize: 10, color: C.tt, marginTop: 4 }}>{card.hint}</div>
+                  <div style={{ fontSize: 10, color: C.tt, marginTop: 6 }}>{card.p}% of scope</div>
+                </button>
               ))}
             </div>
 
@@ -4459,6 +4639,10 @@ Requirements:
               {sf !== "all" && <button onClick={() => setSf("all")} style={actionBtn(false, "neutral")}>Clear Status Filter</button>}
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(118px,1fr))", gap: 8 }}>
+              <button onClick={() => setSf(sf === "contacted" ? "all" : "contacted")} style={{ textAlign: "left", padding: "10px 12px", borderRadius: 12, border: `1px solid ${sf === "contacted" ? C.ac : C.bd}`, background: sf === "contacted" ? C.al : C.sf, cursor: "pointer", fontFamily: ft }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: sf === "contacted" ? C.ac : C.ts, marginBottom: 6 }}>◌ Contacted</div>
+                <div style={{ fontSize: 24, fontWeight: 800, color: sf === "contacted" ? C.ac : C.tx, lineHeight: 1 }}>{contactedCount}</div>
+              </button>
               {STAGES.map(stage => (
                 <button key={stage.id} onClick={() => setSf(sf === stage.id ? "all" : stage.id)} style={{ textAlign: "left", padding: "10px 12px", borderRadius: 12, border: `1px solid ${sf === stage.id ? sc(stage.id, C) : C.bd}`, background: sf === stage.id ? sb(stage.id, C) : C.sf, cursor: "pointer", fontFamily: ft }}>
                   <div style={{ fontSize: 11, fontWeight: 700, color: sf === stage.id ? sc(stage.id, C) : C.ts, marginBottom: 6 }}>{stage.icon} {stage.label}</div>
@@ -4621,6 +4805,44 @@ Requirements:
                   </div>
                 </div>
 
+                <div style={{ ...cS, boxShadow: "none", padding: "14px 16px", background: C.sa }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>Mailboxes</div>
+                  {!gmailStatus.available ? (
+                    <div style={{ fontSize: 12, color: C.ts }}>Google OAuth is not configured yet.</div>
+                  ) : (
+                    <div style={{ display: "grid", gap: 10 }}>
+                      <div style={{ fontSize: 12, color: C.ts }}>
+                        <strong style={{ color: C.tx }}>My mailbox:</strong>{" "}
+                        {gmailStatus.currentUserConnected ? gmailStatus.currentUserGmail : "Not connected"}
+                      </div>
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        {!gmailStatus.currentUserConnected ? (
+                          <button disabled={gmailStatusLoading || isReadOnly} onClick={connectGmail} style={{ ...actionBtn(true, "accent"), ...lockStyle(gmailStatusLoading || isReadOnly) }}>
+                            {gmailStatusLoading ? "Checking..." : "Connect My Gmail"}
+                          </button>
+                        ) : (
+                          <button disabled={gmailStatusLoading || isReadOnly} onClick={disconnectGmail} style={{ ...actionBtn(true, "danger"), ...lockStyle(gmailStatusLoading || isReadOnly) }}>
+                            Disconnect My Gmail
+                          </button>
+                        )}
+                      </div>
+                      <div style={{ fontSize: 11, color: C.tt }}>Connected team mailboxes</div>
+                      {(gmailStatus.connections || []).length ? (
+                        <div style={{ display: "grid", gap: 6 }}>
+                          {gmailStatus.connections.map(conn => (
+                            <div key={conn.userId} style={{ display: "flex", justifyContent: "space-between", gap: 8, padding: "8px 10px", borderRadius: 10, border: `1px solid ${conn.userId === authUserId ? C.gd : C.bd}`, background: conn.userId === authUserId ? C.gb : C.sf, fontSize: 11, color: C.ts }}>
+                              <span>{conn.workspaceEmail}</span>
+                              <span style={{ color: C.tx, fontWeight: 700 }}>{conn.gmailEmail}</span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div style={{ fontSize: 11, color: C.tt }}>No connected Gmail accounts yet.</div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
                 <div style={{ ...cS, boxShadow: "none", padding: "14px 16px", background: C.sa, gridColumn: "1 / -1" }}>
                   <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>Team</div>
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
@@ -4710,7 +4932,7 @@ Requirements:
         )}
 
         {projectMode === "work" && (
-        <>
+        <div ref={workSurfaceRef}>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10, alignItems: "center" }}>
           <input placeholder="Search artists..." value={search} onChange={e => setSearch(e.target.value)} style={{ ...iS, width: 220 }} />
           <div style={{ display: "flex", gap: 2, background: C.sa, borderRadius: 10, padding: 3, border: `1px solid ${C.bd}` }}>
@@ -4721,7 +4943,17 @@ Requirements:
           <button onClick={() => setShowFilters(!showFilters)} style={actionBtn(showFilters, "neutral")}>
             {showFilters ? "Hide Filters" : "Show Filters"}
           </button>
-          {batch && <div style={{ display: "flex", gap: 4 }}>{STAGES.map(s => <button key={s.id} disabled={isReadOnly} title={s.label} onClick={() => batchSt(s.id)} style={{ ...mkP(false, sc(s.id, C), sb(s.id, C)), fontSize: 10, padding: "3px 8px", ...lockStyle(isReadOnly) }}>{s.icon}</button>)}</div>}
+          {batch && (
+            <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+              <button disabled={isReadOnly || !bSel.size} onClick={() => batchAssignOwner(currentActor)} style={{ ...mkP(false, C.gn, C.gb), fontSize: 10, padding: "3px 8px", ...lockStyle(isReadOnly || !bSel.size) }}>
+                Assign to {currentActor}
+              </button>
+              <button disabled={isReadOnly || !bSel.size} onClick={() => batchAssignOwner("")} style={{ ...mkP(false, C.ts, C.sa), fontSize: 10, padding: "3px 8px", ...lockStyle(isReadOnly || !bSel.size) }}>
+                Unassign
+              </button>
+              {STAGES.map(s => <button key={s.id} disabled={isReadOnly || !bSel.size} title={s.label} onClick={() => batchSt(s.id)} style={{ ...mkP(false, sc(s.id, C), sb(s.id, C)), fontSize: 10, padding: "3px 8px", ...lockStyle(isReadOnly || !bSel.size) }}>{s.icon}</button>)}
+            </div>
+          )}
           <button disabled={isReadOnly} onClick={() => { setBatch(!batch); setBSel(new Set()); }} style={{ ...mkP(batch, C.ab, C.abb), fontSize: 11, ...lockStyle(isReadOnly) }}>{batch ? "Batch On" : "Batch"}</button>
           <select value={sortBy} onChange={e => setSortBy(e.target.value)} style={{ ...iS, padding: "6px 10px", fontSize: 12 }}>
             <option value="priority">Sort: Priority</option>
@@ -4735,6 +4967,7 @@ Requirements:
           <div style={{ ...cS, padding: "12px 14px", marginBottom: 14 }}>
             <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 8 }}>
               <button onClick={() => setSf("all")} style={mkP(sf === "all", C.ac, C.al)}>All {enriched.length}</button>
+              <button onClick={() => setSf(sf === "contacted" ? "all" : "contacted")} style={mkP(sf === "contacted", C.ac, C.al)}>Contacted {contactedCount}</button>
               {STAGES.map(s => stCounts[s.id] > 0 && <button key={s.id} onClick={() => setSf(s.id)} style={mkP(sf === s.id, sc(s.id, C), sb(s.id, C))}>{s.icon} {s.label} {stCounts[s.id]}</button>)}
             </div>
 
@@ -4910,7 +5143,7 @@ Requirements:
             <div style={{ fontSize: 13 }}>Import a CSV, add one manually, or use AI Discover.</div>
           </div>
         )}
-        </>
+        </div>
         )}
 
         {showAddArtist && (
