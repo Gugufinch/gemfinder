@@ -21,35 +21,36 @@ const SM = Object.fromEntries(STAGES.map(s => [s.id, s]));
 const SEQUENCES = [
   {
     id: "fast_dm",
-    name: "Fast DM (2-touch)",
+    name: "DM Plan (2 touches)",
     steps: [
-      { id: "dm_intro", label: "Initial DM", channel: "dm", delayDays: 0 },
-      { id: "dm_followup", label: "Follow-up DM", channel: "dm", delayDays: 3 },
+      { id: "dm_intro", label: "First DM", channel: "dm", delayDays: 0 },
+      { id: "dm_followup", label: "DM follow-up", channel: "dm", delayDays: 3 },
     ],
   },
   {
     id: "email_3step",
-    name: "Email (3-step)",
+    name: "Email Plan (3 touches)",
     steps: [
-      { id: "em_intro", label: "Initial Email", channel: "email", delayDays: 0 },
-      { id: "em_followup_1", label: "Follow-up Email #1", channel: "email", delayDays: 4 },
-      { id: "em_followup_2", label: "Follow-up Email #2", channel: "email", delayDays: 10 },
+      { id: "em_intro", label: "First email", channel: "email", delayDays: 0 },
+      { id: "em_followup_1", label: "Email follow-up #1", channel: "email", delayDays: 4 },
+      { id: "em_followup_2", label: "Email follow-up #2", channel: "email", delayDays: 10 },
     ],
   },
   {
     id: "hybrid",
-    name: "Hybrid (DM + Email)",
+    name: "DM + Email Plan",
     steps: [
-      { id: "hy_dm_intro", label: "Initial DM", channel: "dm", delayDays: 0 },
-      { id: "hy_email", label: "Email Pitch", channel: "email", delayDays: 1 },
+      { id: "hy_dm_intro", label: "First DM", channel: "dm", delayDays: 0 },
+      { id: "hy_email", label: "Email pitch", channel: "email", delayDays: 1 },
       { id: "hy_dm_followup", label: "DM Follow-up", channel: "dm", delayDays: 4 },
-      { id: "hy_email_last", label: "Final Email Follow-up", channel: "email", delayDays: 7 },
+      { id: "hy_email_last", label: "Final email follow-up", channel: "email", delayDays: 7 },
     ],
   },
 ];
 const SEQ_MAP = Object.fromEntries(SEQUENCES.map(s => [s.id, s]));
 
 const DEFAULT_TEAM_USERS = ["Greg", "Vinny", "Brad", "Jen", "JB"];
+const ALL_USER_VIEW = "__all__";
 
 const AI_PROVIDERS = [
   { id: "anthropic", label: "Anthropic" },
@@ -1053,7 +1054,7 @@ function buildHealthAlerts(enriched, proj) {
   const today = todayISO();
   const scopedNames = new Set(enriched.map(a => a.n));
   const seqDue = Object.entries(proj?.sequenceState || {}).filter(([name, ss]) => scopedNames.has(name) && ss?.status === "active" && ss.nextDue && ss.nextDue <= today).length;
-  if (seqDue > 0) alerts.push({ level: "high", label: `${seqDue} sequence steps due now`, action: "Open Queue and clear due sequence touches first." });
+  if (seqDue > 0) alerts.push({ level: "high", label: `${seqDue} follow-up touches due now`, action: "Open Queue and clear due follow-ups first." });
 
   const staleSent = enriched.filter(a => a.stage === "sent" && a.stageDate && daysBetween(a.stageDate, today) >= 10).length;
   if (staleSent > 0) alerts.push({ level: "high", label: `${staleSent} artists sent >10 days without reply`, action: "Run follow-up drafts and send today." });
@@ -1062,7 +1063,7 @@ function buildHealthAlerts(enriched, proj) {
   if (unassigned > 0) alerts.push({ level: "medium", label: `${unassigned} artists unassigned`, action: "Assign owners so outreach accountability is clear." });
 
   const noFollowUp = enriched.filter(a => a.stage === "sent" && !a.followUp).length;
-  if (noFollowUp > 0) alerts.push({ level: "medium", label: `${noFollowUp} sent artists missing follow-up dates`, action: "Set follow-up dates or enroll sequence." });
+  if (noFollowUp > 0) alerts.push({ level: "medium", label: `${noFollowUp} sent artists missing follow-up dates`, action: "Set follow-up dates or start a follow-up plan." });
 
   const engagedNoFollowUp = enriched.filter(a => a.stage === "engaged" && !a.followUp).length;
   if (engagedNoFollowUp > 0) alerts.push({ level: "medium", label: `${engagedNoFollowUp} engaged artists missing next-step dates`, action: "Set next action dates for interested artists so deals do not stall." });
@@ -1173,7 +1174,7 @@ function buildQueue(enriched, sequenceState) {
       type: "sequence",
       artist,
       priority: 11 + Math.max(overdue, 0),
-      label: `Sequence due: ${step?.label || "Next touch"}${overdue > 0 ? ` (${overdue}d overdue)` : ""}`,
+      label: `Follow-up due: ${step?.label || "Next touch"}${overdue > 0 ? ` (${overdue}d overdue)` : ""}`,
       icon: "🧭",
     });
   });
@@ -1325,7 +1326,7 @@ function omitKey(obj, key) {
 }
 
 function exportPipeline(proj, enriched) {
-  const rows = [["Artist", "Owner", "Genre", "Bucket", "Listeners", "Hit Track", "Email", "Social", "Stage", "Priority", "Spotify", "Notes", "Follow-Up", "Sequence", "Next Step", "Sends Logged"]];
+  const rows = [["Artist", "Owner", "Genre", "Bucket", "Listeners", "Hit Track", "Email", "Social", "Stage", "Priority", "Spotify", "Notes", "Follow-Up", "Follow-Up Plan", "Next Step", "Sends Logged"]];
   enriched.forEach(a => {
     const ss = proj.sequenceState?.[a.n];
     const seq = ss ? SEQ_MAP[ss.sequenceId] : null;
@@ -1375,7 +1376,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [gf, setGf] = useState("All");
   const [sf, setSf] = useState("all");
   const [pf, setPf] = useState("all");
-  const [ownerFilter, setOwnerFilter] = useState("all");
+  const [ownerFilter, setOwnerFilter] = useState("__view__");
   const [sortBy, setSortBy] = useState("priority");
 
   const [selA, setSelA] = useState(null);
@@ -1416,7 +1417,6 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [editLogNoteText, setEditLogNoteText] = useState("");
   const [showFilters, setShowFilters] = useState(true);
   const [showQueue, setShowQueue] = useState(false);
-  const [reportScope, setReportScope] = useState("workspace");
   const [reportStart, setReportStart] = useState(addDaysISO(todayISO(), -29));
   const [reportEnd, setReportEnd] = useState(todayISO());
 
@@ -1433,7 +1433,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [showModels, setShowModels] = useState(false);
   const [showTeam, setShowTeam] = useState(false);
   const [newTeamUser, setNewTeamUser] = useState("");
-  const [workspaceUser, setWorkspaceUser] = useState("Greg");
+  const [workspaceUser, setWorkspaceUser] = useState(ALL_USER_VIEW);
   const [layoutByUser, setLayoutByUser] = useState({});
   const [focusMode, setFocusMode] = useState(false);
   const [preFocusLayout, setPreFocusLayout] = useState(null);
@@ -1455,7 +1455,6 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const canEdit = roleLabel !== "viewer";
   const isAdmin = roleLabel === "admin";
   const isReadOnly = !canEdit;
-  const currentActor = workspaceUser || authEmail || authUserId || "Unknown";
   const storageKey = authUserId ? `${STORAGE_PREFIX}:${authUserId}` : STORAGE_PREFIX;
   const defaultWorkspaceUser = (() => {
     const local = (authEmail || "").split("@")[0] || "";
@@ -1466,6 +1465,9 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       .map(part => part.slice(0, 1).toUpperCase() + part.slice(1))
       .join(" ");
   })();
+  const currentActor = defaultWorkspaceUser || authEmail || authUserId || "Unknown";
+  const reportScopeMode = workspaceUser === ALL_USER_VIEW ? "team" : "workspace";
+  const reportViewLabel = workspaceUser === ALL_USER_VIEW ? "All" : workspaceUser;
 
   const C = dark ? DK : LT;
   const ft = "'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif";
@@ -1566,7 +1568,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
             await sSet(storageKey, legacy);
           }
         }
-        const nextWorkspaceUser = d?.workspaceUser || defaultWorkspaceUser;
+        const nextWorkspaceUser = d?.workspaceUser || ALL_USER_VIEW;
         const nextLayouts = d?.layoutByUser || {};
         const localProjects = Array.isArray(d?.projects) ? d.projects : [];
         if (d?.lastActive) setApId(d.lastActive);
@@ -1670,8 +1672,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   useEffect(() => {
     if (!proj) return;
     const users = proj.teamUsers || [];
-    if (users.length && !users.includes(workspaceUser)) {
-      changeWorkspaceUser(users[0]);
+    if (workspaceUser !== ALL_USER_VIEW && users.length && !users.includes(workspaceUser)) {
+      changeWorkspaceUser(ALL_USER_VIEW);
     }
   }, [proj?.id, proj?.teamUsers, workspaceUser]);
 
@@ -1702,7 +1704,6 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
 
   const changeWorkspaceUser = user => {
     setWorkspaceUser(user);
-    setReportScope("workspace");
     const layout = normalizeLayout(layoutByUser[user] || DEFAULT_LAYOUT);
     setShowHealth(!!layout.showHealth);
     setShowModels(!!layout.showModels);
@@ -2549,11 +2550,11 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
           const nextDue = addDaysISO(date, nextStep.delayDays || 0);
           sequenceState[artist.n] = { ...ss, status: "active", stepIndex: nextIdx, nextDue, lastSentAt: now, history };
           followUps[artist.n] = nextDue;
-          seqMsg = `Sequence advanced → ${nextStep.label} due ${sD(nextDue)}`;
+          seqMsg = `Follow-up plan advanced → ${nextStep.label} due ${sD(nextDue)}`;
         } else {
           sequenceState[artist.n] = { ...ss, status: "done", stepIndex: nextIdx, nextDue: "", completedAt: now, lastSentAt: now, history };
           if (!followUps[artist.n]) followUps[artist.n] = addDaysISO(date, 7);
-          seqMsg = "Sequence completed";
+          seqMsg = "Follow-up plan completed";
         }
       }
     }
@@ -2616,7 +2617,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       ...(proj.sequenceState || {}),
       [artist.n]: { sequenceId, status: "active", stepIndex: 0, nextDue: due, startedAt: now, history: [] },
     };
-    const al = logAction(proj, artist.n, `Sequence enrolled: ${SEQ_MAP[sequenceId]?.name || sequenceId}`);
+    const al = logAction(proj, artist.n, `Follow-up plan started: ${SEQ_MAP[sequenceId]?.name || sequenceId}`);
     const nextProj = {
       ...proj,
       sequenceState: state,
@@ -2624,7 +2625,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       activityLog: al,
     };
     await saveProject(nextProj);
-    flash(`Enrolled ${artist.n} in ${SEQ_MAP[sequenceId]?.name || sequenceId}`);
+    flash(`Started ${SEQ_MAP[sequenceId]?.name || sequenceId} for ${artist.n}`);
   };
 
   const toggleSeqPause = async artist => {
@@ -2634,9 +2635,9 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     if (!cur) return;
     const nextStatus = cur.status === "active" ? "paused" : "active";
     const state = { ...(proj.sequenceState || {}), [artist.n]: { ...cur, status: nextStatus } };
-    const al = logAction(proj, artist.n, `Sequence ${nextStatus}`);
+    const al = logAction(proj, artist.n, `Follow-up plan ${nextStatus}`);
     await saveProject({ ...proj, sequenceState: state, activityLog: al });
-    flash(`Sequence ${nextStatus}`);
+    flash(`Follow-up plan ${nextStatus}`);
   };
 
   const resetSeq = async artist => {
@@ -2645,19 +2646,19 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     const cur = proj.sequenceState?.[artist.n];
     if (!cur) return;
     const state = { ...(proj.sequenceState || {}), [artist.n]: { ...cur, status: "active", stepIndex: 0, nextDue: todayISO(), history: [] } };
-    const al = logAction(proj, artist.n, "Sequence reset to step 1");
+    const al = logAction(proj, artist.n, "Follow-up plan restarted");
     await saveProject({ ...proj, sequenceState: state, activityLog: al, followUps: { ...(proj.followUps || {}), [artist.n]: todayISO() } });
-    flash("Sequence reset");
+    flash("Follow-up plan restarted");
   };
 
   const markSeqStepSent = async artist => {
     if (!requireEditor()) return;
     if (!proj) return;
     const ss = proj.sequenceState?.[artist.n];
-    if (!ss || ss.status !== "active") { flash("No active sequence", "err"); return; }
+    if (!ss || ss.status !== "active") { flash("No active follow-up plan", "err"); return; }
     const seq = SEQ_MAP[ss.sequenceId];
     const step = seq?.steps?.[ss.stepIndex];
-    if (!step) { flash("Sequence already complete", "err"); return; }
+    if (!step) { flash("Follow-up plan already complete", "err"); return; }
 
     const bucket = bucketGenre(artist.g);
     const plan = buildABPlan(proj.abStats || {}, artist, bucket);
@@ -2734,6 +2735,11 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     return Object.entries(c).sort((a, b) => b[1] - a[1]);
   }, [enriched]);
 
+  const effectiveOwnerFilter = useMemo(() => {
+    if (ownerFilter === "__view__") return workspaceUser === ALL_USER_VIEW ? "all" : workspaceUser;
+    return ownerFilter;
+  }, [ownerFilter, workspaceUser]);
+
   const stageBase = useMemo(() => {
     let l = enriched;
     if (search) {
@@ -2742,9 +2748,9 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     }
     if (gf !== "All") l = l.filter(a => a.bucket === gf);
     if (pf !== "all") l = l.filter(a => pT(a.priority, C).label === pf);
-    if (ownerFilter !== "all") l = l.filter(a => a.owner === ownerFilter);
+    if (effectiveOwnerFilter !== "all") l = l.filter(a => a.owner === effectiveOwnerFilter);
     return l;
-  }, [enriched, search, gf, pf, ownerFilter, C]);
+  }, [enriched, search, gf, pf, effectiveOwnerFilter, C]);
 
   const filtered = useMemo(() => {
     let l = stageBase;
@@ -2764,9 +2770,9 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   }, [stageBase]);
 
   const reportScopedArtists = useMemo(() => {
-    if (reportScope === "team") return enriched;
+    if (reportScopeMode === "team") return enriched;
     return enriched.filter(a => a.owner === workspaceUser);
-  }, [enriched, reportScope, workspaceUser]);
+  }, [enriched, reportScopeMode, workspaceUser]);
 
   const reportStageCounts = useMemo(() => {
     const c = {};
@@ -2795,19 +2801,19 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     const source = proj?.activityLog || {};
     Object.entries(source).forEach(([artistName, logs]) => {
       (logs || []).forEach(entry => {
-        if (reportScope === "workspace" && (entry.actor || "") !== workspaceUser) return;
+        if (reportScopeMode === "workspace" && (entry.actor || "") !== workspaceUser) return;
         if (!isWithinDateRange(entry.time)) return;
         rows.push({ ...entry, artistName });
       });
     });
     return rows.sort((a, b) => String(a.time).localeCompare(String(b.time)));
-  }, [proj?.activityLog, reportScope, workspaceUser, isWithinDateRange]);
+  }, [proj?.activityLog, reportScopeMode, workspaceUser, isWithinDateRange]);
 
   const reportSendEntries = useMemo(() => {
     return (proj?.sendLog || [])
-      .filter(entry => (reportScope === "team" ? true : (entry.actor || "") === workspaceUser))
+      .filter(entry => (reportScopeMode === "team" ? true : (entry.actor || "") === workspaceUser))
       .filter(entry => isWithinDateRange(entry.sentAt));
-  }, [proj?.sendLog, reportScope, workspaceUser, isWithinDateRange]);
+  }, [proj?.sendLog, reportScopeMode, workspaceUser, isWithinDateRange]);
 
   const reportActivityStats = useMemo(() => {
     const stageMoves = reportActivityEntries.filter(entry => String(entry.action || "").startsWith("Stage →") || String(entry.action || "").startsWith("Batch →")).length;
@@ -2911,7 +2917,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
             <div>
               <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 5, color: C.ac, textTransform: "uppercase", marginBottom: 4 }}>GEMFINDER</div>
             <div style={{ fontSize: 26, fontWeight: 800, letterSpacing: "-0.03em" }}>AI-Powered A&R</div>
-            <div style={{ fontSize: 13, color: C.ts, marginTop: 3 }}>Sequence engine, send tracking, and A/B-optimized outreach.</div>
+            <div style={{ fontSize: 13, color: C.ts, marginTop: 3 }}>Team outreach, follow-up tracking, and AI-assisted drafting.</div>
             {loading && <div style={{ fontSize: 11, color: C.tt, marginTop: 8 }}>Loading saved workspace...</div>}
             </div>
           </div>
@@ -2949,7 +2955,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
             const won = Object.values(pl).filter(v => v.stage === "won").length;
             const seqDue = Object.values(p.sequenceState || {}).filter(ss => ss?.status === "active" && ss.nextDue && ss.nextDue <= todayISO()).length;
             return (
-              <div key={p.id} onClick={() => { setApId(p.id); setScreen("project"); setSearch(""); setGf("All"); setSf("all"); setPf("all"); persist(projects, p.id); }}
+              <div key={p.id} onClick={() => { setApId(p.id); setScreen("project"); setSearch(""); setGf("All"); setSf("all"); setPf("all"); setOwnerFilter("__view__"); persist(projects, p.id); }}
                 style={{ ...cS, padding: "22px 24px", cursor: "pointer", transition: "all 0.2s", animation: `fu 0.3s ease ${i * 0.06}s both` }}
                 onMouseEnter={e => { e.currentTarget.style.borderColor = C.ac; e.currentTarget.style.boxShadow = C.sm; }}
                 onMouseLeave={e => { e.currentTarget.style.borderColor = C.bd; e.currentTarget.style.boxShadow = C.sw; }}>
@@ -2960,7 +2966,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                   <span><strong style={{ color: C.bu }}>{sent}</strong> contacted</span>
                   <span><strong style={{ color: C.gn }}>{replied}</strong> replied</span>
                   {won > 0 && <span><strong style={{ color: C.pr }}>{won}</strong> won</span>}
-                  {seqDue > 0 && <span><strong style={{ color: C.ab }}>{seqDue}</strong> seq due</span>}
+                  {seqDue > 0 && <span><strong style={{ color: C.ab }}>{seqDue}</strong> follow-ups due</span>}
                 </div>
                 <div style={{ display: "flex", justifyContent: "space-between", marginTop: 10 }}>
                   <span style={{ fontSize: 11, color: C.tt }}>Created {sD(p.created)}</span>
@@ -3017,6 +3023,9 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     const ss = proj?.sequenceState?.[a.n] || null;
     const seq = ss ? SEQ_MAP[ss.sequenceId] : null;
     const seqStep = seq?.steps?.[ss?.stepIndex] || null;
+    const seqHistory = ss?.history || [];
+    const lastSeqTouch = seqHistory[seqHistory.length - 1] || null;
+    const remainingSeqSteps = seq ? seq.steps.slice(Math.max(ss?.stepIndex || 0, 0)) : [];
     const sendHistory = (proj?.sendLog || []).filter(s => s.artist === a.n).slice(-8).reverse();
 
     const d = drafts[draftTab] || null;
@@ -3142,48 +3151,65 @@ Requirements:
 
           <div style={{ ...cS, padding: "18px 22px", marginBottom: 16 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
-              <div style={{ fontSize: 14, fontWeight: 700 }}>🧭 Sequence Engine</div>
-              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                <select value={seqPick} disabled={isReadOnly} onChange={e => setSeqPick(e.target.value)} style={{ ...iS, padding: "6px 10px", fontSize: 12, ...lockStyle(isReadOnly) }}>
-                  {SEQUENCES.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                </select>
-                {!ss && <button disabled={isReadOnly} onClick={() => enrollSeq(a, seqPick)} style={{ padding: "6px 12px", borderRadius: 9, border: `1.5px solid ${C.ac}`, background: C.al, color: C.ac, cursor: isReadOnly ? "not-allowed" : "pointer", fontSize: 11, fontWeight: 600, fontFamily: ft, ...lockStyle(isReadOnly) }}>Enroll</button>}
-              </div>
+              <div style={{ fontSize: 14, fontWeight: 700 }}>🧭 Follow-up Plan</div>
+              {postSendUnlocked && (
+                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                  {!ss && (
+                    <>
+                      <select value={seqPick} disabled={isReadOnly} onChange={e => setSeqPick(e.target.value)} style={{ ...iS, padding: "6px 10px", fontSize: 12, ...lockStyle(isReadOnly) }}>
+                        {SEQUENCES.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                      </select>
+                      <button disabled={isReadOnly} onClick={() => enrollSeq(a, seqPick)} style={{ padding: "6px 12px", borderRadius: 9, border: `1.5px solid ${C.ac}`, background: C.al, color: C.ac, cursor: isReadOnly ? "not-allowed" : "pointer", fontSize: 11, fontWeight: 600, fontFamily: ft, ...lockStyle(isReadOnly) }}>Start Plan</button>
+                    </>
+                  )}
+                </div>
+              )}
             </div>
             <div style={{ fontSize: 11, color: C.tt, marginBottom: 8 }}>
-              Optional cadence helper: enroll after first outreach to schedule and track follow-up steps.
+              Keep this simple. It is only a reminder plan for what to send next and when to send it.
             </div>
 
-            {!ss && <div style={{ fontSize: 12, color: C.ts }}>No active sequence. Enroll this artist to automate multi-step follow-ups with due dates.</div>}
+            {!postSendUnlocked && (
+              <div style={{ fontSize: 12, color: C.ts }}>
+                This unlocks after the first outreach is logged. Send the initial message first, then use this area to track the next touch.
+              </div>
+            )}
 
-            {ss && (
+            {postSendUnlocked && !ss && (
+              <div style={{ fontSize: 12, color: C.ts }}>
+                No follow-up plan is running. Pick a plan if you want GEMFINDER to remind you when the next touch is due.
+              </div>
+            )}
+
+            {postSendUnlocked && ss && (
               <div>
                 <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
                   <span style={{ ...mkP(true, ss.status === "active" ? C.gn : ss.status === "paused" ? C.ab : C.tt, ss.status === "active" ? C.gb : ss.status === "paused" ? C.abb : C.sa), fontSize: 10, padding: "2px 8px" }}>{ss.status.toUpperCase()}</span>
                   <span style={{ fontSize: 12, color: C.ts }}>{seq?.name}</span>
-                  {seq?.steps?.length ? <span style={{ fontSize: 12, color: C.tt }}>Step {Math.min((ss.stepIndex || 0) + 1, seq.steps.length)} of {seq.steps.length}</span> : null}
-                  {seqStep && <span style={{ fontSize: 12, color: C.ts }}>Next: <strong style={{ color: C.tx }}>{seqStep.label}</strong> ({seqStep.channel.toUpperCase()}){ss.nextDue ? ` · due ${sD(ss.nextDue)}` : ""}</span>}
-                  {!seqStep && <span style={{ fontSize: 12, color: C.ts }}>Sequence complete</span>}
+                  {seqStep && <span style={{ fontSize: 12, color: C.ts }}>Next touch: <strong style={{ color: C.tx }}>{seqStep.label}</strong> via {seqStep.channel.toUpperCase()}{ss.nextDue ? ` · due ${sD(ss.nextDue)}` : ""}</span>}
+                  {!seqStep && <span style={{ fontSize: 12, color: C.ts }}>Plan complete</span>}
                 </div>
+
+                {lastSeqTouch && (
+                  <div style={{ fontSize: 11, color: C.tt, marginBottom: 8 }}>
+                    Last logged touch: {lastSeqTouch.label} on {sD(String(lastSeqTouch.sentAt || "").slice(0, 10))}.
+                  </div>
+                )}
 
                 <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
-                  {ss.status === "active" && seqStep && <button disabled={isReadOnly} onClick={() => markSeqStepSent(a)} style={{ padding: "6px 12px", borderRadius: 9, border: `1.5px solid ${C.gn}`, background: C.gb, color: C.gn, cursor: isReadOnly ? "not-allowed" : "pointer", fontSize: 11, fontWeight: 600, fontFamily: ft, ...lockStyle(isReadOnly) }}>Mark Step Sent + Advance</button>}
-                  {(ss.status === "active" || ss.status === "paused") && <button disabled={isReadOnly} onClick={() => toggleSeqPause(a)} style={{ padding: "6px 12px", borderRadius: 9, border: `1px solid ${C.bd}`, background: "transparent", color: C.ts, cursor: isReadOnly ? "not-allowed" : "pointer", fontSize: 11, fontFamily: ft, ...lockStyle(isReadOnly) }}>{ss.status === "active" ? "Pause" : "Resume"}</button>}
-                  <button disabled={isReadOnly} onClick={() => resetSeq(a)} style={{ padding: "6px 12px", borderRadius: 9, border: `1px solid ${C.bd}`, background: "transparent", color: C.ts, cursor: isReadOnly ? "not-allowed" : "pointer", fontSize: 11, fontFamily: ft, ...lockStyle(isReadOnly) }}>Reset</button>
+                  {ss.status === "active" && seqStep && <button disabled={isReadOnly} onClick={() => markSeqStepSent(a)} style={{ padding: "6px 12px", borderRadius: 9, border: `1.5px solid ${C.gn}`, background: C.gb, color: C.gn, cursor: isReadOnly ? "not-allowed" : "pointer", fontSize: 11, fontWeight: 600, fontFamily: ft, ...lockStyle(isReadOnly) }}>Mark Touch Sent</button>}
+                  {(ss.status === "active" || ss.status === "paused") && <button disabled={isReadOnly} onClick={() => toggleSeqPause(a)} style={{ padding: "6px 12px", borderRadius: 9, border: `1px solid ${C.bd}`, background: "transparent", color: C.ts, cursor: isReadOnly ? "not-allowed" : "pointer", fontSize: 11, fontFamily: ft, ...lockStyle(isReadOnly) }}>{ss.status === "active" ? "Pause Plan" : "Resume Plan"}</button>}
+                  <button disabled={isReadOnly} onClick={() => resetSeq(a)} style={{ padding: "6px 12px", borderRadius: 9, border: `1px solid ${C.bd}`, background: "transparent", color: C.ts, cursor: isReadOnly ? "not-allowed" : "pointer", fontSize: 11, fontFamily: ft, ...lockStyle(isReadOnly) }}>Restart Plan</button>
                 </div>
 
-                <div style={{ display: "grid", gap: 5 }}>
-                  {(seq?.steps || []).map((step, idx) => {
-                    const done = idx < ss.stepIndex;
-                    const current = idx === ss.stepIndex && ss.status !== "done";
-                    return (
-                      <div key={step.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11, color: done ? C.gn : current ? C.ac : C.ts }}>
-                        <span>{done ? "✓" : current ? "→" : "•"}</span>
-                        <span>{step.label} ({step.channel.toUpperCase()})</span>
-                        {current && ss.nextDue && <span style={{ color: C.tt }}>due {sD(ss.nextDue)}</span>}
-                      </div>
-                    );
-                  })}
+                <div style={{ fontSize: 11, color: C.ts, display: "grid", gap: 5 }}>
+                  {(remainingSeqSteps || []).slice(0, 3).map((step, idx) => (
+                    <div key={step.id} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span>{idx === 0 && ss.status !== "done" ? "→" : "•"}</span>
+                      <span>{step.label} via {step.channel.toUpperCase()}</span>
+                      {idx === 0 && ss.nextDue && ss.status !== "done" && <span style={{ color: C.tt }}>due {sD(ss.nextDue)}</span>}
+                    </div>
+                  ))}
                 </div>
               </div>
             )}
@@ -3535,7 +3561,7 @@ Requirements:
                 <span>{stCounts.sent + stCounts.replied + stCounts.engaged + stCounts.won} contacted</span>
                 <span>{stCounts.won} won</span>
                 <span>{(proj.sendLog || []).length} sends logged</span>
-                <span>{dueSeqCount} seq due</span>
+                <span>{dueSeqCount} follow-ups due</span>
                 {!!proj.archivedArtists?.length && <span>{proj.archivedArtists.length} archived</span>}
                 {!!proj.internalRoster?.names?.length && <span>{internalMatchCount} platform matches</span>}
               </div>
@@ -3578,10 +3604,12 @@ Requirements:
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
               <span style={{ fontSize: 11, color: C.tt }}>User view</span>
               <select value={workspaceUser} onChange={e => changeWorkspaceUser(e.target.value)} style={{ ...iS, padding: "6px 10px", fontSize: 12 }}>
+                <option value={ALL_USER_VIEW}>All</option>
                 {(proj.teamUsers || DEFAULT_TEAM_USERS).map(u => <option key={u} value={u}>{u}</option>)}
               </select>
-              <button onClick={() => setReportScope("workspace")} style={actionBtn(reportScope === "workspace", "good")}>Report: {workspaceUser}</button>
-              <button onClick={() => setReportScope("team")} style={actionBtn(reportScope === "team", "neutral")}>Report: Team</button>
+              <span style={{ fontSize: 11, color: C.tt }}>
+                {workspaceUser === ALL_USER_VIEW ? "Showing whole team" : `Showing ${workspaceUser}'s working view`}
+              </span>
               <button onClick={toggleFocusMode} style={actionBtn(focusMode, "accent")}>{focusMode ? "Exit Focus" : "Focus Mode"}</button>
               <span style={{ fontSize: 11, color: C.tt, marginRight: 4 }}>Panels</span>
               <button onClick={() => togglePanel("health")} style={actionBtn(showHealth, "warn")}>Health</button>
@@ -3592,7 +3620,7 @@ Requirements:
               <button onClick={() => togglePanel("ab")} style={actionBtn(showAB, "neutral")}>A/B</button>
             </div>
             <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-              <span style={{ fontSize: 11, color: C.tt }}>Auto-saved per user</span>
+              <span style={{ fontSize: 11, color: C.tt }}>Auto-saved per view</span>
               <button onClick={expandPanels} style={actionBtn(false, "neutral")}>Expand Core</button>
               <button onClick={collapsePanels} style={actionBtn(false, "neutral")}>Collapse All</button>
             </div>
@@ -3603,7 +3631,7 @@ Requirements:
       <div style={{ maxWidth: 1240, margin: "0 auto", padding: "16px 24px" }}>
         {isReadOnly && (
           <div style={{ ...cS, padding: "10px 14px", marginBottom: 12, fontSize: 12, color: C.ts }}>
-            Viewer mode is active for this workspace. Editing, importing, and sequence actions are disabled.
+            Viewer mode is active for this workspace. Editing, importing, and follow-up plan actions are disabled.
           </div>
         )}
         {!!proj.internalRoster?.names?.length && (
@@ -3618,7 +3646,7 @@ Requirements:
         )}
         {showHealth && (
           <div style={{ ...cS, padding: "14px 18px", marginBottom: 12, animation: "si 0.18s ease" }}>
-            <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>🚨 Pipeline Health {reportScope === "team" ? "· Team" : `· ${workspaceUser}`}</div>
+            <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>🚨 Pipeline Health · {reportViewLabel}</div>
             {healthAlerts.length > 0 ? (
               <div style={{ display: "grid", gap: 6 }}>
                 {healthAlerts.map((h, i) => (
@@ -3723,7 +3751,7 @@ Requirements:
               <div>
                 <div style={{ fontSize: 14, fontWeight: 700 }}>Reporting</div>
                 <div style={{ fontSize: 11, color: C.tt }}>
-                  Current funnel is {reportScope === "team" ? "whole team" : `${workspaceUser}'s assigned artists`}. Activity timeline is {reportScope === "team" ? "whole team output" : `${workspaceUser}'s logged actions`}.
+                  Current funnel is {reportScopeMode === "team" ? "the whole team" : `${workspaceUser}'s assigned artists`}. Activity timeline is {reportScopeMode === "team" ? "whole team output" : `${workspaceUser}'s logged actions`}.
                 </div>
               </div>
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
@@ -3863,7 +3891,7 @@ Requirements:
 
         {showQueue && (
           <div style={{ ...cS, padding: "16px 20px", marginBottom: 16, animation: "si 0.2s ease" }}>
-            <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>🎯 Smart Queue - Top Actions {reportScope === "team" ? "· Team" : `· ${workspaceUser}`}</div>
+            <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>🎯 Smart Queue - Top Actions · {reportViewLabel}</div>
             {queue.length > 0 ? (
               <div style={{ display: "grid", gap: 6 }}>
                 {queue.slice(0, 12).map((q, i) => (
@@ -3933,6 +3961,7 @@ Requirements:
           {batch && <div style={{ display: "flex", gap: 4 }}>{STAGES.map(s => <button key={s.id} disabled={isReadOnly} title={s.label} onClick={() => batchSt(s.id)} style={{ ...mkP(false, sc(s.id, C), sb(s.id, C)), fontSize: 10, padding: "3px 8px", ...lockStyle(isReadOnly) }}>{s.icon}</button>)}</div>}
           <button disabled={isReadOnly} onClick={() => { setBatch(!batch); setBSel(new Set()); }} style={{ ...mkP(batch, C.ab, C.abb), fontSize: 11, ...lockStyle(isReadOnly) }}>{batch ? "Batch On" : "Batch"}</button>
           <select value={ownerFilter} onChange={e => setOwnerFilter(e.target.value)} style={{ ...iS, padding: "6px 10px", fontSize: 12 }}>
+            <option value="__view__">Owner: Current View</option>
             <option value="all">Owner: All</option>
             {(proj.teamUsers || []).map(u => <option key={u} value={u}>Owner: {u}</option>)}
             <option value="">Owner: Unassigned</option>
@@ -4080,7 +4109,7 @@ Requirements:
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
               <thead>
                 <tr style={{ borderBottom: `2px solid ${C.bd}`, textAlign: "left" }}>
-                  {["Artist", "Owner", "Genre", "Listeners", "Stage", "Priority", "Platform", "Email", "Social", "Spotify", "Sequence", "Follow-up", "Updated"].map(h => (
+                  {["Artist", "Owner", "Genre", "Listeners", "Stage", "Priority", "Platform", "Email", "Social", "Spotify", "Plan", "Follow-up", "Updated"].map(h => (
                     <th key={h} style={{ padding: "8px 10px", fontWeight: 600, color: C.ts, fontSize: 11, whiteSpace: "nowrap" }}>{h}</th>
                   ))}
                 </tr>
