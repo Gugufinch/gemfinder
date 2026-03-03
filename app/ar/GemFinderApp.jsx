@@ -7,13 +7,14 @@ import { useState, useEffect, useMemo, useCallback, useRef } from "react";
    ═══════════════════════════════════════════════════════════ */
 
 const STAGES = [
-  { id: "prospect", label: "Prospect", icon: "◎" },
-  { id: "researched", label: "Researched", icon: "◉" },
-  { id: "drafted", label: "Draft Ready", icon: "✎" },
-  { id: "sent", label: "Sent", icon: "→" },
-  { id: "replied", label: "Replied", icon: "←" },
-  { id: "won", label: "Won", icon: "★" },
-  { id: "dead", label: "Dead", icon: "✕" },
+  { id: "prospect", label: "Prospect", icon: "◎", description: "Target is identified but not worked yet." },
+  { id: "researched", label: "Researched", icon: "◉", description: "Context is gathered and fit is clearer." },
+  { id: "drafted", label: "Draft Ready", icon: "✎", description: "Initial message is ready to send." },
+  { id: "sent", label: "Sent", icon: "→", description: "First outreach has gone out." },
+  { id: "replied", label: "Replied", icon: "←", description: "The artist or team has responded." },
+  { id: "engaged", label: "Engaged", icon: "◆", description: "There is active interest and momentum." },
+  { id: "won", label: "Won", icon: "★", description: "Positive close or platform conversion." },
+  { id: "dead", label: "Dead", icon: "✕", description: "Closed out or not moving forward." },
 ];
 const SM = Object.fromEntries(STAGES.map(s => [s.id, s]));
 
@@ -178,8 +179,8 @@ const AB_VARIANTS = {
   ],
 };
 
-function sc(id, C) { return { prospect: C.tt, researched: C.ac, drafted: C.ab, sent: C.bu, replied: C.gn, won: C.pr, dead: C.rd }[id] || C.tt; }
-function sb(id, C) { return { prospect: C.sa, researched: C.al, drafted: C.abb, sent: C.bb, replied: C.gb, won: C.pb, dead: C.rb }[id] || C.sa; }
+function sc(id, C) { return { prospect: C.tt, researched: C.ac, drafted: C.ab, sent: C.bu, replied: C.gn, engaged: C.pr, won: C.ac, dead: C.rd }[id] || C.tt; }
+function sb(id, C) { return { prospect: C.sa, researched: C.al, drafted: C.abb, sent: C.bb, replied: C.gb, engaged: C.pb, won: C.al, dead: C.rb }[id] || C.sa; }
 function bucketGenre(g) { if (!g) return "Other"; const l = g.toLowerCase(); if (/country|americana|bluegrass/.test(l)) return "Country"; if (/hip.?hop|rap/.test(l)) return "Hip Hop"; if (/r&b|soul|neo.?soul/.test(l)) return "R&B / Soul"; if (/^indie/.test(l)) return "Indie"; if (/folk/.test(l)) return "Folk"; if (/punk|emo|hardcore/.test(l)) return "Punk / Emo"; if (/rock|grunge|metal/.test(l)) return "Rock"; if (/electronic|edm|house|techno|hyperpop|synth/.test(l)) return "Electronic"; if (/pop/.test(l)) return "Pop"; if (/jazz/.test(l)) return "Jazz"; if (/christian|gospel|worship/.test(l)) return "Christian"; if (/latin|reggaeton/.test(l)) return "Latin"; if (/singer.?songwriter/.test(l)) return "Singer-Songwriter"; if (/^alt/.test(l)) return "Alternative"; return "Other"; }
 function parseMl(s) { if (!s) return 0; const m = s.replace(/[\,\s]/g, "").match(/([\d.]+)(k|m)?/i); if (!m) return 0; let v = parseFloat(m[1]); if (m[2]?.toLowerCase() === "m") v *= 1e6; else if (m[2]?.toLowerCase() === "k") v *= 1e3; return v; }
 function fmtCompact(n) { if (!n || Number.isNaN(n)) return "0"; if (n >= 1e6) return `${(n / 1e6).toFixed(1).replace(/\.0$/, "")}M`; if (n >= 1e3) return `${Math.round(n / 1e3)}K`; return `${Math.round(n)}`; }
@@ -507,9 +508,9 @@ function creditABOutcome(project, artistName, nextStage, prevStage) {
     abCredits[key] = true;
     abStats = bumpABStat(abStats, last.bucket || "Other", last.channel, last.variantId, kind === "replied" ? { replied: 1 } : { won: 1 });
   };
-  if (nextStage === "replied" && !["replied", "won"].includes(prevStage)) credit("replied");
+  if ((nextStage === "replied" || nextStage === "engaged") && !["replied", "engaged", "won"].includes(prevStage)) credit("replied");
   if (nextStage === "won" && prevStage !== "won") {
-    if (prevStage !== "replied") credit("replied");
+    if (!["replied", "engaged"].includes(prevStage)) credit("replied");
     credit("won");
   }
   return { abStats, abCredits };
@@ -937,7 +938,7 @@ Return exact format:
 INTENT: [interested | maybe_later | not_interested | question | unknown]
 SENTIMENT: [positive | neutral | negative]
 URGENCY: [high | medium | low]
-NEXT_STAGE: [replied | won | dead | sent]
+NEXT_STAGE: [replied | engaged | won | dead | sent]
 NEXT_ACTION: [one sentence]
 DRAFT_RESPONSE:
 [90-140 words, professional, concise]`, 900, provider, apiKey, model);
@@ -1050,7 +1051,8 @@ function confidenceScore(sent) {
 function buildHealthAlerts(enriched, proj) {
   const alerts = [];
   const today = todayISO();
-  const seqDue = Object.values(proj?.sequenceState || {}).filter(ss => ss?.status === "active" && ss.nextDue && ss.nextDue <= today).length;
+  const scopedNames = new Set(enriched.map(a => a.n));
+  const seqDue = Object.entries(proj?.sequenceState || {}).filter(([name, ss]) => scopedNames.has(name) && ss?.status === "active" && ss.nextDue && ss.nextDue <= today).length;
   if (seqDue > 0) alerts.push({ level: "high", label: `${seqDue} sequence steps due now`, action: "Open Queue and clear due sequence touches first." });
 
   const staleSent = enriched.filter(a => a.stage === "sent" && a.stageDate && daysBetween(a.stageDate, today) >= 10).length;
@@ -1061,6 +1063,9 @@ function buildHealthAlerts(enriched, proj) {
 
   const noFollowUp = enriched.filter(a => a.stage === "sent" && !a.followUp).length;
   if (noFollowUp > 0) alerts.push({ level: "medium", label: `${noFollowUp} sent artists missing follow-up dates`, action: "Set follow-up dates or enroll sequence." });
+
+  const engagedNoFollowUp = enriched.filter(a => a.stage === "engaged" && !a.followUp).length;
+  if (engagedNoFollowUp > 0) alerts.push({ level: "medium", label: `${engagedNoFollowUp} engaged artists missing next-step dates`, action: "Set next action dates for interested artists so deals do not stall." });
 
   const stuckProspects = enriched.filter(a => a.stage === "prospect" && a.priority >= 5).length;
   if (stuckProspects > 0) alerts.push({ level: "low", label: `${stuckProspects} HOT artists still in Prospect`, action: "Move top HOT artists into drafted and send lane." });
@@ -1149,6 +1154,9 @@ function buildQueue(enriched, sequenceState) {
     if (a.stage === "sent" && a.stageDate) {
       const d = daysBetween(a.stageDate, today);
       if (d >= 7) items.push({ type: "stale", artist: a, priority: 5, label: `Sent ${d}d - no reply`, icon: "⏳" });
+    }
+    if (a.stage === "engaged" && !a.followUp) {
+      items.push({ type: "engaged", artist: a, priority: 8, label: "Engaged - set next step", icon: "🤝" });
     }
     if (a.priority >= 3 && a.priority < 5 && a.stage === "prospect" && a.e) items.push({ type: "warm", artist: a, priority: 4, label: "WARM + email - start outreach", icon: "📧" });
     if (!a.owner && a.stage !== "won" && a.stage !== "dead") items.push({ type: "owner", artist: a, priority: 3, label: "No owner assigned", icon: "👤" });
@@ -1408,6 +1416,9 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [editLogNoteText, setEditLogNoteText] = useState("");
   const [showFilters, setShowFilters] = useState(true);
   const [showQueue, setShowQueue] = useState(false);
+  const [reportScope, setReportScope] = useState("workspace");
+  const [reportStart, setReportStart] = useState(addDaysISO(todayISO(), -29));
+  const [reportEnd, setReportEnd] = useState(todayISO());
 
   const [aiDraftLoading, setAiDraftLoading] = useState(false);
   const [draftMode, setDraftMode] = useState("template");
@@ -1501,6 +1512,30 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const logAction = useCallback((project, artistName, action, kind = "event", extra = {}) => {
     return addLog(project, artistName, action, kind, { ...extra, actor: extra.actor || currentActor });
   }, [currentActor]);
+  const isWithinDateRange = useCallback((iso) => {
+    if (!iso) return false;
+    const day = String(iso).slice(0, 10);
+    if (reportStart && day < reportStart) return false;
+    if (reportEnd && day > reportEnd) return false;
+    return true;
+  }, [reportStart, reportEnd]);
+  const setReportPreset = preset => {
+    const end = todayISO();
+    if (preset === "7d") {
+      setReportStart(addDaysISO(end, -6));
+      setReportEnd(end);
+      return;
+    }
+    if (preset === "30d") {
+      setReportStart(addDaysISO(end, -29));
+      setReportEnd(end);
+      return;
+    }
+    if (preset === "90d") {
+      setReportStart(addDaysISO(end, -89));
+      setReportEnd(end);
+    }
+  };
   const resetArtistForm = () => setArtistForm({
     name: "",
     genre: "",
@@ -1667,6 +1702,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
 
   const changeWorkspaceUser = user => {
     setWorkspaceUser(user);
+    setReportScope("workspace");
     const layout = normalizeLayout(layoutByUser[user] || DEFAULT_LAYOUT);
     setShowHealth(!!layout.showHealth);
     setShowModels(!!layout.showModels);
@@ -2698,47 +2734,145 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     return Object.entries(c).sort((a, b) => b[1] - a[1]);
   }, [enriched]);
 
-  const filtered = useMemo(() => {
+  const stageBase = useMemo(() => {
     let l = enriched;
     if (search) {
       const q = search.toLowerCase();
       l = l.filter(a => a.n.toLowerCase().includes(q) || a.g.toLowerCase().includes(q) || (a.h || "").toLowerCase().includes(q));
     }
     if (gf !== "All") l = l.filter(a => a.bucket === gf);
-    if (sf !== "all") l = l.filter(a => a.stage === sf);
     if (pf !== "all") l = l.filter(a => pT(a.priority, C).label === pf);
     if (ownerFilter !== "all") l = l.filter(a => a.owner === ownerFilter);
+    return l;
+  }, [enriched, search, gf, pf, ownerFilter, C]);
+
+  const filtered = useMemo(() => {
+    let l = stageBase;
+    if (sf !== "all") l = l.filter(a => a.stage === sf);
     if (sortBy === "priority") l = [...l].sort((a, b) => b.priority - a.priority);
     else if (sortBy === "name") l = [...l].sort((a, b) => a.n.localeCompare(b.n));
     else if (sortBy === "listeners") l = [...l].sort((a, b) => parseMl(b.l) - parseMl(a.l));
     else if (sortBy === "recent") l = [...l].sort((a, b) => (b.stageDate || "").localeCompare(a.stageDate || ""));
     return l;
-  }, [enriched, search, gf, sf, pf, ownerFilter, sortBy, C]);
+  }, [stageBase, sf, sortBy, C]);
 
   const stCounts = useMemo(() => {
     const c = {};
     STAGES.forEach(s => { c[s.id] = 0; });
-    enriched.forEach(a => { c[a.stage] = (c[a.stage] || 0) + 1; });
+    stageBase.forEach(a => { c[a.stage] = (c[a.stage] || 0) + 1; });
     return c;
-  }, [enriched]);
+  }, [stageBase]);
 
-  const funnel = useMemo(() => {
-    const t = enriched.length || 1;
-    const ct = (stCounts.sent || 0) + (stCounts.replied || 0) + (stCounts.won || 0);
-    const rp = (stCounts.replied || 0) + (stCounts.won || 0);
-    const w = stCounts.won || 0;
+  const reportScopedArtists = useMemo(() => {
+    if (reportScope === "team") return enriched;
+    return enriched.filter(a => a.owner === workspaceUser);
+  }, [enriched, reportScope, workspaceUser]);
+
+  const reportStageCounts = useMemo(() => {
+    const c = {};
+    STAGES.forEach(s => { c[s.id] = 0; });
+    reportScopedArtists.forEach(a => { c[a.stage] = (c[a.stage] || 0) + 1; });
+    return c;
+  }, [reportScopedArtists]);
+
+  const reportFunnel = useMemo(() => {
+    const t = reportScopedArtists.length || 1;
+    const contacted = (reportStageCounts.sent || 0) + (reportStageCounts.replied || 0) + (reportStageCounts.engaged || 0) + (reportStageCounts.won || 0);
+    const replied = (reportStageCounts.replied || 0) + (reportStageCounts.engaged || 0) + (reportStageCounts.won || 0);
+    const engaged = (reportStageCounts.engaged || 0) + (reportStageCounts.won || 0);
+    const won = reportStageCounts.won || 0;
     return [
-      { l: "Total", c: enriched.length, p: 100 },
-      { l: "Contacted", c: ct, p: Math.round((ct / t) * 100) },
-      { l: "Replied", c: rp, p: Math.round((rp / t) * 100) },
-      { l: "Won", c: w, p: Math.round((w / t) * 100) },
+      { l: "Total", c: reportScopedArtists.length, p: 100 },
+      { l: "Contacted", c: contacted, p: Math.round((contacted / t) * 100) },
+      { l: "Replied", c: replied, p: Math.round((replied / t) * 100) },
+      { l: "Engaged", c: engaged, p: Math.round((engaged / t) * 100) },
+      { l: "Won", c: won, p: Math.round((won / t) * 100) },
     ];
-  }, [enriched, stCounts]);
+  }, [reportScopedArtists, reportStageCounts]);
 
-  const queue = useMemo(() => buildQueue(enriched, proj?.sequenceState || {}), [enriched, proj]);
+  const reportActivityEntries = useMemo(() => {
+    const rows = [];
+    const source = proj?.activityLog || {};
+    Object.entries(source).forEach(([artistName, logs]) => {
+      (logs || []).forEach(entry => {
+        if (reportScope === "workspace" && (entry.actor || "") !== workspaceUser) return;
+        if (!isWithinDateRange(entry.time)) return;
+        rows.push({ ...entry, artistName });
+      });
+    });
+    return rows.sort((a, b) => String(a.time).localeCompare(String(b.time)));
+  }, [proj?.activityLog, reportScope, workspaceUser, isWithinDateRange]);
+
+  const reportSendEntries = useMemo(() => {
+    return (proj?.sendLog || [])
+      .filter(entry => (reportScope === "team" ? true : (entry.actor || "") === workspaceUser))
+      .filter(entry => isWithinDateRange(entry.sentAt));
+  }, [proj?.sendLog, reportScope, workspaceUser, isWithinDateRange]);
+
+  const reportActivityStats = useMemo(() => {
+    const stageMoves = reportActivityEntries.filter(entry => String(entry.action || "").startsWith("Stage →") || String(entry.action || "").startsWith("Batch →")).length;
+    const noteUpdates = reportActivityEntries.filter(entry => entry.kind === "note" || entry.action === "Note updated").length;
+    const aiActions = reportActivityEntries.filter(entry => /AI /i.test(String(entry.action || "")) || /Reply intelligence|Follow-up draft/i.test(String(entry.action || ""))).length;
+    const assignments = reportActivityEntries.filter(entry => /Assigned to|Owner cleared/i.test(String(entry.action || ""))).length;
+    return {
+      actions: reportActivityEntries.length,
+      sends: reportSendEntries.length,
+      stageMoves,
+      noteUpdates,
+      aiActions,
+      assignments,
+    };
+  }, [reportActivityEntries, reportSendEntries]);
+
+  const activeReportPreset = useMemo(() => {
+    const end = todayISO();
+    if (reportEnd !== end) return "custom";
+    if (reportStart === addDaysISO(end, -6)) return "7d";
+    if (reportStart === addDaysISO(end, -29)) return "30d";
+    if (reportStart === addDaysISO(end, -89)) return "90d";
+    return "custom";
+  }, [reportStart, reportEnd]);
+
+  const reportTimeline = useMemo(() => {
+    if (!reportStart || !reportEnd) return [];
+    const start = new Date(`${reportStart}T00:00:00`);
+    const end = new Date(`${reportEnd}T00:00:00`);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start > end) return [];
+
+    const rows = [];
+    const map = {};
+    const cursor = new Date(start);
+    let guard = 0;
+    while (cursor <= end && guard < 180) {
+      const iso = cursor.toISOString().slice(0, 10);
+      map[iso] = { day: iso, actions: 0, sends: 0, stageMoves: 0 };
+      rows.push(map[iso]);
+      cursor.setDate(cursor.getDate() + 1);
+      guard += 1;
+    }
+    reportActivityEntries.forEach(entry => {
+      const day = String(entry.time || "").slice(0, 10);
+      if (!map[day]) return;
+      map[day].actions += 1;
+      if (String(entry.action || "").startsWith("Stage →") || String(entry.action || "").startsWith("Batch →")) map[day].stageMoves += 1;
+    });
+    reportSendEntries.forEach(entry => {
+      const day = String(entry.sentAt || "").slice(0, 10);
+      if (!map[day]) return;
+      map[day].sends += 1;
+    });
+    const max = rows.reduce((acc, item) => Math.max(acc, item.actions, item.sends), 1);
+    return rows.map(item => ({
+      ...item,
+      max,
+      label: new Date(`${item.day}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+    }));
+  }, [reportStart, reportEnd, reportActivityEntries, reportSendEntries]);
+
+  const queue = useMemo(() => buildQueue(reportScopedArtists, proj?.sequenceState || {}), [reportScopedArtists, proj]);
   const abRows = useMemo(() => buildABLeaderboard(proj?.abStats || {}), [proj]);
   const dueSeqCount = useMemo(() => Object.values(proj?.sequenceState || {}).filter(ss => ss?.status === "active" && ss.nextDue && ss.nextDue <= todayISO()).length, [proj]);
-  const healthAlerts = useMemo(() => buildHealthAlerts(enriched, proj || {}), [enriched, proj]);
+  const healthAlerts = useMemo(() => buildHealthAlerts(reportScopedArtists, proj || {}), [reportScopedArtists, proj]);
   const internalMatchCount = useMemo(() => enriched.filter(a => a.onPlatform).length, [enriched]);
   const handleKanbanDrop = async (stageId, droppedName = "") => {
     if (!canEdit) {
@@ -2810,8 +2944,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
           {projects.map((p, i) => {
             const ac = p.artists?.length || 0;
             const pl = p.pipeline || {};
-            const sent = Object.values(pl).filter(v => ["sent", "replied", "won"].includes(v.stage)).length;
-            const replied = Object.values(pl).filter(v => ["replied", "won"].includes(v.stage)).length;
+            const sent = Object.values(pl).filter(v => ["sent", "replied", "engaged", "won"].includes(v.stage)).length;
+            const replied = Object.values(pl).filter(v => ["replied", "engaged", "won"].includes(v.stage)).length;
             const won = Object.values(pl).filter(v => v.stage === "won").length;
             const seqDue = Object.values(p.sequenceState || {}).filter(ss => ss?.status === "active" && ss.nextDue && ss.nextDue <= todayISO()).length;
             return (
@@ -2823,7 +2957,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                 {p.desc && <div style={{ fontSize: 12, color: C.ts, marginBottom: 12, lineHeight: 1.5 }}>{p.desc}</div>}
                 <div style={{ display: "flex", gap: 16, fontSize: 12, color: C.ts, flexWrap: "wrap" }}>
                   <span><strong style={{ color: C.tx }}>{ac}</strong> artists</span>
-                  <span><strong style={{ color: C.bu }}>{sent}</strong> sent</span>
+                  <span><strong style={{ color: C.bu }}>{sent}</strong> contacted</span>
                   <span><strong style={{ color: C.gn }}>{replied}</strong> replied</span>
                   {won > 0 && <span><strong style={{ color: C.pr }}>{won}</strong> won</span>}
                   {seqDue > 0 && <span><strong style={{ color: C.ab }}>{seqDue}</strong> seq due</span>}
@@ -2877,7 +3011,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     const pri = pS(a);
     const pt = pT(pri, C);
     const stage = proj?.pipeline?.[a.n]?.stage || "prospect";
-    const postSendUnlocked = ["sent", "replied", "won"].includes(stage);
+    const postSendUnlocked = ["sent", "replied", "engaged", "won"].includes(stage);
     const logs = (proj?.activityLog || {})[a.n] || [];
 
     const ss = proj?.sequenceState?.[a.n] || null;
@@ -3003,7 +3137,7 @@ Requirements:
             ))}
           </div>
           <div style={{ fontSize: 11, color: C.tt, marginTop: -10, marginBottom: 14 }}>
-            Pipeline flow: Prospect → Researched → Draft Ready → Sent → Replied → Won or Dead.
+            Pipeline flow: Prospect → Researched → Draft Ready → Sent → Replied → Engaged → Won or Dead.
           </div>
 
           <div style={{ ...cS, padding: "18px 22px", marginBottom: 16 }}>
@@ -3398,7 +3532,7 @@ Requirements:
               <div style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-0.02em" }}>{proj.name}</div>
               <div style={{ fontSize: 12, color: C.ts, marginTop: 2, display: "flex", gap: 10, flexWrap: "wrap" }}>
                 <span>{enriched.length} artists</span>
-                <span>{stCounts.sent + stCounts.replied + stCounts.won} contacted</span>
+                <span>{stCounts.sent + stCounts.replied + stCounts.engaged + stCounts.won} contacted</span>
                 <span>{stCounts.won} won</span>
                 <span>{(proj.sendLog || []).length} sends logged</span>
                 <span>{dueSeqCount} seq due</span>
@@ -3442,17 +3576,19 @@ Requirements:
 
           <div style={{ marginTop: 12, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-              <span style={{ fontSize: 11, color: C.tt }}>Layout user</span>
+              <span style={{ fontSize: 11, color: C.tt }}>User view</span>
               <select value={workspaceUser} onChange={e => changeWorkspaceUser(e.target.value)} style={{ ...iS, padding: "6px 10px", fontSize: 12 }}>
                 {(proj.teamUsers || DEFAULT_TEAM_USERS).map(u => <option key={u} value={u}>{u}</option>)}
               </select>
+              <button onClick={() => setReportScope("workspace")} style={actionBtn(reportScope === "workspace", "good")}>Report: {workspaceUser}</button>
+              <button onClick={() => setReportScope("team")} style={actionBtn(reportScope === "team", "neutral")}>Report: Team</button>
               <button onClick={toggleFocusMode} style={actionBtn(focusMode, "accent")}>{focusMode ? "Exit Focus" : "Focus Mode"}</button>
               <span style={{ fontSize: 11, color: C.tt, marginRight: 4 }}>Panels</span>
               <button onClick={() => togglePanel("health")} style={actionBtn(showHealth, "warn")}>Health</button>
               <button onClick={() => togglePanel("queue")} style={actionBtn(showQueue, "warn")}>Queue {queue.length > 0 ? `(${queue.length})` : ""}</button>
               <button onClick={() => togglePanel("models")} style={actionBtn(showModels, "accent")}>Models</button>
               <button onClick={() => togglePanel("team")} style={actionBtn(showTeam, "good")}>Team</button>
-              <button onClick={() => togglePanel("funnel")} style={actionBtn(showFunnel, "neutral")}>Funnel</button>
+              <button onClick={() => togglePanel("funnel")} style={actionBtn(showFunnel, "neutral")}>Reports</button>
               <button onClick={() => togglePanel("ab")} style={actionBtn(showAB, "neutral")}>A/B</button>
             </div>
             <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
@@ -3482,7 +3618,7 @@ Requirements:
         )}
         {showHealth && (
           <div style={{ ...cS, padding: "14px 18px", marginBottom: 12, animation: "si 0.18s ease" }}>
-            <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>🚨 Pipeline Health</div>
+            <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>🚨 Pipeline Health {reportScope === "team" ? "· Team" : `· ${workspaceUser}`}</div>
             {healthAlerts.length > 0 ? (
               <div style={{ display: "grid", gap: 6 }}>
                 {healthAlerts.map((h, i) => (
@@ -3583,11 +3719,59 @@ Requirements:
 
         {showFunnel && (
           <div style={{ ...cS, padding: "18px 24px", marginBottom: 16, animation: "si 0.2s ease" }}>
-            <div style={{ display: "flex", gap: 16, alignItems: "flex-end" }}>
-              {funnel.map((f, i) => (
-                <div key={i} style={{ flex: 1, textAlign: "center" }}>
-                  <div style={{ height: 80, display: "flex", alignItems: "flex-end", justifyContent: "center", marginBottom: 6 }}>
-                    <div style={{ width: "100%", maxWidth: 80, height: Math.max(6, f.p * 0.7), background: i === 3 ? C.gn : i === 0 ? C.ac : C.am, borderRadius: "6px 6px 0 0", transition: "height 0.4s" }} />
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: 14, flexWrap: "wrap" }}>
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 700 }}>Reporting</div>
+                <div style={{ fontSize: 11, color: C.tt }}>
+                  Current funnel is {reportScope === "team" ? "whole team" : `${workspaceUser}'s assigned artists`}. Activity timeline is {reportScope === "team" ? "whole team output" : `${workspaceUser}'s logged actions`}.
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                {[
+                  ["7d", "7D"],
+                  ["30d", "30D"],
+                  ["90d", "90D"],
+                ].map(([id, label]) => (
+                  <button key={id} onClick={() => setReportPreset(id)} style={actionBtn(activeReportPreset === id, "neutral")}>{label}</button>
+                ))}
+                <input type="date" value={reportStart} onChange={e => setReportStart(e.target.value)} style={{ ...iS, padding: "6px 10px", fontSize: 11 }} />
+                <input type="date" value={reportEnd} onChange={e => setReportEnd(e.target.value)} style={{ ...iS, padding: "6px 10px", fontSize: 11 }} />
+              </div>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 10, marginBottom: 16 }}>
+              <div style={{ ...cS, boxShadow: "none", padding: "12px 14px", background: C.sa }}>
+                <div style={{ fontSize: 10, color: C.tt, textTransform: "uppercase", letterSpacing: 1 }}>Current Artists</div>
+                <div style={{ fontSize: 24, fontWeight: 800, color: C.tx }}>{reportScopedArtists.length}</div>
+                <div style={{ fontSize: 11, color: C.ts }}>in selected reporting scope</div>
+              </div>
+              <div style={{ ...cS, boxShadow: "none", padding: "12px 14px", background: C.sa }}>
+                <div style={{ fontSize: 10, color: C.tt, textTransform: "uppercase", letterSpacing: 1 }}>Actions</div>
+                <div style={{ fontSize: 24, fontWeight: 800, color: C.tx }}>{reportActivityStats.actions}</div>
+                <div style={{ fontSize: 11, color: C.ts }}>{reportStart} to {reportEnd}</div>
+              </div>
+              <div style={{ ...cS, boxShadow: "none", padding: "12px 14px", background: C.sa }}>
+                <div style={{ fontSize: 10, color: C.tt, textTransform: "uppercase", letterSpacing: 1 }}>Sends</div>
+                <div style={{ fontSize: 24, fontWeight: 800, color: C.tx }}>{reportActivityStats.sends}</div>
+                <div style={{ fontSize: 11, color: C.ts }}>logged in selected range</div>
+              </div>
+              <div style={{ ...cS, boxShadow: "none", padding: "12px 14px", background: C.sa }}>
+                <div style={{ fontSize: 10, color: C.tt, textTransform: "uppercase", letterSpacing: 1 }}>Stage Moves</div>
+                <div style={{ fontSize: 24, fontWeight: 800, color: C.tx }}>{reportActivityStats.stageMoves}</div>
+                <div style={{ fontSize: 11, color: C.ts }}>pipeline progress logged</div>
+              </div>
+              <div style={{ ...cS, boxShadow: "none", padding: "12px 14px", background: C.sa }}>
+                <div style={{ fontSize: 10, color: C.tt, textTransform: "uppercase", letterSpacing: 1 }}>AI + Notes</div>
+                <div style={{ fontSize: 24, fontWeight: 800, color: C.tx }}>{reportActivityStats.aiActions + reportActivityStats.noteUpdates}</div>
+                <div style={{ fontSize: 11, color: C.ts }}>{reportActivityStats.aiActions} AI · {reportActivityStats.noteUpdates} notes</div>
+              </div>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(120px,1fr))", gap: 12, marginBottom: 18 }}>
+              {reportFunnel.map((f, i) => (
+                <div key={i} style={{ textAlign: "center" }}>
+                  <div style={{ height: 88, display: "flex", alignItems: "flex-end", justifyContent: "center", marginBottom: 6 }}>
+                    <div style={{ width: "100%", maxWidth: 78, height: Math.max(8, f.p * 0.72), background: i === 4 ? C.gn : i === 3 ? C.pr : i === 0 ? C.ac : C.am, borderRadius: "8px 8px 0 0", transition: "height 0.4s" }} />
                   </div>
                   <div style={{ fontSize: 20, fontWeight: 800, color: C.tx }}>{f.c}</div>
                   <div style={{ fontSize: 11, color: C.ts }}>{f.l}</div>
@@ -3595,8 +3779,50 @@ Requirements:
                 </div>
               ))}
             </div>
+
+            <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8 }}>Activity Timeline</div>
+            {reportTimeline.length > 0 ? (
+              <div style={{ overflowX: "auto", paddingBottom: 4 }}>
+                <div style={{ display: "flex", gap: 8, minWidth: Math.max(680, reportTimeline.length * 58) }}>
+                  {reportTimeline.map(day => (
+                    <div key={day.day} style={{ width: 50, flex: "0 0 auto", textAlign: "center" }}>
+                      <div style={{ height: 88, display: "flex", alignItems: "flex-end", justifyContent: "center", gap: 4, marginBottom: 6 }}>
+                        <div title={`${day.actions} actions`} style={{ width: 18, height: Math.max(6, Math.round((day.actions / day.max) * 80)), background: C.ac, borderRadius: "6px 6px 0 0" }} />
+                        <div title={`${day.sends} sends`} style={{ width: 18, height: Math.max(4, Math.round((day.sends / day.max) * 80)), background: C.gn, borderRadius: "6px 6px 0 0" }} />
+                      </div>
+                      <div style={{ fontSize: 10, color: C.tx, fontWeight: 700 }}>{day.actions}</div>
+                      <div style={{ fontSize: 9, color: C.tt }}>{day.label}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div style={{ fontSize: 12, color: C.tt }}>No activity in the selected range.</div>
+            )}
+            <div style={{ marginTop: 8, fontSize: 10, color: C.tt }}>Blue bars are total actions. Green bars are sends.</div>
           </div>
         )}
+
+        <div style={{ ...cS, padding: "14px 16px", marginBottom: 14 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" }}>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 700 }}>Status Board</div>
+              <div style={{ fontSize: 11, color: C.tt }}>Click a stage to filter. Counts respect your current search, genre, priority, and owner filters.</div>
+            </div>
+            <button onClick={() => setSf("all")} style={actionBtn(sf === "all", "neutral")}>Show All Statuses</button>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(130px,1fr))", gap: 8 }}>
+            {STAGES.map(stage => (
+              <button key={stage.id} onClick={() => setSf(sf === stage.id ? "all" : stage.id)} style={{ textAlign: "left", padding: "10px 12px", borderRadius: 12, border: `1px solid ${sf === stage.id ? sc(stage.id, C) : C.bd}`, background: sf === stage.id ? sb(stage.id, C) : C.sf, cursor: "pointer", fontFamily: ft }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: sf === stage.id ? sc(stage.id, C) : C.tx }}>{stage.icon} {stage.label}</span>
+                  <span style={{ fontSize: 16, fontWeight: 800, color: sf === stage.id ? sc(stage.id, C) : C.tx }}>{stCounts[stage.id] || 0}</span>
+                </div>
+                <div style={{ fontSize: 10, color: C.ts, lineHeight: 1.4 }}>{stage.description}</div>
+              </button>
+            ))}
+          </div>
+        </div>
 
         {showAB && (
           <div style={{ ...cS, padding: "16px 20px", marginBottom: 16, animation: "si 0.2s ease" }}>
@@ -3635,19 +3861,23 @@ Requirements:
           </div>
         )}
 
-        {showQueue && queue.length > 0 && (
+        {showQueue && (
           <div style={{ ...cS, padding: "16px 20px", marginBottom: 16, animation: "si 0.2s ease" }}>
-            <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>🎯 Smart Queue - Top Actions</div>
-            <div style={{ display: "grid", gap: 6 }}>
-              {queue.slice(0, 12).map((q, i) => (
-                <div key={i} onClick={() => openA(q.artist)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", borderRadius: 8, background: C.sa, cursor: "pointer", fontSize: 12, transition: "background 0.15s" }} onMouseEnter={e => { e.currentTarget.style.background = C.sh; }} onMouseLeave={e => { e.currentTarget.style.background = C.sa; }}>
-                  <span style={{ fontSize: 14 }}>{q.icon}</span>
-                  <span style={{ fontWeight: 600, minWidth: 120 }}>{q.artist.n}</span>
-                  <span style={{ color: C.ts, flex: 1 }}>{q.label}</span>
-                  <span style={{ ...mkP(true, sc(q.artist.stage, C), sb(q.artist.stage, C)), fontSize: 10, padding: "2px 8px" }}>{SM[q.artist.stage]?.label}</span>
-                </div>
-              ))}
-            </div>
+            <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>🎯 Smart Queue - Top Actions {reportScope === "team" ? "· Team" : `· ${workspaceUser}`}</div>
+            {queue.length > 0 ? (
+              <div style={{ display: "grid", gap: 6 }}>
+                {queue.slice(0, 12).map((q, i) => (
+                  <div key={i} onClick={() => openA(q.artist)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", borderRadius: 8, background: C.sa, cursor: "pointer", fontSize: 12, transition: "background 0.15s" }} onMouseEnter={e => { e.currentTarget.style.background = C.sh; }} onMouseLeave={e => { e.currentTarget.style.background = C.sa; }}>
+                    <span style={{ fontSize: 14 }}>{q.icon}</span>
+                    <span style={{ fontWeight: 600, minWidth: 120 }}>{q.artist.n}</span>
+                    <span style={{ color: C.ts, flex: 1 }}>{q.label}</span>
+                    <span style={{ ...mkP(true, sc(q.artist.stage, C), sb(q.artist.stage, C)), fontSize: 10, padding: "2px 8px" }}>{SM[q.artist.stage]?.label}</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div style={{ fontSize: 12, color: C.tt }}>No queued actions in the selected reporting scope.</div>
+            )}
           </div>
         )}
 
