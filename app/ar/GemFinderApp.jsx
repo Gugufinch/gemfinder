@@ -327,6 +327,43 @@ function matchesInboundWindow(thread, days, now = new Date()) {
   const diffMs = new Date(now).getTime() - new Date(thread.lastInboundAt).getTime();
   return diffMs <= parsedDays * 86400000;
 }
+function titleCaseWords(value) {
+  return String(value || "")
+    .toLowerCase()
+    .split(/[\s/_-]+/)
+    .filter(Boolean)
+    .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+function parseIntelSections(text) {
+  const clean = String(text || "").trim();
+  if (!clean) return [];
+  return clean
+    .split(/\n\s*\n/)
+    .map(block => block.trim())
+    .filter(Boolean)
+    .map((block, idx) => {
+      const match = block.match(/^([A-Z][A-Z0-9 /&+\-]{1,80}):\s*([\s\S]*)$/);
+      if (match) {
+        return {
+          id: `intel_${idx}`,
+          title: titleCaseWords(match[1]),
+          body: String(match[2] || "").trim(),
+        };
+      }
+      return {
+        id: `intel_${idx}`,
+        title: idx === 0 ? "Summary" : `Insight ${idx + 1}`,
+        body: block,
+      };
+    });
+}
+function compactText(value, max = 160) {
+  const clean = String(value || "").replace(/\s+/g, " ").trim();
+  if (!clean) return "";
+  if (clean.length <= max) return clean;
+  return `${clean.slice(0, max).trim()}...`;
+}
 
 function wordsCount(text) {
   return (text || "").trim().split(/\s+/).filter(Boolean).length;
@@ -1706,6 +1743,19 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [gmailSendUserId, setGmailSendUserId] = useState(authUserId || "");
   const [gmailReplyDraft, setGmailReplyDraft] = useState("");
   const [gmailSending, setGmailSending] = useState(false);
+  const availableGmailConnections = useMemo(() => {
+    const entries = [
+      ...(Array.isArray(gmailStatus.connections) ? gmailStatus.connections : []),
+      ...(Array.isArray(artistInbox.connections) ? artistInbox.connections : []),
+      ...(Array.isArray(projectInbox.connections) ? projectInbox.connections : []),
+    ];
+    const map = new Map();
+    entries.forEach(item => {
+      if (!item?.userId || !item?.connected) return;
+      if (!map.has(item.userId)) map.set(item.userId, item);
+    });
+    return [...map.values()];
+  }, [gmailStatus.connections, artistInbox.connections, projectInbox.connections]);
   const authLabel = authEmail || authUserId || "Signed in";
   const roleLabel = authRole === "admin" ? "admin" : authRole === "viewer" ? "viewer" : "editor";
   const canEdit = roleLabel !== "viewer";
@@ -1740,7 +1790,28 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   });
   const iS = { padding: "8px 12px", border: `1px solid ${C.bd}`, borderRadius: 10, fontSize: 13, fontFamily: ft, outline: "none", color: C.tx, background: C.sf, boxSizing: "border-box" };
   const cS = { background: C.cb, border: `1px solid ${C.bd}`, borderRadius: 16, boxShadow: C.sw };
-  const css = `@keyframes si{from{opacity:0;transform:translateY(-10px)}to{opacity:1;transform:translateY(0)}}@keyframes fu{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}html,body,#root{margin:0;padding:0;cursor:default;background:${C.bg}}input[type="file"]{display:none}::selection{background:${C.ac}2b}::-webkit-scrollbar{width:6px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:${C.bd};border-radius:3px}`;
+  const css = `
+    @keyframes si{from{opacity:0;transform:translateY(-10px)}to{opacity:1;transform:translateY(0)}}
+    @keyframes fu{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+    html,body,#root{margin:0;padding:0;cursor:default;background:${C.bg}}
+    input[type="file"]{display:none}
+    ::selection{background:${C.ac}2b}
+    ::-webkit-scrollbar{width:6px}
+    ::-webkit-scrollbar-track{background:transparent}
+    ::-webkit-scrollbar-thumb{background:${C.bd};border-radius:3px}
+    .gf-detail-shell{display:grid;grid-template-columns:minmax(0,1fr);gap:18px;align-items:start}
+    .gf-detail-main{min-width:0}
+    .gf-detail-tabs{position:sticky;top:12px;z-index:12;display:flex;gap:8px;flex-wrap:wrap;padding:10px 12px;border:1px solid ${C.bd};border-radius:14px;background:${dark ? "rgba(17,26,43,0.92)" : "rgba(255,255,255,0.92)"};backdrop-filter:blur(12px);margin-bottom:16px}
+    .gf-detail-rail{display:grid;gap:14px}
+    .gf-detail-rail-sticky{position:sticky;top:12px;display:grid;gap:14px}
+    .gf-detail-intel-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+    .gf-detail-sticky-footer{position:sticky;bottom:16px;z-index:10;margin-top:12px;padding:12px;border:1px solid ${C.bd};border-radius:14px;background:${dark ? "rgba(11,18,32,0.96)" : "rgba(255,255,255,0.96)"};box-shadow:${C.sm};backdrop-filter:blur(12px)}
+    .gf-rail-kv{display:grid;gap:4px}
+    .gf-rail-kv-label{font-size:10px;letter-spacing:1.2px;text-transform:uppercase;color:${C.tt}}
+    .gf-rail-kv-value{font-size:13px;font-weight:700;color:${C.tx};line-height:1.35}
+    @media (min-width:1080px){.gf-detail-shell{grid-template-columns:minmax(0,1fr) 300px}}
+    @media (max-width:860px){.gf-detail-intel-grid{grid-template-columns:1fr}.gf-detail-tabs{top:8px}.gf-detail-sticky-footer{bottom:10px}}
+  `;
   const actionBtn = (active = false, tint = "neutral") => {
     const tone = {
       neutral: { fg: C.ts, bg: C.sf, bd: C.bd },
@@ -2039,7 +2110,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   }, [loading, workspaceUser, showHealth, showModels, showTeam, showQueue, showFunnel, showAB, showFilters, focusMode]);
 
   useEffect(() => {
-    const connected = Array.isArray(gmailStatus.connections) ? gmailStatus.connections : [];
+    const connected = availableGmailConnections;
     if (!connected.length) {
       setGmailSendUserId(authUserId || "");
       return;
@@ -2048,7 +2119,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     if (!gmailSendUserId || !connected.some((item) => item.userId === gmailSendUserId)) {
       setGmailSendUserId(preferred?.userId || authUserId || "");
     }
-  }, [gmailStatus.connections, authUserId, gmailSendUserId]);
+  }, [availableGmailConnections, authUserId, gmailSendUserId]);
 
   useEffect(() => {
     if (!proj?.id || !selA?.n) return;
@@ -3184,6 +3255,9 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     });
     setGmailSending(false);
     if (!result.ok) {
+      if (String(result.error || "").toLowerCase().includes("not connected")) {
+        await refreshGmailStatus();
+      }
       flash(result.error || "Could not send email", "err");
       return;
     }
@@ -3225,6 +3299,9 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     });
     setGmailSending(false);
     if (!result.ok) {
+      if (String(result.error || "").toLowerCase().includes("not connected")) {
+        await refreshGmailStatus();
+      }
       flash(result.error || "Could not send reply", "err");
       return;
     }
@@ -3266,6 +3343,9 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     });
     setGmailSending(false);
     if (!result.ok) {
+      if (String(result.error || "").toLowerCase().includes("not connected")) {
+        await refreshGmailStatus();
+      }
       flash(result.error || "Could not send reply", "err");
       return;
     }
@@ -3898,13 +3978,43 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     const lastSeqTouch = seqHistory[seqHistory.length - 1] || null;
     const remainingSeqSteps = seq ? seq.steps.slice(Math.max(ss?.stepIndex || 0, 0)) : [];
     const sendHistory = (proj?.sendLog || []).filter(s => s.artist === a.n).slice(-8).reverse();
-    const connectedGmailAccounts = ((artistInbox.connections?.length ? artistInbox.connections : gmailStatus.connections) || []).filter(item => item?.connected);
+    const connectedGmailAccounts = availableGmailConnections;
     const inboxThreads = (artistInbox.threads || []).slice().sort((x, y) => (y.lastMessageAt || "").localeCompare(x.lastMessageAt || ""));
     const selectedThread = inboxThreads.find((item) => item.threadKey === selectedThreadKey) || inboxThreads[0] || null;
     const selectedThreadMessages = selectedThread
       ? (artistInbox.messages || []).filter((item) => item.threadKey === selectedThread.threadKey).sort((x, y) => (x.sentAt || "").localeCompare(y.sentAt || ""))
       : [];
     const latestInboundMessage = [...selectedThreadMessages].reverse().find((item) => item.direction === "inbound") || null;
+    const latestInboundThread = inboxThreads.find((item) => item.lastInboundAt) || null;
+    const latestArtistInboundMessage = latestInboundThread
+      ? [...(artistInbox.messages || [])]
+        .filter((item) => item.threadKey === latestInboundThread.threadKey && item.direction === "inbound")
+        .sort((x, y) => (y.sentAt || "").localeCompare(x.sentAt || ""))[0] || null
+      : null;
+    const intelSections = parseIntelSections(intel?.text || "");
+    const selectedMailbox = connectedGmailAccounts.find(conn => conn.userId === gmailSendUserId)
+      || connectedGmailAccounts.find(conn => conn.userId === authUserId)
+      || connectedGmailAccounts[0]
+      || null;
+    const selectedMailboxReady = !!(selectedMailbox && connectedGmailAccounts.some(conn => conn.userId === selectedMailbox.userId));
+    const latestReplyAt = latestArtistInboundMessage?.sentAt || latestInboundThread?.lastInboundAt || "";
+    const latestReplyPreview = compactText(
+      latestArtistInboundMessage?.bodyText || latestArtistInboundMessage?.snippet || latestInboundThread?.snippet || "",
+      160,
+    );
+    const currentStageMeta = SM[stage] || SM.prospect;
+    const currentOwner = proj?.assignments?.[a.n] || "Unassigned";
+    const mailboxSummary = selectedMailbox
+      ? `${selectedMailbox.workspaceEmail.split("@")[0]} · ${selectedMailbox.gmailEmail}`
+      : gmailStatus.currentUserConnected
+        ? gmailStatus.currentUserGmail
+        : "Not connected";
+    const railStats = [
+      { label: "Stage", value: currentStageMeta.label, tone: sc(stage, C) },
+      { label: "Owner", value: currentOwner, tone: C.tx },
+      { label: "Next Follow-up", value: aFU ? sD(aFU) : "Not set", tone: aFU ? C.tx : C.ts },
+      { label: "Latest Reply", value: latestReplyAt ? rD(latestReplyAt) : "No synced reply", tone: latestReplyAt ? C.tx : C.ts },
+    ];
 
     const d = drafts[draftTab] || null;
     const savedTemplates = sanitizeSavedTemplates(proj?.settings?.savedTemplates || []);
@@ -3977,13 +4087,13 @@ Requirements:
       <div style={{ fontFamily: ft, background: C.bg, minHeight: "100vh", color: C.tx }}>
         <Toast /><style>{css}</style>
         <div style={{ borderBottom: `1px solid ${C.bd}`, background: C.sf }}>
-          <div style={{ maxWidth: 900, margin: "0 auto", padding: "16px 24px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div style={{ maxWidth: 1180, margin: "0 auto", padding: "16px 24px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <button onClick={() => { setScreen("project"); setSelA(null); }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, fontFamily: ft, color: C.ac, fontWeight: 600 }}>← Pipeline</button>
             <DkBtn />
           </div>
         </div>
 
-        <div style={{ maxWidth: 900, margin: "0 auto", padding: "24px", animation: "fu 0.25s ease" }}>
+        <div style={{ maxWidth: 1180, margin: "0 auto", padding: "24px", animation: "fu 0.25s ease" }}>
           {isReadOnly && (
             <div style={{ ...cS, padding: "10px 14px", marginBottom: 14, fontSize: 12, color: C.ts }}>
               Viewer mode is active. You can review drafts and analytics, but editing and stage changes are disabled.
@@ -4005,14 +4115,6 @@ Requirements:
               </div>
               {a.h && <div style={{ fontSize: 12, color: C.ts, marginTop: 6 }}>🎵 {a.h}</div>}
               {a.e && <div style={{ fontSize: 12, color: C.ts, marginTop: 3 }}>✉ {a.e}</div>}
-              <div style={{ display: "flex", gap: 8, marginTop: 10, alignItems: "center", flexWrap: "wrap" }}>
-                <span style={{ fontSize: 11, color: C.ts }}>Owner</span>
-                <select value={proj?.assignments?.[a.n] || ""} disabled={isReadOnly} onChange={e => assignOwner(a.n, e.target.value)} style={{ ...iS, padding: "5px 10px", fontSize: 11, ...lockStyle(isReadOnly) }}>
-                  <option value="">Unassigned</option>
-                  {(proj?.teamUsers || []).map(u => <option key={u} value={u}>{u}</option>)}
-                </select>
-                <button onClick={() => exportBrief(a)} style={{ padding: "6px 10px", borderRadius: 8, border: `1px solid ${C.bd}`, background: "transparent", color: C.ts, cursor: "pointer", fontSize: 11, fontFamily: ft }}>Export Brief</button>
-              </div>
             </div>
           </div>
 
@@ -4027,51 +4129,34 @@ Requirements:
             Pipeline flow: Prospect → Draft Ready → Sent → Replied → Engaged → Won → Live or Dead.
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10, marginBottom: 16 }}>
-            <div style={{ ...cS, padding: "12px 14px" }}>
-              <div style={{ fontSize: 10, color: C.tt, textTransform: "uppercase", letterSpacing: 1.2 }}>Stage</div>
-              <div style={{ fontSize: 14, fontWeight: 700, color: sc(stage, C), marginTop: 4 }}>{SM[stage]?.label || "Prospect"}</div>
-            </div>
-            <div style={{ ...cS, padding: "12px 14px" }}>
-              <div style={{ fontSize: 10, color: C.tt, textTransform: "uppercase", letterSpacing: 1.2 }}>Owner</div>
-              <div style={{ fontSize: 14, fontWeight: 700, marginTop: 4 }}>{proj?.assignments?.[a.n] || "Unassigned"}</div>
-            </div>
-            <div style={{ ...cS, padding: "12px 14px" }}>
-              <div style={{ fontSize: 10, color: C.tt, textTransform: "uppercase", letterSpacing: 1.2 }}>Next Follow-up</div>
-              <div style={{ fontSize: 14, fontWeight: 700, marginTop: 4 }}>{aFU ? sD(aFU) : "Not set"}</div>
-            </div>
-            <div style={{ ...cS, padding: "12px 14px" }}>
-              <div style={{ fontSize: 10, color: C.tt, textTransform: "uppercase", letterSpacing: 1.2 }}>Shared Inbox</div>
-              <div style={{ fontSize: 14, fontWeight: 700, marginTop: 4 }}>{inboxThreads.length} thread{inboxThreads.length === 1 ? "" : "s"}</div>
-            </div>
-          </div>
-
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
-            {[
-              ["overview", "Overview"],
-              ["outreach", "Outreach"],
-              ["inbox", `Inbox${inboxThreads.length ? ` (${inboxThreads.length})` : ""}`],
-              ["activity", "Activity"],
-            ].map(([id, label]) => (
-              <button
-                key={id}
-                onClick={() => setDetailTab(id)}
-                style={{
-                  padding: "8px 14px",
-                  borderRadius: 10,
-                  border: `1px solid ${detailTab === id ? C.ac : C.bd}`,
-                  background: detailTab === id ? C.al : C.sf,
-                  color: detailTab === id ? C.ac : C.ts,
-                  cursor: "pointer",
-                  fontSize: 12,
-                  fontWeight: 600,
-                  fontFamily: ft,
-                }}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
+          <div className="gf-detail-shell">
+            <div className="gf-detail-main">
+              <div className="gf-detail-tabs">
+                {[
+                  ["overview", "Overview"],
+                  ["outreach", "Outreach"],
+                  ["inbox", `Inbox${inboxThreads.length ? ` (${inboxThreads.length})` : ""}`],
+                  ["activity", "Activity"],
+                ].map(([id, label]) => (
+                  <button
+                    key={id}
+                    onClick={() => setDetailTab(id)}
+                    style={{
+                      padding: "8px 14px",
+                      borderRadius: 10,
+                      border: `1px solid ${detailTab === id ? C.ac : C.bd}`,
+                      background: detailTab === id ? C.al : C.sf,
+                      color: detailTab === id ? C.ac : C.ts,
+                      cursor: "pointer",
+                      fontSize: 12,
+                      fontWeight: 600,
+                      fontFamily: ft,
+                    }}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
 
           {detailTab === "outreach" && <div style={{ ...cS, padding: "18px 22px", marginBottom: 16 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
@@ -4140,18 +4225,41 @@ Requirements:
           </div>}
 
           {detailTab === "overview" && <div style={{ ...cS, padding: "20px 24px", marginBottom: 16 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: intel ? 12 : 0 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 10 }}>
               <div>
                 <div style={{ fontSize: 14, fontWeight: 700 }}>🧠 AI Intel</div>
                 <div style={{ fontSize: 11, color: C.tt }}>Model: {modelLabel(taskModel("intel"))} · {currentAiProvider === "openai" ? "OpenAI" : "Anthropic"}</div>
               </div>
-              <button onClick={() => runIntel(a)} disabled={intelLoading || isReadOnly} style={{ padding: "6px 16px", borderRadius: 10, border: `1.5px solid ${C.ac}`, background: intelLoading ? C.sa : C.al, color: C.ac, cursor: intelLoading ? "wait" : isReadOnly ? "not-allowed" : "pointer", fontSize: 12, fontWeight: 600, fontFamily: ft, ...lockStyle(isReadOnly) }}>{intelLoading ? "Analyzing..." : intel ? "Re-analyze" : "Analyze Artist"}</button>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                {intel?.text && (
+                  <button onClick={() => cp(intel.text, "intel_full")} style={{ padding: "6px 12px", borderRadius: 10, border: `1px solid ${C.bd}`, background: "transparent", color: C.ts, cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: ft }}>
+                    Copy Full Intel
+                  </button>
+                )}
+                <button onClick={() => runIntel(a)} disabled={intelLoading || isReadOnly} style={{ padding: "6px 16px", borderRadius: 10, border: `1.5px solid ${C.ac}`, background: intelLoading ? C.sa : C.al, color: C.ac, cursor: intelLoading ? "wait" : isReadOnly ? "not-allowed" : "pointer", fontSize: 12, fontWeight: 600, fontFamily: ft, ...lockStyle(isReadOnly) }}>{intelLoading ? "Analyzing..." : intel ? "Re-analyze" : "Analyze Artist"}</button>
+              </div>
             </div>
-            {intelLoading && <div style={{ fontSize: 12, color: C.ts, padding: "12px 0" }}>🔄 Running AI analysis on {a.n}...</div>}
-            {intel && <div style={{ fontSize: 13, lineHeight: 1.7, color: C.tx, whiteSpace: "pre-wrap", padding: "12px 16px", background: C.sa, borderRadius: 10, marginTop: 8, border: `1px solid ${C.bd}` }}>{intel.text}</div>}
+            {intelLoading && <div style={{ fontSize: 12, color: C.ts, padding: "12px 0" }}>Running AI analysis on {a.n}...</div>}
+            {intelSections.length > 0 && (
+              <div className="gf-detail-intel-grid">
+                {intelSections.map((section, idx) => (
+                  <div key={section.id} style={{ border: `1px solid ${C.bd}`, borderRadius: 14, background: idx === 0 ? C.al : C.sa, padding: "14px 14px 12px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, marginBottom: 8 }}>
+                      <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: idx === 0 ? C.ac : C.tt }}>{section.title}</div>
+                      <button onClick={() => cp(section.body, `intel_${section.id}`)} style={{ padding: "4px 8px", borderRadius: 8, border: `1px solid ${C.bd}`, background: C.sf, color: C.ts, cursor: "pointer", fontSize: 10, fontFamily: ft }}>
+                        Copy
+                      </button>
+                    </div>
+                    <div style={{ fontSize: section.title === "Fit Score" ? 18 : 12, fontWeight: section.title === "Fit Score" ? 800 : 500, lineHeight: 1.7, color: C.tx, whiteSpace: "pre-wrap" }}>
+                      {section.body || "No details yet."}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
             {!intel && !intelLoading && (
               <div style={{ fontSize: 12, color: C.ts, paddingTop: 10 }}>
-                Use AI Intel when you need fit analysis and tailored talking points. Keep the daily workflow in Outreach and Inbox.
+                Use AI Intel when you need fit analysis and tailored talking points. Keep daily workflow in Outreach and Inbox.
               </div>
             )}
           </div>}
@@ -4186,9 +4294,23 @@ Requirements:
               <div>
                 <div style={{ fontSize: 11, color: C.ts, marginBottom: 8 }}>{d.sub}</div>
                 <textarea value={d.text} readOnly={isReadOnly} onChange={e => { const nd = [...drafts]; nd[draftTab] = { ...nd[draftTab], text: e.target.value }; setDrafts(nd); }} style={{ ...iS, width: "100%", minHeight: 200, lineHeight: 1.65, fontSize: 13, resize: "vertical", boxSizing: "border-box", ...lockStyle(isReadOnly) }} />
+                {d.channel === "email" && !a.e && (
+                  <div style={{ marginTop: 10, padding: "10px 12px", borderRadius: 12, border: `1px solid ${C.abd}`, background: C.abb, fontSize: 12, color: C.ts }}>
+                    Add an artist email to send from GEMFINDER or open a compose link.
+                  </div>
+                )}
+                {d.channel === "email" && a.e && !connectedGmailAccounts.length && (
+                  <div style={{ marginTop: 10, padding: "10px 12px", borderRadius: 12, border: `1px solid ${C.abd}`, background: C.abb, fontSize: 12, color: C.ts, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                    <span>No Gmail mailbox is connected yet. Connect a mailbox before sending directly from GEMFINDER.</span>
+                    <button onClick={connectGmail} disabled={gmailStatusLoading || isReadOnly} style={{ padding: "6px 12px", borderRadius: 9, border: `1px solid ${C.ac}`, background: C.al, color: C.ac, cursor: gmailStatusLoading || isReadOnly ? "not-allowed" : "pointer", fontSize: 11, fontWeight: 600, fontFamily: ft, ...lockStyle(gmailStatusLoading || isReadOnly) }}>
+                      Connect My Gmail
+                    </button>
+                  </div>
+                )}
 
-                <div style={{ marginTop: 8, padding: "8px 10px", borderRadius: 10, border: `1px solid ${C.bd}`, background: C.sa }}>
-                  <div style={{ fontSize: 11, color: C.ts, marginBottom: 6 }}>
+                <details style={{ marginTop: 10, border: `1px solid ${C.bd}`, borderRadius: 12, background: C.sa, padding: "10px 12px" }}>
+                  <summary style={{ cursor: "pointer", fontSize: 12, fontWeight: 700, color: C.tx }}>Templates and saved copy ({compatibleTemplates.length})</summary>
+                  <div style={{ fontSize: 11, color: C.ts, marginTop: 10, marginBottom: 8 }}>
                     Saved templates for {d.channel === "email" ? "Email" : "DM"} in this project.
                     Placeholders: {"{{artist_first_name}}"}, {"{{artist_name}}"}, {"{{hit_track}}"}, {"{{genre_bucket}}"}, {"{{monthly_listeners}}"}, {"{{location}}"}, {"{{social_handle}}"}, {"{{platform_label}}"}, {"{{spotify_url}}"}, {"{{today}}"}.
                   </div>
@@ -4242,7 +4364,7 @@ Requirements:
                       Save As Template
                     </button>
                   </div>
-                </div>
+                </details>
                 {guardrails.enabled && quality && (
                   <div style={{ marginTop: 8, padding: "8px 10px", borderRadius: 10, border: `1px solid ${quality.pass ? C.gd : C.abd}`, background: quality.pass ? C.gb : C.abb, fontSize: 11 }}>
                     <div style={{ color: quality.pass ? C.gn : C.ab, fontWeight: 700, marginBottom: quality.issues.length ? 4 : 0 }}>
@@ -4254,7 +4376,25 @@ Requirements:
                   </div>
                 )}
 
-                <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <div className="gf-detail-sticky-footer">
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
+                    <div style={{ fontSize: 11, color: C.ts }}>
+                      {d.channel === "email"
+                        ? (selectedMailboxReady ? `Mail from ${mailboxSummary}` : "Direct send is blocked until a connected Gmail mailbox is selected.")
+                        : `Working in ${platformMeta(d.platform || draftPlatform)?.label || "DM"} mode.`}
+                    </div>
+                    {d.channel === "email" && (
+                      <select value={gmailSendUserId} disabled={isReadOnly || !connectedGmailAccounts.length} onChange={e => setGmailSendUserId(e.target.value)} style={{ ...iS, padding: "6px 10px", fontSize: 11, minWidth: 220, ...lockStyle(isReadOnly || !connectedGmailAccounts.length) }}>
+                        <option value="">Send as Gmail mailbox</option>
+                        {connectedGmailAccounts.map((conn) => (
+                          <option key={conn.userId} value={conn.userId}>
+                            {conn.workspaceEmail.split("@")[0]} · {conn.gmailEmail}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                   <button onClick={() => { if (!gateDraftAction("copy this draft")) return; cp(d.text, d.key); }} style={{ padding: "7px 20px", borderRadius: 10, border: "none", background: copied === d.key ? C.gn : C.ac, color: "#fff", cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: ft, transition: "all 0.2s" }}>{copied === d.key ? "Copied ✓" : "Copy"}</button>
 
                   {guardrails.enabled && !quality?.pass && (
@@ -4265,15 +4405,7 @@ Requirements:
 
                   {d.channel === "email" && (
                     <>
-                      <select value={gmailSendUserId} disabled={isReadOnly || !connectedGmailAccounts.length} onChange={e => setGmailSendUserId(e.target.value)} style={{ ...iS, padding: "6px 10px", fontSize: 11, minWidth: 220, ...lockStyle(isReadOnly || !connectedGmailAccounts.length) }}>
-                        <option value="">Send as Gmail mailbox</option>
-                        {connectedGmailAccounts.map((conn) => (
-                          <option key={conn.userId} value={conn.userId}>
-                            {conn.workspaceEmail.split("@")[0]} · {conn.gmailEmail}
-                          </option>
-                        ))}
-                      </select>
-                      <button onClick={() => { if (!gateDraftAction("send this draft")) return; sendDraftViaGmail(a, d); }} disabled={!a.e || !gmailSendUserId || gmailSending || isReadOnly} style={{ padding: "7px 12px", borderRadius: 10, border: `1.5px solid ${C.gn}`, background: C.gb, color: C.gn, cursor: !a.e || !gmailSendUserId || gmailSending || isReadOnly ? "not-allowed" : "pointer", fontSize: 11, fontWeight: 600, fontFamily: ft, opacity: !a.e || !gmailSendUserId || isReadOnly ? 0.45 : 1, ...lockStyle(!a.e || !gmailSendUserId || gmailSending || isReadOnly) }}>
+                      <button onClick={() => { if (!gateDraftAction("send this draft")) return; sendDraftViaGmail(a, d); }} disabled={!a.e || !selectedMailboxReady || gmailSending || isReadOnly} style={{ padding: "7px 12px", borderRadius: 10, border: `1.5px solid ${C.gn}`, background: C.gb, color: C.gn, cursor: !a.e || !selectedMailboxReady || gmailSending || isReadOnly ? "not-allowed" : "pointer", fontSize: 11, fontWeight: 600, fontFamily: ft, opacity: !a.e || !selectedMailboxReady || isReadOnly ? 0.45 : 1, ...lockStyle(!a.e || !selectedMailboxReady || gmailSending || isReadOnly) }}>
                         {gmailSending ? "Sending..." : "Send in GEMFINDER"}
                       </button>
                       <select value={sendProvider} disabled={isReadOnly} onChange={e => { const v = e.target.value; setSendProvider(v); saveSendPrefs(v, autoLogCompose); }} style={{ ...iS, padding: "6px 10px", fontSize: 11, ...lockStyle(isReadOnly) }}>
@@ -4294,6 +4426,7 @@ Requirements:
 
                   {draftMode === "template" && <span style={{ fontSize: 11, color: C.tt }}>💡 Hit "AI Personalize" above for a custom version{intel?.ok ? " (uses intel)" : ""}</span>}
                   {draftMode === "ai" && <span style={{ fontSize: 11, color: C.pr }}>✨ AI generated. Edit freely.</span>}
+                </div>
                 </div>
 
                 {dStats && (
@@ -4417,13 +4550,18 @@ Requirements:
                               <option key={conn.userId} value={conn.userId}>
                                 {conn.workspaceEmail.split("@")[0]} · {conn.gmailEmail}
                               </option>
-                            ))}
+                          ))}
                           </select>
                           {latestInboundMessage && <span style={{ fontSize: 11, color: C.tt }}>Latest inbound: {rD(latestInboundMessage.sentAt)}</span>}
                         </div>
+                        {!selectedMailboxReady && (
+                          <div style={{ marginBottom: 8, padding: "8px 10px", borderRadius: 10, border: `1px solid ${C.abd}`, background: C.abb, fontSize: 11, color: C.ts }}>
+                            Select a connected Gmail mailbox before sending a reply. If none are connected, use Connect My Gmail above.
+                          </div>
+                        )}
                         <textarea value={gmailReplyDraft} readOnly={isReadOnly} onChange={e => setGmailReplyDraft(e.target.value)} placeholder="Write a Gmail reply here. The team will see the thread after send." style={{ ...iS, width: "100%", minHeight: 120, resize: "vertical", fontSize: 12, ...lockStyle(isReadOnly) }} />
                         <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
-                          <button onClick={() => sendInboxReply(a)} disabled={gmailSending || !gmailSendUserId || isReadOnly} style={{ padding: "7px 14px", borderRadius: 10, border: "none", background: gmailSending ? C.bl : C.ac, color: "#fff", cursor: gmailSending || !gmailSendUserId || isReadOnly ? "not-allowed" : "pointer", fontSize: 12, fontWeight: 600, fontFamily: ft, ...lockStyle(gmailSending || !gmailSendUserId || isReadOnly) }}>
+                          <button onClick={() => sendInboxReply(a)} disabled={gmailSending || !selectedMailboxReady || isReadOnly} style={{ padding: "7px 14px", borderRadius: 10, border: "none", background: gmailSending ? C.bl : C.ac, color: "#fff", cursor: gmailSending || !selectedMailboxReady || isReadOnly ? "not-allowed" : "pointer", fontSize: 12, fontWeight: 600, fontFamily: ft, ...lockStyle(gmailSending || !selectedMailboxReady || isReadOnly) }}>
                             {gmailSending ? "Sending..." : "Send Reply"}
                           </button>
                           <button onClick={() => latestInboundMessage && setReplyInput(latestInboundMessage.bodyText || latestInboundMessage.snippet || "")} disabled={!latestInboundMessage} style={{ padding: "7px 12px", borderRadius: 10, border: `1px solid ${C.bd}`, background: "transparent", color: C.ts, cursor: latestInboundMessage ? "pointer" : "not-allowed", fontSize: 11, fontFamily: ft, opacity: latestInboundMessage ? 1 : 0.55 }}>
@@ -4501,23 +4639,6 @@ Requirements:
               {aFU && !isReadOnly && <button onClick={() => { setAFU(""); saveFU(a.n, ""); }} style={{ fontSize: 11, color: C.rd, background: "none", border: "none", cursor: "pointer", marginTop: 6, fontFamily: ft }}>Clear follow-up</button>}
             </div>
           </div>}
-
-          {detailTab === "activity" && !isReadOnly && (
-            <div style={{ ...cS, padding: "16px 20px", marginBottom: 16, borderColor: C.rbd, background: dark ? C.sf : "#fffafa" }}>
-              <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6, color: C.tx }}>Artist Controls</div>
-              <div style={{ fontSize: 11, color: C.ts, marginBottom: 10 }}>
-                Archive removes the artist from the active pipeline and keeps a recovery snapshot. Delete permanently removes the artist and all associated project data.
-              </div>
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                <button onClick={() => archiveArtist(a)} style={{ padding: "7px 12px", borderRadius: 9, border: `1px solid ${C.abd}`, background: C.abb, color: C.ab, cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: ft }}>
-                  Archive Artist
-                </button>
-                <button onClick={() => deleteArtistPermanently(a)} style={{ padding: "7px 12px", borderRadius: 9, border: `1px solid ${C.rbd}`, background: C.rb, color: C.rd, cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: ft }}>
-                  Delete Permanently
-                </button>
-              </div>
-            </div>
-          )}
 
           {detailTab === "activity" && <div style={{ ...cS, padding: "16px 20px", marginBottom: 16 }}>
             <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>📨 Send Log ({sendHistory.length})</div>
@@ -4618,6 +4739,125 @@ Requirements:
               </>
             )}
           </div>}
+            </div>
+
+            <aside className="gf-detail-rail">
+              <div className="gf-detail-rail-sticky">
+                <div style={{ ...cS, padding: "16px 18px" }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12 }}>Artist Summary</div>
+                  <div style={{ display: "grid", gap: 12 }}>
+                    {railStats.map((item) => (
+                      <div key={item.label} className="gf-rail-kv">
+                        <div className="gf-rail-kv-label">{item.label}</div>
+                        <div className="gf-rail-kv-value" style={{ color: item.tone }}>{item.value}</div>
+                      </div>
+                    ))}
+                    <div className="gf-rail-kv">
+                      <div className="gf-rail-kv-label">Mailbox</div>
+                      <div className="gf-rail-kv-value">{mailboxSummary}</div>
+                      <div style={{ fontSize: 11, color: C.tt }}>
+                        {gmailStatus.currentUserConnected
+                          ? `Current user connected as ${gmailStatus.currentUserGmail}`
+                          : "Current user is not connected yet"}
+                      </div>
+                    </div>
+                    <div className="gf-rail-kv">
+                      <div className="gf-rail-kv-label">Shared Inbox</div>
+                      <div className="gf-rail-kv-value">{inboxThreads.length} thread{inboxThreads.length === 1 ? "" : "s"}</div>
+                    </div>
+                    {a.onPlatform && (
+                      <div style={{ ...mkP(true, C.pr, C.pb), cursor: "default", width: "fit-content" }}>
+                        Already on platform
+                      </div>
+                    )}
+                  </div>
+                  <div style={{ display: "grid", gap: 8, marginTop: 14 }}>
+                    <select value={proj?.assignments?.[a.n] || ""} disabled={isReadOnly} onChange={e => assignOwner(a.n, e.target.value)} style={{ ...iS, padding: "7px 10px", fontSize: 12, ...lockStyle(isReadOnly) }}>
+                      <option value="">Owner: Unassigned</option>
+                      {(proj?.teamUsers || []).map(u => <option key={u} value={u}>{u}</option>)}
+                    </select>
+                    <button onClick={() => exportBrief(a)} style={{ ...actionBtn(false, "neutral"), width: "100%" }}>Export Brief</button>
+                  </div>
+                </div>
+
+                <div style={{ ...cS, padding: "16px 18px" }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>Mailboxes</div>
+                  <div style={{ fontSize: 11, color: C.ts, lineHeight: 1.6, marginBottom: 12 }}>
+                    This is where to verify direct Gmail sending. If a mailbox is connected here, GEMFINDER can send from it in Outreach and Inbox.
+                  </div>
+                  {connectedGmailAccounts.length ? (
+                    <div style={{ display: "grid", gap: 6, marginBottom: 12 }}>
+                      {connectedGmailAccounts.map((conn) => (
+                        <div key={conn.userId} style={{ padding: "8px 10px", borderRadius: 10, border: `1px solid ${selectedMailbox?.userId === conn.userId ? `${C.ac}40` : C.bd}`, background: selectedMailbox?.userId === conn.userId ? C.al : C.sa }}>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: C.tx }}>{conn.workspaceEmail.split("@")[0]}</div>
+                          <div style={{ fontSize: 11, color: C.ts, marginTop: 2 }}>{conn.gmailEmail}</div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div style={{ padding: "10px 12px", borderRadius: 10, border: `1px solid ${C.abd}`, background: C.abb, color: C.ts, fontSize: 12, marginBottom: 12 }}>
+                      No Gmail mailbox is connected yet.
+                    </div>
+                  )}
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    {!gmailStatus.currentUserConnected ? (
+                      <button onClick={connectGmail} disabled={gmailStatusLoading || isReadOnly} style={{ ...actionBtn(true, "accent"), ...lockStyle(gmailStatusLoading || isReadOnly) }}>
+                        {gmailStatusLoading ? "Checking..." : "Connect My Gmail"}
+                      </button>
+                    ) : (
+                      <button onClick={disconnectGmail} disabled={gmailStatusLoading || isReadOnly} style={{ ...actionBtn(true, "danger"), ...lockStyle(gmailStatusLoading || isReadOnly) }}>
+                        Disconnect My Gmail
+                      </button>
+                    )}
+                    {a.e && (
+                      <button onClick={() => syncArtistInbox(a)} disabled={syncingInbox || isReadOnly} style={{ ...actionBtn(false, "neutral"), ...lockStyle(syncingInbox || isReadOnly) }}>
+                        {syncingInbox ? "Syncing..." : "Sync Artist Inbox"}
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <div style={{ ...cS, padding: "16px 18px" }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>Latest Reply</div>
+                  {latestReplyAt ? (
+                    <>
+                      <div style={{ fontSize: 12, color: C.ts, marginBottom: 8 }}>{rD(latestReplyAt)}</div>
+                      <div style={{ fontSize: 12, color: C.tx, lineHeight: 1.6 }}>{latestReplyPreview || "Reply synced with no preview."}</div>
+                    </>
+                  ) : (
+                    <div style={{ fontSize: 12, color: C.ts, lineHeight: 1.6 }}>No synced inbound reply yet. Once Gmail is connected and synced, the latest artist response will appear here.</div>
+                  )}
+                  <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
+                    <button onClick={() => setDetailTab("inbox")} style={{ ...actionBtn(false, "neutral") }}>
+                      Open Inbox
+                    </button>
+                    {latestArtistInboundMessage && (
+                      <button onClick={() => setReplyInput(latestArtistInboundMessage.bodyText || latestArtistInboundMessage.snippet || "")} style={{ ...actionBtn(true, "accent") }}>
+                        Use in Reply Intel
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {!isReadOnly && (
+                  <details style={{ ...cS, padding: "14px 16px", borderColor: C.rbd }}>
+                    <summary style={{ cursor: "pointer", fontSize: 13, fontWeight: 700, color: C.rd }}>More actions</summary>
+                    <div style={{ fontSize: 11, color: C.ts, marginTop: 10, marginBottom: 10 }}>
+                      Archive keeps a recovery snapshot. Delete permanently removes the artist and all associated project data.
+                    </div>
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      <button onClick={() => archiveArtist(a)} style={{ padding: "7px 12px", borderRadius: 9, border: `1px solid ${C.abd}`, background: C.abb, color: C.ab, cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: ft }}>
+                        Archive Artist
+                      </button>
+                      <button onClick={() => deleteArtistPermanently(a)} style={{ padding: "7px 12px", borderRadius: 9, border: `1px solid ${C.rbd}`, background: C.rb, color: C.rd, cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: ft }}>
+                        Delete Permanently
+                      </button>
+                    </div>
+                  </details>
+                )}
+              </div>
+            </aside>
+          </div>
         </div>
       </div>
     );
