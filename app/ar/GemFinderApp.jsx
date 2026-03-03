@@ -542,6 +542,11 @@ function normalizeProject(p) {
     teamUsers: Array.isArray(p.teamUsers) && p.teamUsers.length ? p.teamUsers : [...DEFAULT_TEAM_USERS],
     assignments: p.assignments || {},
     replyIntel: p.replyIntel || {},
+    internalRoster: {
+      names: Array.isArray(p.internalRoster?.names) ? p.internalRoster.names : [],
+      fileName: p.internalRoster?.fileName || "",
+      uploadedAt: p.internalRoster?.uploadedAt || "",
+    },
     settings: {
       provider: "gmail",
       autoLogCompose: false,
@@ -549,6 +554,7 @@ function normalizeProject(p) {
       draftGuardrails: { ...DEFAULT_DRAFT_GUARDRAILS },
       savedTemplates: [],
       ...(p.settings || {}),
+      publicCsvToken: p.settings?.publicCsvToken || "",
       aiModelsByProvider,
       draftGuardrails: { ...DEFAULT_DRAFT_GUARDRAILS, ...(p.settings?.draftGuardrails || {}) },
       savedTemplates: sanitizeSavedTemplates(p.settings?.savedTemplates || []),
@@ -1264,6 +1270,44 @@ function parseCSV(text) {
   return results;
 }
 
+function normalizeSocialHandle(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const withoutUrl = raw
+    .replace(/^https?:\/\/(www\.)?instagram\.com\//i, "")
+    .replace(/^https?:\/\/(www\.)?tiktok\.com\/@/i, "")
+    .replace(/^https?:\/\/(www\.)?x\.com\//i, "")
+    .replace(/^https?:\/\/(www\.)?twitter\.com\//i, "");
+  return withoutUrl.replace(/^@/, "").replace(/\/.*$/, "").trim();
+}
+
+function parseArtistNameCSV(text) {
+  const lines = text.split(/\r?\n/).filter(l => l.trim());
+  if (!lines.length) return [];
+  const splitLine = line => line.split(",").map(v => v.trim().replace(/^"|"$/g, ""));
+  const firstRow = splitLine(lines[0]);
+  const headerCandidates = ["artist", "artist name", "name", "artist_name", "artistname"];
+  const headerIndex = firstRow.findIndex(h => headerCandidates.includes(h.toLowerCase()));
+  const startIndex = headerIndex >= 0 ? 1 : 0;
+  const nameIndex = headerIndex >= 0 ? headerIndex : 0;
+  const seen = new Set();
+  const names = [];
+  for (let i = startIndex; i < lines.length; i++) {
+    const cols = splitLine(lines[i]);
+    const name = cols[nameIndex] || "";
+    const canon = canonicalArtistName(name);
+    if (!canon || seen.has(canon)) continue;
+    seen.add(canon);
+    names.push(name.trim());
+  }
+  return names;
+}
+
+function makeShareToken() {
+  if (typeof window !== "undefined" && window.crypto?.randomUUID) return window.crypto.randomUUID();
+  return `${Date.now()}_${Math.random().toString(36).slice(2, 12)}`;
+}
+
 function exportPipeline(proj, enriched) {
   const rows = [["Artist", "Owner", "Genre", "Bucket", "Listeners", "Hit Track", "Email", "Social", "Stage", "Priority", "Spotify", "Notes", "Follow-Up", "Sequence", "Next Step", "Sends Logged"]];
   enriched.forEach(a => {
@@ -1309,6 +1353,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [toast, setToast] = useState(null);
 
   const fr = useRef(null);
+  const rosterRef = useRef(null);
 
   const [search, setSearch] = useState("");
   const [gf, setGf] = useState("All");
@@ -1327,6 +1372,17 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [showNew, setShowNew] = useState(false);
   const [npN, setNpN] = useState("");
   const [npD, setNpD] = useState("");
+  const [showAddArtist, setShowAddArtist] = useState(false);
+  const [artistForm, setArtistForm] = useState({
+    name: "",
+    genre: "",
+    listeners: "",
+    hitTrack: "",
+    social: "",
+    email: "",
+    location: "",
+    note: "",
+  });
 
   const [batch, setBatch] = useState(false);
   const [bSel, setBSel] = useState(new Set());
@@ -1433,6 +1489,16 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   };
   const lockStyle = locked => (locked ? { opacity: 0.55, cursor: "not-allowed" } : {});
   const proj = projects.find(p => p.id === apId);
+  const resetArtistForm = () => setArtistForm({
+    name: "",
+    genre: "",
+    listeners: "",
+    hitTrack: "",
+    social: "",
+    email: "",
+    location: "",
+    note: "",
+  });
 
   useEffect(() => {
     (async () => {
@@ -1958,6 +2024,11 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       teamUsers: [...DEFAULT_TEAM_USERS],
       assignments: {},
       replyIntel: {},
+      internalRoster: {
+        names: [],
+        fileName: "",
+        uploadedAt: "",
+      },
       settings: {
         provider: "gmail",
         autoLogCompose: false,
@@ -1968,6 +2039,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         },
         draftGuardrails: { ...DEFAULT_DRAFT_GUARDRAILS },
         savedTemplates: [],
+        publicCsvToken: "",
       },
       created: new Date().toISOString(),
     };
@@ -1998,6 +2070,119 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     await saveProject(nextProj);
     flash(`+${nw.length} artists (${p.length - nw.length} dupes skipped)`);
     e.target.value = "";
+  };
+
+  const importInternalRoster = async e => {
+    if (!requireEditor()) return;
+    const f = e.target.files?.[0];
+    if (!f || !proj) return;
+    const text = await f.text();
+    const names = parseArtistNameCSV(text);
+    if (!names.length) {
+      flash("No artist names found in internal CSV", "err");
+      e.target.value = "";
+      return;
+    }
+    const nextProj = {
+      ...proj,
+      internalRoster: {
+        names,
+        fileName: f.name,
+        uploadedAt: new Date().toISOString(),
+      },
+    };
+    await saveProject(nextProj);
+    const projectNames = new Set(proj.artists.map(a => canonicalArtistName(a.n)));
+    const matches = names.filter(name => projectNames.has(canonicalArtistName(name))).length;
+    flash(`Loaded internal roster (${names.length}) · ${matches} current matches`);
+    e.target.value = "";
+  };
+
+  const clearInternalRoster = async () => {
+    if (!requireEditor()) return;
+    if (!proj) return;
+    const nextProj = {
+      ...proj,
+      internalRoster: { names: [], fileName: "", uploadedAt: "" },
+    };
+    await saveProject(nextProj);
+    flash("Internal roster cleared");
+  };
+
+  const addManualArtist = async () => {
+    if (!requireEditor()) return;
+    if (!proj) return;
+    const name = artistForm.name.trim();
+    if (!name) {
+      flash("Artist name is required", "err");
+      return;
+    }
+    const canon = canonicalArtistName(name);
+    const existing = new Set(proj.artists.map(a => canonicalArtistName(a.n)));
+    if (existing.has(canon)) {
+      flash(`${name} is already in this project`, "err");
+      return;
+    }
+    const socialHandle = normalizeSocialHandle(artistForm.social);
+    const nextArtist = {
+      n: name,
+      g: artistForm.genre.trim(),
+      l: artistForm.listeners.trim(),
+      h: artistForm.hitTrack.trim(),
+      ig: socialHandle ? `@${socialHandle}` : "",
+      soc: socialHandle,
+      e: artistForm.email.trim(),
+      loc: artistForm.location.trim(),
+      s: false,
+      o: "Manual Add",
+    };
+    const activityLog = addLog(proj, name, "Artist added manually");
+    const nextProj = {
+      ...proj,
+      artists: [nextArtist, ...proj.artists],
+      notes: artistForm.note.trim() ? { ...(proj.notes || {}), [name]: artistForm.note.trim() } : proj.notes,
+      activityLog,
+    };
+    await saveProject(nextProj);
+    const alreadyOnPlatform = (proj.internalRoster?.names || []).some(item => canonicalArtistName(item) === canon);
+    resetArtistForm();
+    setShowAddArtist(false);
+    flash(alreadyOnPlatform ? `Added ${name} · already found in internal roster` : `Added ${name}`);
+  };
+
+  const copyProjectCsvLink = async () => {
+    if (!proj) return;
+    let nextProj = proj;
+    let token = proj.settings?.publicCsvToken || "";
+    if (!token) {
+      token = makeShareToken();
+      nextProj = {
+        ...proj,
+        settings: {
+          ...(proj.settings || {}),
+          publicCsvToken: token,
+        },
+      };
+      await saveProject(nextProj);
+    }
+    const origin = typeof window !== "undefined" ? window.location.origin : "";
+    const url = `${origin}/api/ar/projects/${proj.id}/csv?token=${encodeURIComponent(token)}`;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(url);
+      } else {
+        const el = document.createElement("textarea");
+        el.value = url;
+        el.style.cssText = "position:fixed;top:-9999px";
+        document.body.appendChild(el);
+        el.select();
+        document.execCommand("copy");
+        document.body.removeChild(el);
+      }
+      flash("Live CSV link copied");
+    } catch {
+      flash("Could not copy CSV link", "err");
+    }
   };
 
   const setSt = async (n, sid) => {
@@ -2398,11 +2583,13 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       artists: [...proj.artists, { n: a.n, g: a.g, l: a.l, h: a.h, ig: a.ig || "", soc: a.soc || "", e: a.e || "", loc: a.loc || "", s: false, o: "AI Discovery" }],
     };
     await saveProject(nextProj);
-    flash(`Added ${a.n}`);
+    const alreadyOnPlatform = (proj.internalRoster?.names || []).some(item => canonicalArtistName(item) === canonicalArtistName(a.n));
+    flash(alreadyOnPlatform ? `Added ${a.n} · already found in internal roster` : `Added ${a.n}`);
   };
 
   const enriched = useMemo(() => {
     if (!proj) return [];
+    const internalSet = new Set((proj.internalRoster?.names || []).map(canonicalArtistName));
     return proj.artists.map(a => ({
       ...a,
       bucket: bucketGenre(a.g),
@@ -2412,6 +2599,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       note: proj.notes?.[a.n] || "",
       followUp: proj.followUps?.[a.n] || "",
       owner: proj.assignments?.[a.n] || "",
+      onPlatform: internalSet.has(canonicalArtistName(a.n)),
     }));
   }, [proj]);
 
@@ -2462,6 +2650,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const abRows = useMemo(() => buildABLeaderboard(proj?.abStats || {}), [proj]);
   const dueSeqCount = useMemo(() => Object.values(proj?.sequenceState || {}).filter(ss => ss?.status === "active" && ss.nextDue && ss.nextDue <= todayISO()).length, [proj]);
   const healthAlerts = useMemo(() => buildHealthAlerts(enriched, proj || {}), [enriched, proj]);
+  const internalMatchCount = useMemo(() => enriched.filter(a => a.onPlatform).length, [enriched]);
   const handleKanbanDrop = async (stageId, droppedName = "") => {
     if (!canEdit) {
       flash("Viewer role is read-only", "err");
@@ -2695,6 +2884,7 @@ Requirements:
               <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
                 <span style={{ fontSize: 24, fontWeight: 800, letterSpacing: "-0.02em" }}>{a.n}</span>
                 <span style={{ ...mkP(true, pt.color, pt.bg), fontSize: 11 }}>{pt.label}</span>
+                {a.onPlatform && <span style={{ ...mkP(true, C.pr, C.pb), fontSize: 11 }}>On Platform</span>}
               </div>
               <div style={{ display: "flex", gap: 12, fontSize: 12, color: C.ts, flexWrap: "wrap", alignItems: "center" }}>
                 {a.g && <span>{a.g}</span>}
@@ -3105,6 +3295,7 @@ Requirements:
                 <span>{stCounts.won} won</span>
                 <span>{(proj.sendLog || []).length} sends logged</span>
                 <span>{dueSeqCount} seq due</span>
+                {!!proj.internalRoster?.names?.length && <span>{internalMatchCount} platform matches</span>}
               </div>
             </div>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
@@ -3125,10 +3316,16 @@ Requirements:
               <button disabled={!isAdmin} onClick={configureAiKey} style={{ ...actionBtn(true, aiKeySet ? "good" : "danger"), ...lockStyle(!isAdmin) }}>
                 {currentAiProvider === "openai" ? "OpenAI Key" : "Anthropic Key"} {aiKeySet ? "Set" : "Missing"}
               </button>
+              <button disabled={isReadOnly} onClick={() => setShowAddArtist(true)} style={{ ...actionBtn(true, "good"), ...lockStyle(isReadOnly) }}>+ Artist</button>
               <label style={{ ...actionBtn(false, "neutral"), ...lockStyle(isReadOnly) }}>
                 Import CSV
                 <input type="file" accept=".csv" ref={fr} onChange={importCSV} disabled={isReadOnly} />
               </label>
+              <label style={{ ...actionBtn(false, "neutral"), ...lockStyle(isReadOnly) }}>
+                Internal CSV Check
+                <input type="file" accept=".csv" ref={rosterRef} onChange={importInternalRoster} disabled={isReadOnly} />
+              </label>
+              <button onClick={copyProjectCsvLink} style={actionBtn(false, "neutral")}>CSV Link</button>
               <button onClick={() => exportPipeline(proj, enriched)} style={actionBtn(false, "neutral")}>Export</button>
               <button onClick={signOut} style={actionBtn(false, "neutral")}>Sign out</button>
               <DkBtn />
@@ -3163,6 +3360,16 @@ Requirements:
         {isReadOnly && (
           <div style={{ ...cS, padding: "10px 14px", marginBottom: 12, fontSize: 12, color: C.ts }}>
             Viewer mode is active for this workspace. Editing, importing, and sequence actions are disabled.
+          </div>
+        )}
+        {!!proj.internalRoster?.names?.length && (
+          <div style={{ ...cS, padding: "10px 14px", marginBottom: 12, fontSize: 12, color: C.ts, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <div>
+              Internal roster loaded from <strong style={{ color: C.tx }}>{proj.internalRoster.fileName || "CSV"}</strong>
+              {` · ${proj.internalRoster.names.length} artists · ${internalMatchCount} current project matches`}
+              {proj.internalRoster.uploadedAt ? ` · updated ${sD(proj.internalRoster.uploadedAt)}` : ""}
+            </div>
+            {!isReadOnly && <button onClick={clearInternalRoster} style={{ ...actionBtn(false, "danger"), padding: "6px 10px" }}>Clear Check</button>}
           </div>
         )}
         {showHealth && (
@@ -3438,6 +3645,7 @@ Requirements:
                       <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 12, background: pt2.bg, color: pt2.color, fontWeight: 600, border: `1px solid ${pt2.border}` }}>{pt2.label}</span>
                       <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 12, background: sb(a.stage, C), color: sc(a.stage, C), fontWeight: 500 }}>{SM[a.stage]?.icon} {SM[a.stage]?.label}</span>
                       <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 12, background: C.sa, color: a.owner ? C.ts : C.rd, border: `1px solid ${C.bd}` }}>{a.owner || "Unassigned"}</span>
+                      {a.onPlatform && <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 12, background: C.pb, color: C.pr, fontWeight: 600, border: `1px solid ${C.pbd}` }}>On Platform</span>}
                       {seqDue && <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 12, background: C.abb, color: C.ab, fontWeight: 600 }}>🧭 Seq Due</span>}
                     </div>
                     <div style={{ fontSize: 11, color: C.ts, marginTop: 3, display: "flex", gap: 10, flexWrap: "wrap" }}>
@@ -3515,6 +3723,7 @@ Requirements:
                           <div style={{ display: "flex", gap: 4, marginTop: 4 }}>
                             {a.e && <span style={{ fontSize: 10 }}>✉</span>}
                             {a.soc && <span style={{ fontSize: 10 }}>📷</span>}
+                            {a.onPlatform && <span style={{ fontSize: 10, color: C.pr }}>◆</span>}
                             {seqDue && <span style={{ fontSize: 10 }}>🧭</span>}
                             <a href={spotifyUrl(a.n)} target="_blank" rel="noopener" onClick={e => e.stopPropagation()} style={{ fontSize: 9, color: C.gn, textDecoration: "none" }}>🎵</a>
                           </div>
@@ -3533,7 +3742,7 @@ Requirements:
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
               <thead>
                 <tr style={{ borderBottom: `2px solid ${C.bd}`, textAlign: "left" }}>
-                  {["Artist", "Owner", "Genre", "Listeners", "Stage", "Priority", "Email", "Social", "Spotify", "Sequence", "Follow-up", "Updated"].map(h => (
+                  {["Artist", "Owner", "Genre", "Listeners", "Stage", "Priority", "Platform", "Email", "Social", "Spotify", "Sequence", "Follow-up", "Updated"].map(h => (
                     <th key={h} style={{ padding: "8px 10px", fontWeight: 600, color: C.ts, fontSize: 11, whiteSpace: "nowrap" }}>{h}</th>
                   ))}
                 </tr>
@@ -3550,6 +3759,7 @@ Requirements:
                       <td style={{ padding: "8px 10px", color: C.ts }}>{a.l || "-"}</td>
                       <td style={{ padding: "8px 10px" }}><span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 8, background: sb(a.stage, C), color: sc(a.stage, C) }}>{SM[a.stage]?.icon} {SM[a.stage]?.label}</span></td>
                       <td style={{ padding: "8px 10px" }}><span style={{ fontSize: 10, padding: "2px 6px", borderRadius: 8, background: pt2.bg, color: pt2.color, fontWeight: 600 }}>{pt2.label}</span></td>
+                      <td style={{ padding: "8px 10px", color: a.onPlatform ? C.pr : C.tt, fontSize: 11 }}>{a.onPlatform ? "On Platform" : "-"}</td>
                       <td style={{ padding: "8px 10px", color: a.e ? C.gn : C.tt, fontSize: 11 }}>{a.e ? "✓" : "-"}</td>
                       <td style={{ padding: "8px 10px" }}>{a.soc ? <a href={`https://instagram.com/${a.soc}`} target="_blank" rel="noopener" onClick={e => e.stopPropagation()} style={{ color: C.pr, textDecoration: "none", fontSize: 11 }}>@{a.soc}</a> : "-"}</td>
                       <td style={{ padding: "8px 10px" }}><a href={spotifyUrl(a.n)} target="_blank" rel="noopener" onClick={e => e.stopPropagation()} style={{ color: C.gn, textDecoration: "none", fontSize: 11 }}>🎵</a></td>
@@ -3568,7 +3778,40 @@ Requirements:
           <div style={{ textAlign: "center", padding: "60px 20px", color: C.tt }}>
             <div style={{ fontSize: 36, marginBottom: 12 }}>◎</div>
             <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 6 }}>No artists yet</div>
-            <div style={{ fontSize: 13 }}>Import a CSV or use AI Discover to find artists.</div>
+            <div style={{ fontSize: 13 }}>Import a CSV, add one manually, or use AI Discover.</div>
+          </div>
+        )}
+
+        {showAddArtist && (
+          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 120 }} onClick={e => { if (e.target === e.currentTarget) { setShowAddArtist(false); resetArtistForm(); } }}>
+            <div style={{ background: C.sf, borderRadius: 18, padding: "24px 28px", width: 640, maxWidth: "calc(100vw - 32px)", boxShadow: "0 25px 70px rgba(0,0,0,0.2)" }}>
+              <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 6, color: C.tx }}>Add Artist</div>
+              <div style={{ fontSize: 12, color: C.ts, marginBottom: 14 }}>Manual add for artists you want in the pipeline before a CSV import.</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                <input value={artistForm.name} onChange={e => setArtistForm({ ...artistForm, name: e.target.value })} placeholder="Artist name*" autoFocus style={{ ...iS, width: "100%" }} />
+                <input value={artistForm.genre} onChange={e => setArtistForm({ ...artistForm, genre: e.target.value })} placeholder="Genre / vibe" style={{ ...iS, width: "100%" }} />
+                <input value={artistForm.listeners} onChange={e => setArtistForm({ ...artistForm, listeners: e.target.value })} placeholder="Monthly listeners" style={{ ...iS, width: "100%" }} />
+                <input value={artistForm.hitTrack} onChange={e => setArtistForm({ ...artistForm, hitTrack: e.target.value })} placeholder="Hit track" style={{ ...iS, width: "100%" }} />
+                <input value={artistForm.social} onChange={e => setArtistForm({ ...artistForm, social: e.target.value })} placeholder="@handle or profile URL" style={{ ...iS, width: "100%" }} />
+                <input value={artistForm.email} onChange={e => setArtistForm({ ...artistForm, email: e.target.value })} placeholder="Email" style={{ ...iS, width: "100%" }} />
+                <input value={artistForm.location} onChange={e => setArtistForm({ ...artistForm, location: e.target.value })} placeholder="Location" style={{ ...iS, width: "100%", gridColumn: "1 / span 2" }} />
+                <textarea value={artistForm.note} onChange={e => setArtistForm({ ...artistForm, note: e.target.value })} placeholder="Optional note" style={{ ...iS, width: "100%", minHeight: 80, resize: "vertical", gridColumn: "1 / span 2" }} />
+              </div>
+              <div style={{ marginTop: 10, fontSize: 11, color: C.ts }}>
+                {artistForm.name.trim() && proj?.artists?.some(a => canonicalArtistName(a.n) === canonicalArtistName(artistForm.name)) && (
+                  <div style={{ color: C.rd }}>This artist is already in the project.</div>
+                )}
+                {artistForm.name.trim() && (proj?.internalRoster?.names || []).some(name => canonicalArtistName(name) === canonicalArtistName(artistForm.name)) && (
+                  <div style={{ color: C.pr }}>This artist appears in your internal roster check.</div>
+                )}
+              </div>
+              <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 18 }}>
+                <button onClick={() => { setShowAddArtist(false); resetArtistForm(); }} style={{ padding: "8px 18px", borderRadius: 10, border: `1px solid ${C.bd}`, background: "transparent", cursor: "pointer", fontSize: 13, fontFamily: ft, color: C.ts }}>Cancel</button>
+                <button onClick={addManualArtist} style={{ padding: "8px 24px", borderRadius: 10, border: "none", background: C.ac, color: "#fff", cursor: "pointer", fontSize: 13, fontWeight: 600, fontFamily: ft, opacity: artistForm.name.trim() ? 1 : 0.45 }}>
+                  Add Artist
+                </button>
+              </div>
+            </div>
           </div>
         )}
       </div>
