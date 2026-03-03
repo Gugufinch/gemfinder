@@ -51,6 +51,7 @@ const SEQ_MAP = Object.fromEntries(SEQUENCES.map(s => [s.id, s]));
 
 const DEFAULT_TEAM_USERS = ["Greg", "Vinny", "Brad", "Jen", "JB"];
 const ALL_USER_VIEW = "__all__";
+const UNASSIGNED_USER_VIEW = "__unassigned__";
 
 const AI_PROVIDERS = [
   { id: "anthropic", label: "Anthropic" },
@@ -1429,6 +1430,9 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [showQueue, setShowQueue] = useState(false);
   const [reportStart, setReportStart] = useState(addDaysISO(todayISO(), -29));
   const [reportEnd, setReportEnd] = useState(todayISO());
+  const [projectMode, setProjectMode] = useState("work");
+  const [showProjectMenu, setShowProjectMenu] = useState(false);
+  const [showQuickDrawer, setShowQuickDrawer] = useState(false);
 
   const [aiDraftLoading, setAiDraftLoading] = useState(false);
   const [draftMode, setDraftMode] = useState("template");
@@ -1477,7 +1481,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   })();
   const currentActor = defaultWorkspaceUser || authEmail || authUserId || "Unknown";
   const reportScopeMode = workspaceUser === ALL_USER_VIEW ? "team" : "workspace";
-  const reportViewLabel = workspaceUser === ALL_USER_VIEW ? "All" : workspaceUser;
+  const reportViewLabel = workspaceUser === ALL_USER_VIEW ? "All" : workspaceUser === UNASSIGNED_USER_VIEW ? "Unassigned" : workspaceUser;
 
   const C = dark ? DK : LT;
   const ft = "'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif";
@@ -1682,7 +1686,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   useEffect(() => {
     if (!proj) return;
     const users = proj.teamUsers || [];
-    if (workspaceUser !== ALL_USER_VIEW && users.length && !users.includes(workspaceUser)) {
+    if (workspaceUser !== ALL_USER_VIEW && workspaceUser !== UNASSIGNED_USER_VIEW && users.length && !users.includes(workspaceUser)) {
       changeWorkspaceUser(ALL_USER_VIEW);
     }
   }, [proj?.id, proj?.teamUsers, workspaceUser]);
@@ -1714,6 +1718,9 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
 
   const changeWorkspaceUser = user => {
     setWorkspaceUser(user);
+    setOwnerFilter("__view__");
+    setShowQuickDrawer(false);
+    setShowProjectMenu(false);
     const layout = normalizeLayout(layoutByUser[user] || DEFAULT_LAYOUT);
     setShowHealth(!!layout.showHealth);
     setShowModels(!!layout.showModels);
@@ -2432,7 +2439,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     }
   };
 
-  const openA = a => {
+  const primeArtistContext = a => {
     const bucket = bucketGenre(a.g);
     const plan = buildABPlan(proj?.abStats || {}, a, bucket);
     const defaultPlatform = a.e ? "email" : "instagram_dm";
@@ -2455,6 +2462,17 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     setReplyResult(existingReply);
     setReplyInput("");
     setFollowUpDraft("");
+  };
+
+  const openQuickArtist = a => {
+    primeArtistContext(a);
+    setShowProjectMenu(false);
+    setShowQuickDrawer(true);
+  };
+
+  const openA = a => {
+    primeArtistContext(a);
+    setShowQuickDrawer(false);
     setScreen("detail");
   };
 
@@ -2739,6 +2757,11 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     }));
   }, [proj]);
 
+  const activeArtist = useMemo(() => {
+    if (!selA) return null;
+    return enriched.find(a => a.n === selA.n) || selA;
+  }, [enriched, selA]);
+
   const gBuckets = useMemo(() => {
     const c = {};
     enriched.forEach(a => { c[a.bucket] = (c[a.bucket] || 0) + 1; });
@@ -2746,7 +2769,11 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   }, [enriched]);
 
   const effectiveOwnerFilter = useMemo(() => {
-    if (ownerFilter === "__view__") return workspaceUser === ALL_USER_VIEW ? "all" : workspaceUser;
+    if (ownerFilter === "__view__") {
+      if (workspaceUser === ALL_USER_VIEW) return "all";
+      if (workspaceUser === UNASSIGNED_USER_VIEW) return "";
+      return workspaceUser;
+    }
     return ownerFilter;
   }, [ownerFilter, workspaceUser]);
 
@@ -2781,8 +2808,11 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
 
   const reportScopedArtists = useMemo(() => {
     if (reportScopeMode === "team") return enriched;
+    if (workspaceUser === UNASSIGNED_USER_VIEW) return enriched.filter(a => !a.owner);
     return enriched.filter(a => a.owner === workspaceUser);
   }, [enriched, reportScopeMode, workspaceUser]);
+
+  const reportScopedArtistNames = useMemo(() => new Set(reportScopedArtists.map(a => a.n)), [reportScopedArtists]);
 
   const reportStageCounts = useMemo(() => {
     const c = {};
@@ -2811,19 +2841,27 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     const source = proj?.activityLog || {};
     Object.entries(source).forEach(([artistName, logs]) => {
       (logs || []).forEach(entry => {
-        if (reportScopeMode === "workspace" && (entry.actor || "") !== workspaceUser) return;
+        if (reportScopeMode === "workspace") {
+          if (workspaceUser === UNASSIGNED_USER_VIEW) {
+            if (!reportScopedArtistNames.has(artistName)) return;
+          } else if ((entry.actor || "") !== workspaceUser) return;
+        }
         if (!isWithinDateRange(entry.time)) return;
         rows.push({ ...entry, artistName });
       });
     });
     return rows.sort((a, b) => String(a.time).localeCompare(String(b.time)));
-  }, [proj?.activityLog, reportScopeMode, workspaceUser, isWithinDateRange]);
+  }, [proj?.activityLog, reportScopeMode, workspaceUser, reportScopedArtistNames, isWithinDateRange]);
 
   const reportSendEntries = useMemo(() => {
     return (proj?.sendLog || [])
-      .filter(entry => (reportScopeMode === "team" ? true : (entry.actor || "") === workspaceUser))
+      .filter(entry => {
+        if (reportScopeMode === "team") return true;
+        if (workspaceUser === UNASSIGNED_USER_VIEW) return reportScopedArtistNames.has(entry.artist);
+        return (entry.actor || "") === workspaceUser;
+      })
       .filter(entry => isWithinDateRange(entry.sentAt));
-  }, [proj?.sendLog, reportScopeMode, workspaceUser, isWithinDateRange]);
+  }, [proj?.sendLog, reportScopeMode, workspaceUser, reportScopedArtistNames, isWithinDateRange]);
 
   const reportActivityStats = useMemo(() => {
     const stageMoves = reportActivityEntries.filter(entry => String(entry.action || "").startsWith("Stage →") || String(entry.action || "").startsWith("Batch →")).length;
@@ -3022,7 +3060,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
 
   // ═══ DETAIL ═══
   if (screen === "detail" && selA) {
-    const a = selA;
+    const a = activeArtist || selA;
     const bucket = bucketGenre(a.g);
     const pri = pS(a);
     const pt = pT(pri, C);
@@ -3564,9 +3602,9 @@ Requirements:
         <div style={{ maxWidth: 1240, margin: "0 auto", padding: "16px 24px 14px" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 14 }}>
             <div>
-              <button onClick={() => { setScreen("hub"); setSearch(""); setGf("All"); setSf("all"); setPf("all"); }} style={{ fontSize: 11, color: C.ac, background: "none", border: "none", cursor: "pointer", fontFamily: ft, fontWeight: 600, padding: 0, marginBottom: 4 }}>← Projects</button>
+              <button onClick={() => { setScreen("hub"); setShowQuickDrawer(false); setSearch(""); setGf("All"); setSf("all"); setPf("all"); }} style={{ fontSize: 11, color: C.ac, background: "none", border: "none", cursor: "pointer", fontFamily: ft, fontWeight: 600, padding: 0, marginBottom: 4 }}>← Projects</button>
               <div style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-0.02em" }}>{proj.name}</div>
-              <div style={{ fontSize: 12, color: C.ts, marginTop: 2, display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <div style={{ fontSize: 12, color: C.ts, marginTop: 4, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
                 <span>{enriched.length} artists</span>
                 <span>{stCounts.sent + stCounts.replied + stCounts.engaged + stCounts.won} contacted</span>
                 <span>{stCounts.won} won</span>
@@ -3574,65 +3612,62 @@ Requirements:
                 <span>{dueSeqCount} follow-ups due</span>
                 {!!proj.archivedArtists?.length && <span>{proj.archivedArtists.length} archived</span>}
                 {!!proj.internalRoster?.names?.length && <span>{internalMatchCount} platform matches</span>}
+                <span style={{ fontSize: 11, color: C.tt }}>{authLabel}</span>
+                <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 999, border: `1px solid ${C.bd}`, background: C.sa, color: C.ts, textTransform: "uppercase" }}>
+                  {roleLabel}
+                </span>
               </div>
             </div>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-              <span style={{ fontSize: 11, color: C.tt, maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{authLabel}</span>
-              <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 999, border: `1px solid ${C.bd}`, background: C.sa, color: C.ts, textTransform: "uppercase" }}>
-                {roleLabel}
-              </span>
-              {isAdmin && (
-                <a href="/ar/admin" style={{ ...actionBtn(false, "neutral"), textDecoration: "none", display: "inline-flex", alignItems: "center" }}>
-                  Admin
-                </a>
-              )}
               <button disabled={isReadOnly} onClick={() => setShowDiscover(true)} style={{ ...actionBtn(true, "accent"), ...lockStyle(isReadOnly) }}>AI Discover</button>
-              <select value={currentAiProvider} disabled={!isAdmin} onChange={e => saveAiProvider(e.target.value)} style={{ ...iS, padding: "7px 10px", fontSize: 12, minWidth: 118, ...lockStyle(!isAdmin) }}>
-                <option value="anthropic">AI: Anthropic</option>
-                <option value="openai">AI: OpenAI</option>
-              </select>
-              <button disabled={!isAdmin} onClick={configureAiKey} style={{ ...actionBtn(true, aiKeySet ? "good" : "danger"), ...lockStyle(!isAdmin) }}>
-                {currentAiProvider === "openai" ? "OpenAI Key" : "Anthropic Key"} {aiKeySet ? "Set" : "Missing"}
-              </button>
               <button disabled={isReadOnly} onClick={() => setShowAddArtist(true)} style={{ ...actionBtn(true, "good"), ...lockStyle(isReadOnly) }}>+ Artist</button>
               <label style={{ ...actionBtn(false, "neutral"), ...lockStyle(isReadOnly) }}>
                 Import CSV
                 <input type="file" accept=".csv" ref={fr} onChange={importCSV} disabled={isReadOnly} />
               </label>
-              <label style={{ ...actionBtn(false, "neutral"), ...lockStyle(isReadOnly) }}>
-                Internal CSV Check
-                <input type="file" accept=".csv" ref={rosterRef} onChange={importInternalRoster} disabled={isReadOnly} />
-              </label>
-              <button onClick={copyProjectCsvLink} style={actionBtn(false, "neutral")}>CSV Link</button>
-              <button onClick={() => exportPipeline(proj, enriched)} style={actionBtn(false, "neutral")}>Export</button>
-              <button onClick={signOut} style={actionBtn(false, "neutral")}>Sign out</button>
+              <button onClick={() => setShowProjectMenu(true)} style={actionBtn(false, "neutral")}>More</button>
               <DkBtn />
             </div>
           </div>
 
-          <div style={{ marginTop: 12, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <div style={{ marginTop: 14, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-              <span style={{ fontSize: 11, color: C.tt }}>User view</span>
+              <div style={{ display: "flex", gap: 4, background: C.sa, borderRadius: 12, padding: 4, border: `1px solid ${C.bd}` }}>
+                {[
+                  ["work", "Work"],
+                  ["report", "Report"],
+                ].map(([modeId, label]) => (
+                  <button
+                    key={modeId}
+                    onClick={() => setProjectMode(modeId)}
+                    style={{
+                      padding: "7px 14px",
+                      borderRadius: 10,
+                      border: "none",
+                      background: projectMode === modeId ? C.ac : "transparent",
+                      color: projectMode === modeId ? "#fff" : C.ts,
+                      cursor: "pointer",
+                      fontSize: 12,
+                      fontWeight: 700,
+                      fontFamily: ft,
+                    }}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <span style={{ fontSize: 11, color: C.tt }}>Scope</span>
               <select value={workspaceUser} onChange={e => changeWorkspaceUser(e.target.value)} style={{ ...iS, padding: "6px 10px", fontSize: 12 }}>
                 <option value={ALL_USER_VIEW}>All</option>
+                <option value={UNASSIGNED_USER_VIEW}>Unassigned</option>
                 {(proj.teamUsers || DEFAULT_TEAM_USERS).map(u => <option key={u} value={u}>{u}</option>)}
               </select>
               <span style={{ fontSize: 11, color: C.tt }}>
-                {workspaceUser === ALL_USER_VIEW ? "Showing whole team" : `Showing ${workspaceUser}'s working view`}
+                {workspaceUser === ALL_USER_VIEW ? "Whole team" : workspaceUser === UNASSIGNED_USER_VIEW ? "Unassigned artists" : `${workspaceUser}'s view`}
               </span>
-              <button onClick={toggleFocusMode} style={actionBtn(focusMode, "accent")}>{focusMode ? "Exit Focus" : "Focus Mode"}</button>
-              <span style={{ fontSize: 11, color: C.tt, marginRight: 4 }}>Panels</span>
-              <button onClick={() => togglePanel("health")} style={actionBtn(showHealth, "warn")}>Health</button>
-              <button onClick={() => togglePanel("queue")} style={actionBtn(showQueue, "warn")}>Queue {queue.length > 0 ? `(${queue.length})` : ""}</button>
-              <button onClick={() => togglePanel("models")} style={actionBtn(showModels, "accent")}>Models</button>
-              <button onClick={() => togglePanel("team")} style={actionBtn(showTeam, "good")}>Team</button>
-              <button onClick={() => togglePanel("funnel")} style={actionBtn(showFunnel, "neutral")}>Reports</button>
-              <button onClick={() => togglePanel("ab")} style={actionBtn(showAB, "neutral")}>A/B</button>
             </div>
             <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-              <span style={{ fontSize: 11, color: C.tt }}>Auto-saved per view</span>
-              <button onClick={expandPanels} style={actionBtn(false, "neutral")}>Expand Core</button>
-              <button onClick={collapsePanels} style={actionBtn(false, "neutral")}>Collapse All</button>
+              <span style={{ fontSize: 11, color: C.tt }}>{projectMode === "work" ? "Daily operating view" : "Reporting and review"}</span>
             </div>
           </div>
         </div>
@@ -3654,7 +3689,7 @@ Requirements:
             {!isReadOnly && <button onClick={clearInternalRoster} style={{ ...actionBtn(false, "danger"), padding: "6px 10px" }}>Clear Check</button>}
           </div>
         )}
-        {showHealth && (
+        {projectMode === "report" && (
           <div style={{ ...cS, padding: "14px 18px", marginBottom: 12, animation: "si 0.18s ease" }}>
             <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>🚨 Pipeline Health · {reportViewLabel}</div>
             {healthAlerts.length > 0 ? (
@@ -3674,7 +3709,7 @@ Requirements:
           </div>
         )}
 
-        {showModels && (
+        {false && (
           <div style={{ ...cS, padding: "14px 18px", marginBottom: 12 }}>
             <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>🤖 AI Model Routing</div>
             {!isAdmin && <div style={{ fontSize: 11, color: C.tt, marginBottom: 8 }}>Admin role required to change model routing, provider, and guardrails.</div>}
@@ -3739,7 +3774,7 @@ Requirements:
           </div>
         )}
 
-        {showTeam && (
+        {false && (
           <div style={{ ...cS, padding: "14px 18px", marginBottom: 12 }}>
             <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>👥 Team Assignment</div>
             {!isAdmin && <div style={{ fontSize: 11, color: C.tt, marginBottom: 8 }}>Admin role required to add team users.</div>}
@@ -3755,7 +3790,7 @@ Requirements:
           </div>
         )}
 
-        {showFunnel && (
+        {projectMode === "report" && (
           <div style={{ ...cS, padding: "18px 24px", marginBottom: 16, animation: "si 0.2s ease" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: 14, flexWrap: "wrap" }}>
               <div>
@@ -3841,28 +3876,49 @@ Requirements:
           </div>
         )}
 
-        <div style={{ ...cS, padding: "14px 16px", marginBottom: 14 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" }}>
-            <div>
-              <div style={{ fontSize: 13, fontWeight: 700 }}>Status Board</div>
-              <div style={{ fontSize: 11, color: C.tt }}>Click a stage to filter. Counts respect your current search, genre, priority, and owner filters.</div>
+        {projectMode === "work" && queue.length > 0 && (
+          <div style={{ ...cS, padding: "12px 14px", marginBottom: 12 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" }}>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 700 }}>Today Queue</div>
+                <div style={{ fontSize: 11, color: C.tt }}>Highest-priority actions for the current scope.</div>
+              </div>
+              <button onClick={() => setProjectMode("report")} style={actionBtn(false, "neutral")}>Open Reports</button>
             </div>
-            <button onClick={() => setSf("all")} style={actionBtn(sf === "all", "neutral")}>Show All Statuses</button>
+            <div style={{ display: "grid", gap: 6 }}>
+              {queue.slice(0, 4).map((q, i) => (
+                <button key={i} onClick={() => openQuickArtist(q.artist)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", borderRadius: 10, border: `1px solid ${C.bd}`, background: C.sa, cursor: "pointer", fontFamily: ft, textAlign: "left" }}>
+                  <span style={{ fontSize: 14 }}>{q.icon}</span>
+                  <span style={{ fontWeight: 700, minWidth: 120, color: C.tx }}>{q.artist.n}</span>
+                  <span style={{ color: C.ts, flex: 1, fontSize: 12 }}>{q.label}</span>
+                  <span style={{ ...mkP(true, sc(q.artist.stage, C), sb(q.artist.stage, C)), fontSize: 10, padding: "2px 8px" }}>{SM[q.artist.stage]?.label}</span>
+                </button>
+              ))}
+            </div>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(130px,1fr))", gap: 8 }}>
-            {STAGES.map(stage => (
-              <button key={stage.id} onClick={() => setSf(sf === stage.id ? "all" : stage.id)} style={{ textAlign: "left", padding: "10px 12px", borderRadius: 12, border: `1px solid ${sf === stage.id ? sc(stage.id, C) : C.bd}`, background: sf === stage.id ? sb(stage.id, C) : C.sf, cursor: "pointer", fontFamily: ft }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                  <span style={{ fontSize: 12, fontWeight: 700, color: sf === stage.id ? sc(stage.id, C) : C.tx }}>{stage.icon} {stage.label}</span>
-                  <span style={{ fontSize: 16, fontWeight: 800, color: sf === stage.id ? sc(stage.id, C) : C.tx }}>{stCounts[stage.id] || 0}</span>
-                </div>
-                <div style={{ fontSize: 10, color: C.ts, lineHeight: 1.4 }}>{stage.description}</div>
-              </button>
-            ))}
-          </div>
-        </div>
+        )}
 
-        {showAB && (
+        {projectMode === "work" && (
+          <div style={{ ...cS, padding: "12px 14px", marginBottom: 14 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" }}>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 700 }}>Status Board</div>
+                <div style={{ fontSize: 11, color: C.tt }}>Quick filter by stage.</div>
+              </div>
+              {sf !== "all" && <button onClick={() => setSf("all")} style={actionBtn(false, "neutral")}>Clear Status Filter</button>}
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(118px,1fr))", gap: 8 }}>
+              {STAGES.map(stage => (
+                <button key={stage.id} onClick={() => setSf(sf === stage.id ? "all" : stage.id)} style={{ textAlign: "left", padding: "10px 12px", borderRadius: 12, border: `1px solid ${sf === stage.id ? sc(stage.id, C) : C.bd}`, background: sf === stage.id ? sb(stage.id, C) : C.sf, cursor: "pointer", fontFamily: ft }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: sf === stage.id ? sc(stage.id, C) : C.ts, marginBottom: 6 }}>{stage.icon} {stage.label}</div>
+                  <div style={{ fontSize: 24, fontWeight: 800, color: sf === stage.id ? sc(stage.id, C) : C.tx, lineHeight: 1 }}>{stCounts[stage.id] || 0}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {projectMode === "report" && (
           <div style={{ ...cS, padding: "16px 20px", marginBottom: 16, animation: "si 0.2s ease" }}>
             <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>🧪 A/B Performance by Genre</div>
             {abRows.length > 0 ? (
@@ -3899,13 +3955,13 @@ Requirements:
           </div>
         )}
 
-        {showQueue && (
+        {projectMode === "report" && (
           <div style={{ ...cS, padding: "16px 20px", marginBottom: 16, animation: "si 0.2s ease" }}>
             <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>🎯 Smart Queue - Top Actions · {reportViewLabel}</div>
             {queue.length > 0 ? (
               <div style={{ display: "grid", gap: 6 }}>
                 {queue.slice(0, 12).map((q, i) => (
-                  <div key={i} onClick={() => openA(q.artist)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", borderRadius: 8, background: C.sa, cursor: "pointer", fontSize: 12, transition: "background 0.15s" }} onMouseEnter={e => { e.currentTarget.style.background = C.sh; }} onMouseLeave={e => { e.currentTarget.style.background = C.sa; }}>
+                  <div key={i} onClick={() => openQuickArtist(q.artist)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", borderRadius: 8, background: C.sa, cursor: "pointer", fontSize: 12, transition: "background 0.15s" }} onMouseEnter={e => { e.currentTarget.style.background = C.sh; }} onMouseLeave={e => { e.currentTarget.style.background = C.sa; }}>
                     <span style={{ fontSize: 14 }}>{q.icon}</span>
                     <span style={{ fontWeight: 600, minWidth: 120 }}>{q.artist.n}</span>
                     <span style={{ color: C.ts, flex: 1 }}>{q.label}</span>
@@ -3958,6 +4014,152 @@ Requirements:
           </div>
         )}
 
+        {showProjectMenu && (
+          <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.28)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 115 }} onClick={e => { if (e.target === e.currentTarget) setShowProjectMenu(false); }}>
+            <div style={{ background: C.sf, borderRadius: 18, padding: "22px 24px", width: 760, maxWidth: "calc(100vw - 32px)", maxHeight: "80vh", overflow: "auto", boxShadow: C.sm }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+                <div>
+                  <div style={{ fontSize: 17, fontWeight: 800 }}>Project Settings</div>
+                  <div style={{ fontSize: 12, color: C.ts }}>Lower-frequency controls live here so the main workspace stays clean.</div>
+                </div>
+                <button onClick={() => setShowProjectMenu(false)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: C.ts }}>✕</button>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(260px,1fr))", gap: 14 }}>
+                <div style={{ ...cS, boxShadow: "none", padding: "14px 16px", background: C.sa }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>Project Tools</div>
+                  <div style={{ display: "grid", gap: 8 }}>
+                    <label style={{ ...actionBtn(false, "neutral"), ...lockStyle(isReadOnly), display: "inline-flex", justifyContent: "center" }}>
+                      Internal CSV Check
+                      <input type="file" accept=".csv" ref={rosterRef} onChange={importInternalRoster} disabled={isReadOnly} />
+                    </label>
+                    <button onClick={copyProjectCsvLink} style={actionBtn(false, "neutral")}>Copy CSV Link</button>
+                    <button onClick={() => exportPipeline(proj, enriched)} style={actionBtn(false, "neutral")}>Export Project CSV</button>
+                    {isAdmin && (
+                      <a href="/ar/admin" style={{ ...actionBtn(false, "neutral"), textDecoration: "none", display: "inline-flex", justifyContent: "center" }}>
+                        Open Admin
+                      </a>
+                    )}
+                    <button onClick={signOut} style={actionBtn(false, "neutral")}>Sign out</button>
+                  </div>
+                </div>
+
+                <div style={{ ...cS, boxShadow: "none", padding: "14px 16px", background: C.sa }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>AI Settings</div>
+                  <div style={{ display: "grid", gap: 10 }}>
+                    <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 4 }}>
+                      <span>Provider</span>
+                      <select value={currentAiProvider} disabled={!isAdmin} onChange={e => saveAiProvider(e.target.value)} style={{ ...iS, ...lockStyle(!isAdmin) }}>
+                        <option value="anthropic">Anthropic</option>
+                        <option value="openai">OpenAI</option>
+                      </select>
+                    </label>
+                    <button disabled={!isAdmin} onClick={configureAiKey} style={{ ...actionBtn(true, aiKeySet ? "good" : "danger"), ...lockStyle(!isAdmin) }}>
+                      {currentAiProvider === "openai" ? "OpenAI Key" : "Anthropic Key"} {aiKeySet ? "Set" : "Missing"}
+                    </button>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                      {[["intel", "Intel"], ["drafts", "Drafts"], ["discovery", "Discovery"], ["reply", "Reply"], ["followup", "Follow-up"]].map(([task, label]) => (
+                        <label key={task} style={{ fontSize: 11, color: C.ts, display: "grid", gap: 4 }}>
+                          <span>{label}</span>
+                          <select value={taskModel(task)} disabled={!isAdmin} onChange={e => saveAiModel(task, e.target.value)} style={{ ...iS, padding: "6px 10px", fontSize: 11, ...lockStyle(!isAdmin) }}>
+                            {aiOptions.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
+                          </select>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                <div style={{ ...cS, boxShadow: "none", padding: "14px 16px", background: C.sa, gridColumn: "1 / -1" }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>Team</div>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+                    {(proj.teamUsers || []).map(u => (
+                      <span key={u} style={{ fontSize: 11, padding: "4px 10px", borderRadius: 999, border: `1px solid ${C.bd}`, background: C.sf, color: C.ts }}>{u}</span>
+                    ))}
+                  </div>
+                  <div style={{ display: "flex", gap: 8, maxWidth: 360 }}>
+                    <input value={newTeamUser} disabled={!isAdmin} onChange={e => setNewTeamUser(e.target.value)} placeholder="Add team user" style={{ ...iS, flex: 1, ...lockStyle(!isAdmin) }} />
+                    <button disabled={!isAdmin} onClick={addTeamMember} style={{ padding: "8px 12px", borderRadius: 10, border: "none", background: C.ac, color: "#fff", cursor: isAdmin ? "pointer" : "not-allowed", fontSize: 12, fontWeight: 600, fontFamily: ft, ...lockStyle(!isAdmin) }}>Add</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {showQuickDrawer && activeArtist && (
+          <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.18)", zIndex: 110 }} onClick={e => { if (e.target === e.currentTarget) setShowQuickDrawer(false); }}>
+            <div style={{ position: "absolute", top: 0, right: 0, width: 420, maxWidth: "100vw", height: "100%", background: C.sf, borderLeft: `1px solid ${C.bd}`, boxShadow: C.sm, padding: "20px 18px", overflowY: "auto" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: 14 }}>
+                <div>
+                  <div style={{ fontSize: 11, color: C.tt, textTransform: "uppercase", letterSpacing: 1.2 }}>Quick View</div>
+                  <div style={{ fontSize: 22, fontWeight: 800, lineHeight: 1.1 }}>{activeArtist.n}</div>
+                  <div style={{ fontSize: 12, color: C.ts, marginTop: 4 }}>{activeArtist.bucket}{activeArtist.l ? ` · ${activeArtist.l}` : ""}{activeArtist.loc ? ` · ${activeArtist.loc}` : ""}</div>
+                </div>
+                <button onClick={() => setShowQuickDrawer(false)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: C.ts }}>✕</button>
+              </div>
+
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+                <span style={{ ...mkP(true, pT(activeArtist.priority, C).color, pT(activeArtist.priority, C).bg) }}>{pT(activeArtist.priority, C).label}</span>
+                <span style={{ ...mkP(true, sc(activeArtist.stage, C), sb(activeArtist.stage, C)) }}>{SM[activeArtist.stage]?.icon} {SM[activeArtist.stage]?.label}</span>
+                {activeArtist.onPlatform && <span style={{ ...mkP(true, C.pr, C.pb) }}>On Platform</span>}
+              </div>
+
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
+                <a href={spotifyUrl(activeArtist.n)} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Spotify</a>
+                {activeArtist.soc && <a href={`https://instagram.com/${activeArtist.soc}`} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Instagram</a>}
+                {activeArtist.e && <a href={`mailto:${activeArtist.e}`} style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Email</a>}
+                <button onClick={() => openA(activeArtist)} style={actionBtn(false, "accent")}>Open Full Profile</button>
+              </div>
+
+              <div style={{ ...cS, boxShadow: "none", padding: "12px 14px", marginBottom: 12, background: C.sa }}>
+                <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8 }}>Status</div>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {STAGES.map(s => (
+                    <button key={s.id} disabled={isReadOnly} onClick={() => setSt(activeArtist.n, s.id)} style={{ ...mkP(activeArtist.stage === s.id, sc(s.id, C), sb(s.id, C)), ...lockStyle(isReadOnly) }}>
+                      {s.icon} {s.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div style={{ ...cS, boxShadow: "none", padding: "12px 14px", marginBottom: 12, background: C.sa }}>
+                <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8 }}>Owner and Next Step</div>
+                <div style={{ display: "grid", gap: 8 }}>
+                  <select value={proj?.assignments?.[activeArtist.n] || ""} disabled={isReadOnly} onChange={e => assignOwner(activeArtist.n, e.target.value)} style={{ ...iS, ...lockStyle(isReadOnly) }}>
+                    <option value="">Unassigned</option>
+                    {(proj?.teamUsers || []).map(u => <option key={u} value={u}>{u}</option>)}
+                  </select>
+                  <input type="date" value={proj?.followUps?.[activeArtist.n] || ""} disabled={isReadOnly} onChange={e => { setAFU(e.target.value); saveFU(activeArtist.n, e.target.value); }} style={{ ...iS, ...lockStyle(isReadOnly) }} />
+                </div>
+              </div>
+
+              <div style={{ ...cS, boxShadow: "none", padding: "12px 14px", marginBottom: 12, background: C.sa }}>
+                <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8 }}>Notes</div>
+                <textarea value={aNote} readOnly={isReadOnly} onChange={e => setANote(e.target.value)} onBlur={() => { if (!isReadOnly) saveN(activeArtist.n, aNote); }} placeholder="Add notes..." style={{ ...iS, width: "100%", minHeight: 110, resize: "vertical", ...lockStyle(isReadOnly) }} />
+              </div>
+
+              <div style={{ ...cS, boxShadow: "none", padding: "12px 14px", background: C.sa }}>
+                <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8 }}>Recent Activity</div>
+                {(((proj?.activityLog || {})[activeArtist.n] || []).slice(-5).reverse()).length ? (
+                  <div style={{ display: "grid", gap: 8 }}>
+                    {((proj?.activityLog || {})[activeArtist.n] || []).slice(-5).reverse().map((entry, idx) => (
+                      <div key={entry.id || idx} style={{ fontSize: 11, color: C.ts, paddingBottom: 8, borderBottom: idx < Math.min(4, ((proj?.activityLog || {})[activeArtist.n] || []).length - 1) ? `1px solid ${C.bd}` : "none" }}>
+                        <div style={{ color: C.tx }}>{entry.note || entry.action}</div>
+                        <div style={{ color: C.tt, marginTop: 3 }}>{rD(entry.time)}{entry.actor ? ` · ${entry.actor}` : ""}</div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 11, color: C.tt }}>No activity yet.</div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {projectMode === "work" && (
+        <>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10, alignItems: "center" }}>
           <input placeholder="Search artists..." value={search} onChange={e => setSearch(e.target.value)} style={{ ...iS, width: 220 }} />
           <div style={{ display: "flex", gap: 2, background: C.sa, borderRadius: 10, padding: 3, border: `1px solid ${C.bd}` }}>
@@ -3970,12 +4172,6 @@ Requirements:
           </button>
           {batch && <div style={{ display: "flex", gap: 4 }}>{STAGES.map(s => <button key={s.id} disabled={isReadOnly} title={s.label} onClick={() => batchSt(s.id)} style={{ ...mkP(false, sc(s.id, C), sb(s.id, C)), fontSize: 10, padding: "3px 8px", ...lockStyle(isReadOnly) }}>{s.icon}</button>)}</div>}
           <button disabled={isReadOnly} onClick={() => { setBatch(!batch); setBSel(new Set()); }} style={{ ...mkP(batch, C.ab, C.abb), fontSize: 11, ...lockStyle(isReadOnly) }}>{batch ? "Batch On" : "Batch"}</button>
-          <select value={ownerFilter} onChange={e => setOwnerFilter(e.target.value)} style={{ ...iS, padding: "6px 10px", fontSize: 12 }}>
-            <option value="__view__">Owner: Current View</option>
-            <option value="all">Owner: All</option>
-            {(proj.teamUsers || []).map(u => <option key={u} value={u}>Owner: {u}</option>)}
-            <option value="">Owner: Unassigned</option>
-          </select>
           <select value={sortBy} onChange={e => setSortBy(e.target.value)} style={{ ...iS, padding: "6px 10px", fontSize: 12 }}>
             <option value="priority">Sort: Priority</option>
             <option value="name">Sort: Name</option>
@@ -4012,7 +4208,7 @@ Requirements:
               const ss = proj.sequenceState?.[a.n];
               const seqDue = ss?.status === "active" && ss.nextDue && ss.nextDue <= todayISO();
               return (
-                <div key={a.n} onClick={() => { if (batch) { const ns = new Set(bSel); ns.has(a.n) ? ns.delete(a.n) : ns.add(a.n); setBSel(ns); } else openA(a); }}
+                <div key={a.n} onClick={() => { if (batch) { const ns = new Set(bSel); ns.has(a.n) ? ns.delete(a.n) : ns.add(a.n); setBSel(ns); } else openQuickArtist(a); }}
                   style={{ ...cS, padding: "14px 18px", cursor: "pointer", display: "flex", alignItems: "center", gap: 14, transition: "all 0.15s", animation: `fu 0.2s ease ${Math.min(i, 15) * 0.02}s both`, borderLeft: batch && bSel.has(a.n) ? `3px solid ${C.ac}` : "3px solid transparent" }}
                   onMouseEnter={e => { e.currentTarget.style.borderColor = C.ac; }}
                   onMouseLeave={e => { e.currentTarget.style.borderColor = batch && bSel.has(a.n) ? C.ac : C.bd; }}>
@@ -4085,7 +4281,7 @@ Requirements:
                             setDragArtistName("");
                             setDragOverStage("");
                           }}
-                          onClick={() => openA(a)}
+                          onClick={() => openQuickArtist(a)}
                           style={{ ...cS, padding: "10px 12px", cursor: canEdit ? "grab" : "pointer", transition: "all 0.15s", fontSize: 12, ...lockStyle(!canEdit) }}
                           onMouseEnter={e => { e.currentTarget.style.borderColor = C.ac; }}
                           onMouseLeave={e => { e.currentTarget.style.borderColor = C.bd; }}
@@ -4114,39 +4310,45 @@ Requirements:
         )}
 
         {viewMode === "table" && (
-          <div style={{ overflowX: "auto" }}>
+          <div style={{ ...cS, padding: 0, overflow: "hidden" }}>
+          <div style={{ overflowX: "auto", maxHeight: "68vh" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
               <thead>
-                <tr style={{ borderBottom: `2px solid ${C.bd}`, textAlign: "left" }}>
-                  {["Artist", "Owner", "Genre", "Listeners", "Stage", "Priority", "Platform", "Email", "Social", "Spotify", "Plan", "Follow-up", "Updated"].map(h => (
-                    <th key={h} style={{ padding: "8px 10px", fontWeight: 600, color: C.ts, fontSize: 11, whiteSpace: "nowrap" }}>{h}</th>
+                <tr style={{ borderBottom: `2px solid ${C.bd}`, textAlign: "left", background: C.sa }}>
+                  {["Artist", "Owner", "Genre", "Listeners", "Stage", "Priority", "Links", "Plan", "Follow-up", "Updated"].map((h, index) => (
+                    <th key={h} style={{ padding: "10px 12px", fontWeight: 700, color: C.ts, fontSize: 11, whiteSpace: "nowrap", position: "sticky", top: 0, background: C.sa, zIndex: index === 0 ? 3 : 2 }}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {filtered.slice(0, 600).map(a => {
+                {filtered.slice(0, 600).map((a, rowIndex) => {
                   const pt2 = pT(a.priority, C);
                   const ss = proj.sequenceState?.[a.n];
                   return (
-                    <tr key={a.n} onClick={() => openA(a)} style={{ borderBottom: `1px solid ${C.sa}`, cursor: "pointer", transition: "background 0.1s" }} onMouseEnter={e => { e.currentTarget.style.background = C.sh; }} onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}>
-                      <td style={{ padding: "8px 10px", fontWeight: 600 }}>{a.n}</td>
-                      <td style={{ padding: "8px 10px", color: a.owner ? C.ts : C.rd }}>{a.owner || "Unassigned"}</td>
-                      <td style={{ padding: "8px 10px", color: C.ts }}>{a.bucket}</td>
-                      <td style={{ padding: "8px 10px", color: C.ts }}>{a.l || "-"}</td>
-                      <td style={{ padding: "8px 10px" }}><span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 8, background: sb(a.stage, C), color: sc(a.stage, C) }}>{SM[a.stage]?.icon} {SM[a.stage]?.label}</span></td>
-                      <td style={{ padding: "8px 10px" }}><span style={{ fontSize: 10, padding: "2px 6px", borderRadius: 8, background: pt2.bg, color: pt2.color, fontWeight: 600 }}>{pt2.label}</span></td>
-                      <td style={{ padding: "8px 10px", color: a.onPlatform ? C.pr : C.tt, fontSize: 11 }}>{a.onPlatform ? "On Platform" : "-"}</td>
-                      <td style={{ padding: "8px 10px", color: a.e ? C.gn : C.tt, fontSize: 11 }}>{a.e ? "✓" : "-"}</td>
-                      <td style={{ padding: "8px 10px" }}>{a.soc ? <a href={`https://instagram.com/${a.soc}`} target="_blank" rel="noopener" onClick={e => e.stopPropagation()} style={{ color: C.pr, textDecoration: "none", fontSize: 11 }}>@{a.soc}</a> : "-"}</td>
-                      <td style={{ padding: "8px 10px" }}><a href={spotifyUrl(a.n)} target="_blank" rel="noopener" onClick={e => e.stopPropagation()} style={{ color: C.gn, textDecoration: "none", fontSize: 11 }}>🎵</a></td>
-                      <td style={{ padding: "8px 10px", color: ss ? (ss.status === "active" ? C.ab : C.ts) : C.tt, fontSize: 11 }}>{ss ? `${ss.status}${ss.nextDue ? ` · ${sD(ss.nextDue)}` : ""}` : "-"}</td>
-                      <td style={{ padding: "8px 10px", color: a.followUp ? C.ab : C.tt, fontSize: 11 }}>{a.followUp ? sD(a.followUp) : "-"}</td>
-                      <td style={{ padding: "8px 10px", color: C.tt, fontSize: 11 }}>{rD(a.stageDate)}</td>
+                    <tr key={a.n} onClick={() => openQuickArtist(a)} style={{ borderBottom: `1px solid ${C.sa}`, cursor: "pointer", transition: "background 0.1s", background: rowIndex % 2 === 0 ? "transparent" : C.sa }} onMouseEnter={e => { e.currentTarget.style.background = C.sh; }} onMouseLeave={e => { e.currentTarget.style.background = rowIndex % 2 === 0 ? "transparent" : C.sa; }}>
+                      <td style={{ padding: "10px 12px", fontWeight: 700, position: "sticky", left: 0, background: rowIndex % 2 === 0 ? C.cb : C.sa, zIndex: 1 }}>{a.n}</td>
+                      <td style={{ padding: "10px 12px", color: a.owner ? C.ts : C.rd, fontWeight: 600 }}>{a.owner || "Unassigned"}</td>
+                      <td style={{ padding: "10px 12px", color: C.ts }}>{a.bucket}</td>
+                      <td style={{ padding: "10px 12px", color: C.ts }}>{a.l || "-"}</td>
+                      <td style={{ padding: "10px 12px" }}><span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 8, background: sb(a.stage, C), color: sc(a.stage, C), fontWeight: 700 }}>{SM[a.stage]?.icon} {SM[a.stage]?.label}</span></td>
+                      <td style={{ padding: "10px 12px" }}><span style={{ fontSize: 10, padding: "2px 6px", borderRadius: 8, background: pt2.bg, color: pt2.color, fontWeight: 700 }}>{pt2.label}</span></td>
+                      <td style={{ padding: "10px 12px" }}>
+                        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                          {a.e ? <a href={`mailto:${a.e}`} onClick={e => e.stopPropagation()} style={{ color: C.gn, textDecoration: "none", fontSize: 12 }}>✉</a> : <span style={{ color: C.tt, fontSize: 12 }}>✉</span>}
+                          {a.soc ? <a href={`https://instagram.com/${a.soc}`} target="_blank" rel="noopener" onClick={e => e.stopPropagation()} style={{ color: C.pr, textDecoration: "none", fontSize: 12 }}>@</a> : <span style={{ color: C.tt, fontSize: 12 }}>@</span>}
+                          <a href={spotifyUrl(a.n)} target="_blank" rel="noopener" onClick={e => e.stopPropagation()} style={{ color: C.gn, textDecoration: "none", fontSize: 12 }}>🎵</a>
+                          {a.onPlatform && <span style={{ color: C.pr, fontSize: 11, fontWeight: 700 }}>◆</span>}
+                        </div>
+                      </td>
+                      <td style={{ padding: "10px 12px", color: ss ? (ss.status === "active" ? C.ab : C.ts) : C.tt, fontSize: 11 }}>{ss ? `${ss.status}${ss.nextDue ? ` · ${sD(ss.nextDue)}` : ""}` : "-"}</td>
+                      <td style={{ padding: "10px 12px", color: a.followUp ? (a.followUp <= todayISO() ? C.rd : C.ab) : C.tt, fontSize: 11, fontWeight: a.followUp ? 600 : 400 }}>{a.followUp ? sD(a.followUp) : "-"}</td>
+                      <td style={{ padding: "10px 12px", color: C.tt, fontSize: 11 }}>{rD(a.stageDate)}</td>
                     </tr>
                   );
                 })}
               </tbody>
             </table>
+          </div>
           </div>
         )}
 
@@ -4156,6 +4358,8 @@ Requirements:
             <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 6 }}>No artists yet</div>
             <div style={{ fontSize: 13 }}>Import a CSV, add one manually, or use AI Discover.</div>
           </div>
+        )}
+        </>
         )}
 
         {showAddArtist && (
