@@ -10,6 +10,23 @@ type GmailStatePayload = {
   issuedAt: string;
 };
 
+function firstHeaderValue(value: string | null): string {
+  return String(value || '')
+    .split(',')[0]
+    .trim();
+}
+
+function requestOrigin(req: NextRequest): string {
+  const forwardedProto = firstHeaderValue(req.headers.get('x-forwarded-proto'));
+  const forwardedHost = firstHeaderValue(req.headers.get('x-forwarded-host'));
+  const directHost = firstHeaderValue(req.headers.get('host'));
+  const urlOrigin = new URL(req.url).origin.replace(/\/+$/, '');
+  const proto = forwardedProto || req.nextUrl.protocol.replace(/:$/, '') || 'https';
+  const host = forwardedHost || directHost;
+  if (host) return `${proto}://${host}`.replace(/\/+$/, '');
+  return urlOrigin;
+}
+
 function decodeState(value: string): GmailStatePayload | null {
   try {
     const decoded = Buffer.from(String(value || ''), 'base64url').toString('utf8');
@@ -42,6 +59,7 @@ function addQueries(pathname: string, params: Record<string, string | undefined>
 }
 
 export async function GET(req: NextRequest) {
+  const resolvedOrigin = requestOrigin(req);
   const code = req.nextUrl.searchParams.get('code') || '';
   const state = req.nextUrl.searchParams.get('state') || '';
   const googleError = req.nextUrl.searchParams.get('error') || '';
@@ -49,10 +67,31 @@ export async function GET(req: NextRequest) {
   const cookieState = req.cookies.get('ar_gmail_state')?.value || '';
   const parsedState = decodeState(cookieState);
   const clearAndRedirect = (path: string) => {
-    const res = NextResponse.redirect(new URL(path, req.nextUrl.origin));
+    const finalTarget = new URL(path, resolvedOrigin);
+    console.log('[gmail-callback] redirect', {
+      origin: resolvedOrigin,
+      requestOrigin: req.nextUrl.origin,
+      urlOrigin: new URL(req.url).origin,
+      forwardedProto: req.headers.get('x-forwarded-proto'),
+      forwardedHost: req.headers.get('x-forwarded-host'),
+      host: req.headers.get('host'),
+      finalTarget: finalTarget.toString(),
+    });
+    const res = NextResponse.redirect(finalTarget);
     res.cookies.set('ar_gmail_state', '', { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'lax', path: '/', maxAge: 0 });
     return res;
   };
+
+  console.log('[gmail-callback] request', {
+    origin: resolvedOrigin,
+    requestOrigin: req.nextUrl.origin,
+    urlOrigin: new URL(req.url).origin,
+    forwardedProto: req.headers.get('x-forwarded-proto'),
+    forwardedHost: req.headers.get('x-forwarded-host'),
+    host: req.headers.get('host'),
+    path: req.nextUrl.pathname,
+    returnTo: parsedState?.returnTo || '',
+  });
 
   if (!code || !state || !cookieState || state !== cookieState || !parsedState) {
     return clearAndRedirect('/ar?gmail=state_error');
@@ -78,7 +117,7 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const tokens = await exchangeGoogleCode(code, req.nextUrl.origin);
+    const tokens = await exchangeGoogleCode(code, resolvedOrigin);
     if (!tokens.access_token) {
       throw new Error('Google token exchange did not return an access token');
     }

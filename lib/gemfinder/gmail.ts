@@ -66,12 +66,12 @@ function requireEnv(name: string): string {
 }
 
 function appBaseUrl(origin?: string): string {
-  return String(process.env.APP_URL || process.env.NEXT_PUBLIC_APP_URL || origin || '').replace(/\/+$/, '');
+  return String(origin || process.env.APP_URL || process.env.NEXT_PUBLIC_APP_URL || '').replace(/\/+$/, '');
 }
 
 function redirectUri(origin?: string): string {
   const base = appBaseUrl(origin);
-  if (!base) throw new Error('Missing APP_URL or NEXT_PUBLIC_APP_URL');
+  if (!base) throw new Error('Missing request origin for Gmail OAuth callback');
   return `${base}/api/ar/gmail/callback`;
 }
 

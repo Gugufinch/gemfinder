@@ -10,6 +10,23 @@ type GmailStatePayload = {
   issuedAt: string;
 };
 
+function firstHeaderValue(value: string | null): string {
+  return String(value || '')
+    .split(',')[0]
+    .trim();
+}
+
+function requestOrigin(req: NextRequest): string {
+  const forwardedProto = firstHeaderValue(req.headers.get('x-forwarded-proto'));
+  const forwardedHost = firstHeaderValue(req.headers.get('x-forwarded-host'));
+  const directHost = firstHeaderValue(req.headers.get('host'));
+  const urlOrigin = new URL(req.url).origin.replace(/\/+$/, '');
+  const proto = forwardedProto || req.nextUrl.protocol.replace(/:$/, '') || 'https';
+  const host = forwardedHost || directHost;
+  if (host) return `${proto}://${host}`.replace(/\/+$/, '');
+  return urlOrigin;
+}
+
 function encodeState(payload: GmailStatePayload): string {
   return Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
 }
@@ -43,7 +60,7 @@ export async function GET(req: NextRequest) {
 
   let authUrl = '';
   try {
-    authUrl = buildGoogleAuthUrl(state, req.nextUrl.origin);
+    authUrl = buildGoogleAuthUrl(state, requestOrigin(req));
   } catch {
     return NextResponse.redirect(new URL('/ar?gmail=not_configured', req.url));
   }
