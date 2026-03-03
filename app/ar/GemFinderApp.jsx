@@ -539,6 +539,7 @@ function normalizeProject(p) {
     sendLog: p.sendLog || [],
     abStats: p.abStats || {},
     abCredits: p.abCredits || {},
+    archivedArtists: Array.isArray(p.archivedArtists) ? p.archivedArtists : [],
     teamUsers: Array.isArray(p.teamUsers) && p.teamUsers.length ? p.teamUsers : [...DEFAULT_TEAM_USERS],
     assignments: p.assignments || {},
     replyIntel: p.replyIntel || {},
@@ -1120,6 +1121,7 @@ function addLog(proj, name, action, kind = "event", extra = {}) {
     action,
     kind,
     time: new Date().toISOString(),
+    actor: extra.actor || extra.author || "",
     ...extra,
   });
   return { ...logs, [name]: al.slice(-120) };
@@ -1308,6 +1310,12 @@ function makeShareToken() {
   return `${Date.now()}_${Math.random().toString(36).slice(2, 12)}`;
 }
 
+function omitKey(obj, key) {
+  const next = { ...(obj || {}) };
+  delete next[key];
+  return next;
+}
+
 function exportPipeline(proj, enriched) {
   const rows = [["Artist", "Owner", "Genre", "Bucket", "Listeners", "Hit Track", "Email", "Social", "Stage", "Priority", "Spotify", "Notes", "Follow-Up", "Sequence", "Next Step", "Sends Logged"]];
   enriched.forEach(a => {
@@ -1436,6 +1444,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const canEdit = roleLabel !== "viewer";
   const isAdmin = roleLabel === "admin";
   const isReadOnly = !canEdit;
+  const currentActor = workspaceUser || authEmail || authUserId || "Unknown";
   const storageKey = authUserId ? `${STORAGE_PREFIX}:${authUserId}` : STORAGE_PREFIX;
   const defaultWorkspaceUser = (() => {
     const local = (authEmail || "").split("@")[0] || "";
@@ -1489,6 +1498,9 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   };
   const lockStyle = locked => (locked ? { opacity: 0.55, cursor: "not-allowed" } : {});
   const proj = projects.find(p => p.id === apId);
+  const logAction = useCallback((project, artistName, action, kind = "event", extra = {}) => {
+    return addLog(project, artistName, action, kind, { ...extra, actor: extra.actor || currentActor });
+  }, [currentActor]);
   const resetArtistForm = () => setArtistForm({
     name: "",
     genre: "",
@@ -1829,7 +1841,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     }
     nextTemplates = sanitizeSavedTemplates(nextTemplates);
 
-    const al = addLog(proj, artist.n, `Saved template: ${cleanName}`);
+    const al = logAction(proj, artist.n, `Saved template: ${cleanName}`);
     const nextProj = {
       ...proj,
       settings: { ...(proj.settings || {}), savedTemplates: nextTemplates },
@@ -1876,7 +1888,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     setDrafts(nextDrafts);
     setDraftMode("template");
 
-    const al = addLog(proj, artist.n, `Applied template: ${hit.name}`);
+    const al = logAction(proj, artist.n, `Applied template: ${hit.name}`);
     await saveProject({ ...proj, activityLog: al });
     flash(`Applied "${hit.name}"`);
   };
@@ -1913,7 +1925,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const assignOwner = async (artistName, owner) => {
     if (!requireEditor()) return;
     if (!proj) return;
-    const al = addLog(proj, artistName, owner ? `Assigned to ${owner}` : "Owner cleared");
+    const al = logAction(proj, artistName, owner ? `Assigned to ${owner}` : "Owner cleared");
     const nextProj = { ...proj, assignments: { ...(proj.assignments || {}), [artistName]: owner }, activityLog: al };
     await saveProject(nextProj);
     flash(owner ? `${artistName} assigned to ${owner}` : `${artistName} unassigned`);
@@ -1929,7 +1941,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     const parsed = parseReplyIntel(res.text);
     setReplyResult(parsed);
     if (proj) {
-      const al = addLog(proj, artist.n, "Reply intelligence generated");
+      const al = logAction(proj, artist.n, "Reply intelligence generated");
       const nextProj = {
         ...proj,
         activityLog: al,
@@ -1975,7 +1987,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     setFollowUpDraft(res.text.trim());
     flash(res.fallbackUsed ? "Follow-up generated with safe template" : "Follow-up draft generated");
     if (proj) {
-      const al = addLog(proj, artist.n, "Follow-up draft generated");
+      const al = logAction(proj, artist.n, "Follow-up draft generated");
       await saveProject({ ...proj, activityLog: al });
     }
   };
@@ -2021,6 +2033,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       sendLog: [],
       abStats: {},
       abCredits: {},
+      archivedArtists: [],
       teamUsers: [...DEFAULT_TEAM_USERS],
       assignments: {},
       replyIntel: {},
@@ -2136,7 +2149,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       s: false,
       o: "Manual Add",
     };
-    const activityLog = addLog(proj, name, "Artist added manually");
+    const activityLog = logAction(proj, name, "Artist added manually");
     const nextProj = {
       ...proj,
       artists: [nextArtist, ...proj.artists],
@@ -2185,15 +2198,90 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     }
   };
 
+  const archiveArtist = async artist => {
+    if (!requireEditor()) return;
+    if (!proj || !artist) return;
+    if (!window.confirm(`Archive ${artist.n}? This removes the artist from the active pipeline but keeps a recovery snapshot.`)) return;
+
+    const name = artist.n;
+    const archiveRecord = {
+      id: `arch_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      artist,
+      archivedAt: new Date().toISOString(),
+      archivedBy: currentActor,
+      note: proj.notes?.[name] || "",
+      followUp: proj.followUps?.[name] || "",
+      owner: proj.assignments?.[name] || "",
+      stage: proj.pipeline?.[name]?.stage || "prospect",
+      stageDate: proj.pipeline?.[name]?.date || "",
+      activityLog: [
+        ...((proj.activityLog || {})[name] || []),
+        {
+          id: `log_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+          action: "Artist archived",
+          kind: "event",
+          actor: currentActor,
+          time: new Date().toISOString(),
+        },
+      ],
+      replyIntel: proj.replyIntel?.[name] || null,
+      sequenceState: proj.sequenceState?.[name] || null,
+      sendLog: (proj.sendLog || []).filter(item => item.artist === name),
+    };
+
+    const nextProj = {
+      ...proj,
+      artists: proj.artists.filter(item => item.n !== name),
+      archivedArtists: [archiveRecord, ...(proj.archivedArtists || [])],
+      pipeline: omitKey(proj.pipeline, name),
+      notes: omitKey(proj.notes, name),
+      followUps: omitKey(proj.followUps, name),
+      assignments: omitKey(proj.assignments, name),
+      replyIntel: omitKey(proj.replyIntel, name),
+      sequenceState: omitKey(proj.sequenceState, name),
+      activityLog: omitKey(proj.activityLog, name),
+      sendLog: (proj.sendLog || []).filter(item => item.artist !== name),
+    };
+    await saveProject(nextProj);
+    setSelA(null);
+    setScreen("project");
+    flash(`${name} archived`);
+  };
+
+  const deleteArtistPermanently = async artist => {
+    if (!requireEditor()) return;
+    if (!proj || !artist) return;
+    if (!window.confirm(`Delete ${artist.n} permanently? This removes notes, activity, send logs, and pipeline history for this artist.`)) return;
+
+    const name = artist.n;
+    const nextProj = {
+      ...proj,
+      artists: proj.artists.filter(item => item.n !== name),
+      archivedArtists: (proj.archivedArtists || []).filter(item => item?.artist?.n !== name),
+      pipeline: omitKey(proj.pipeline, name),
+      notes: omitKey(proj.notes, name),
+      followUps: omitKey(proj.followUps, name),
+      assignments: omitKey(proj.assignments, name),
+      replyIntel: omitKey(proj.replyIntel, name),
+      sequenceState: omitKey(proj.sequenceState, name),
+      activityLog: omitKey(proj.activityLog, name),
+      sendLog: (proj.sendLog || []).filter(item => item.artist !== name),
+    };
+    await saveProject(nextProj);
+    setSelA(null);
+    setScreen("project");
+    flash(`${name} deleted`);
+  };
+
   const setSt = async (n, sid) => {
     if (!requireEditor()) return;
     if (!proj) return;
     const prevStage = proj.pipeline[n]?.stage || "prospect";
     const nl = { ...proj.pipeline, [n]: { ...(proj.pipeline[n] || {}), stage: sid, date: new Date().toISOString() } };
-    let al = addLog(proj, n, `Stage → ${SM[sid]?.label}`);
+    let al = logAction(proj, n, `Stage → ${SM[sid]?.label}`);
     const credited = creditABOutcome(proj, n, sid, prevStage);
     if ((sid === "replied" || sid === "won") && credited.abStats !== proj.abStats) {
-      al = addLog({ ...proj, activityLog: al }, n, `A/B outcome credited (${sid})`);
+      al = logAction({ ...proj, activityLog: al }, n, `A/B outcome credited (${sid})`);
     }
     const nextProj = { ...proj, pipeline: nl, activityLog: al, abStats: credited.abStats, abCredits: credited.abCredits };
     await saveProject(nextProj);
@@ -2207,9 +2295,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     let al = proj.activityLog || {};
     bSel.forEach(n => {
       nl[n] = { ...(nl[n] || {}), stage: sid, date: new Date().toISOString() };
-      const logs = al[n] || [];
-      logs.push({ action: `Batch → ${SM[sid]?.label}`, time: new Date().toISOString() });
-      al = { ...al, [n]: logs.slice(-80) };
+      al = logAction({ ...proj, activityLog: al }, n, `Batch → ${SM[sid]?.label}`);
     });
     const nextProj = { ...proj, pipeline: nl, activityLog: al };
     await saveProject(nextProj);
@@ -2221,7 +2307,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const saveN = async (n, note) => {
     if (!requireEditor()) return;
     if (!proj) return;
-    const al = addLog(proj, n, "Note updated");
+    const al = logAction(proj, n, "Note updated");
     const nextProj = { ...proj, notes: { ...proj.notes, [n]: note }, activityLog: al };
     await saveProject(nextProj);
   };
@@ -2229,7 +2315,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const saveFU = async (n, d) => {
     if (!requireEditor()) return;
     if (!proj) return;
-    const al = addLog(proj, n, d ? `Follow-up: ${sD(d)}` : "Follow-up cleared");
+    const al = logAction(proj, n, d ? `Follow-up: ${sD(d)}` : "Follow-up cleared");
     const nextProj = { ...proj, followUps: { ...proj.followUps, [n]: d }, activityLog: al };
     await saveProject(nextProj);
     flash(d ? `Follow-up: ${sD(d)}` : "Cleared");
@@ -2240,7 +2326,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     if (!proj) return;
     const note = logNoteDraft.trim();
     if (!note) return;
-    const al = addLog(proj, n, "Activity note", "note", { note, author: workspaceUser || "Unknown" });
+    const al = logAction(proj, n, "Activity note", "note", { note, author: currentActor });
     const nextProj = { ...proj, activityLog: al };
     await saveProject(nextProj);
     setLogNoteDraft("");
@@ -2266,7 +2352,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     const current = (proj.activityLog || {})[n] || [];
     const updated = current.map(l => {
       if (l.id !== editLogNoteId) return l;
-      return { ...l, note, editedAt: new Date().toISOString() };
+      return { ...l, note, editedAt: new Date().toISOString(), editedBy: currentActor };
     });
     const nextProj = {
       ...proj,
@@ -2292,7 +2378,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     setCopied(key);
     setTimeout(() => setCopied(null), 1800);
     if (canEdit && proj && selA) {
-      const al = addLog(proj, selA.n, `Copied ${key} draft`);
+      const al = logAction(proj, selA.n, `Copied ${key} draft`);
       const nextProj = { ...proj, activityLog: al };
       setProjects(projects.map(p => p.id === proj.id ? nextProj : p));
       persist(projects.map(p => p.id === proj.id ? nextProj : p));
@@ -2334,7 +2420,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     if (!result.ok) flash(result.text || "AI Intel failed", "err");
     setIntelLoading(false);
     if (proj && result.ok) {
-      const al = addLog(proj, a.n, "AI Intel generated");
+      const al = logAction(proj, a.n, "AI Intel generated");
       const nextProj = { ...proj, activityLog: al };
       await saveProject(nextProj);
     }
@@ -2357,7 +2443,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     }
     setAiDraftLoading(false);
     if (proj && result.ok) {
-      const al = addLog(proj, a.n, "AI drafts generated");
+      const al = logAction(proj, a.n, "AI drafts generated");
       const nextProj = { ...proj, activityLog: al };
       await saveProject(nextProj);
     }
@@ -2441,6 +2527,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     const sendEvent = {
       id: `send_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
       artist: artist.n,
+      actor: currentActor,
       bucket,
       channel,
       provider,
@@ -2452,8 +2539,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     };
 
     const sendLog = [...(proj.sendLog || []), sendEvent];
-    let activityLog = addLog(proj, artist.n, `Sent via ${provider} (${channel.toUpperCase()})${variantId ? ` • v${variantId}` : ""}`);
-    if (seqMsg) activityLog = addLog({ ...proj, activityLog }, artist.n, seqMsg);
+    let activityLog = logAction(proj, artist.n, `Sent via ${provider} (${channel.toUpperCase()})${variantId ? ` • v${variantId}` : ""}`);
+    if (seqMsg) activityLog = logAction({ ...proj, activityLog }, artist.n, seqMsg);
 
     const nextProj = {
       ...proj,
@@ -2493,7 +2580,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       ...(proj.sequenceState || {}),
       [artist.n]: { sequenceId, status: "active", stepIndex: 0, nextDue: due, startedAt: now, history: [] },
     };
-    const al = addLog(proj, artist.n, `Sequence enrolled: ${SEQ_MAP[sequenceId]?.name || sequenceId}`);
+    const al = logAction(proj, artist.n, `Sequence enrolled: ${SEQ_MAP[sequenceId]?.name || sequenceId}`);
     const nextProj = {
       ...proj,
       sequenceState: state,
@@ -2511,7 +2598,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     if (!cur) return;
     const nextStatus = cur.status === "active" ? "paused" : "active";
     const state = { ...(proj.sequenceState || {}), [artist.n]: { ...cur, status: nextStatus } };
-    const al = addLog(proj, artist.n, `Sequence ${nextStatus}`);
+    const al = logAction(proj, artist.n, `Sequence ${nextStatus}`);
     await saveProject({ ...proj, sequenceState: state, activityLog: al });
     flash(`Sequence ${nextStatus}`);
   };
@@ -2522,7 +2609,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     const cur = proj.sequenceState?.[artist.n];
     if (!cur) return;
     const state = { ...(proj.sequenceState || {}), [artist.n]: { ...cur, status: "active", stepIndex: 0, nextDue: todayISO(), history: [] } };
-    const al = addLog(proj, artist.n, "Sequence reset to step 1");
+    const al = logAction(proj, artist.n, "Sequence reset to step 1");
     await saveProject({ ...proj, sequenceState: state, activityLog: al, followUps: { ...(proj.followUps || {}), [artist.n]: todayISO() } });
     flash("Sequence reset");
   };
@@ -2578,9 +2665,11 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     if (!proj) return;
     const ex = new Set(proj.artists.map(x => canonicalArtistName(x.n)));
     if (ex.has(canonicalArtistName(a.n))) { flash(`${a.n} already in project`, "err"); return; }
+    const activityLog = logAction(proj, a.n, "Artist added from AI Discovery");
     const nextProj = {
       ...proj,
       artists: [...proj.artists, { n: a.n, g: a.g, l: a.l, h: a.h, ig: a.ig || "", soc: a.soc || "", e: a.e || "", loc: a.loc || "", s: false, o: "AI Discovery" }],
+      activityLog,
     };
     await saveProject(nextProj);
     const alreadyOnPlatform = (proj.internalRoster?.names || []).some(item => canonicalArtistName(item) === canonicalArtistName(a.n));
@@ -3175,6 +3264,23 @@ Requirements:
             </div>
           </div>
 
+          {!isReadOnly && (
+            <div style={{ ...cS, padding: "16px 20px", marginBottom: 16, borderColor: C.rbd, background: dark ? C.sf : "#fffafa" }}>
+              <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6, color: C.tx }}>Artist Controls</div>
+              <div style={{ fontSize: 11, color: C.ts, marginBottom: 10 }}>
+                Archive removes the artist from the active pipeline and keeps a recovery snapshot. Delete permanently removes the artist and all associated project data.
+              </div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <button onClick={() => archiveArtist(a)} style={{ padding: "7px 12px", borderRadius: 9, border: `1px solid ${C.abd}`, background: C.abb, color: C.ab, cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: ft }}>
+                  Archive Artist
+                </button>
+                <button onClick={() => deleteArtistPermanently(a)} style={{ padding: "7px 12px", borderRadius: 9, border: `1px solid ${C.rbd}`, background: C.rb, color: C.rd, cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: ft }}>
+                  Delete Permanently
+                </button>
+              </div>
+            </div>
+          )}
+
           <div style={{ ...cS, padding: "16px 20px", marginBottom: 16 }}>
             <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>📨 Send Log ({sendHistory.length})</div>
             {sendHistory.length ? (
@@ -3184,6 +3290,7 @@ Requirements:
                     <span style={{ color: C.tt, fontFamily: mn }}>{new Date(s.sentAt).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</span>
                     {` · ${s.provider} · ${s.channel.toUpperCase()}${s.variantId ? ` · v${s.variantId}` : ""}`}
                     {s.sequenceStep ? ` · ${s.sequenceStep}` : ""}
+                    {s.actor ? ` · by ${s.actor}` : ""}
                   </div>
                 ))}
               </div>
@@ -3232,7 +3339,7 @@ Requirements:
                         <div key={l.id || `${l.time}_${i}`} style={{ fontSize: 11, color: C.ts, padding: "8px 0", borderBottom: i < logs.length - 1 ? `1px solid ${C.sa}` : "none" }}>
                           <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
                             <span style={{ color: C.tt, fontFamily: mn }}>{ts}</span>
-                            {isNote && l.author ? <span style={{ fontSize: 10, color: C.tt }}>by {l.author}</span> : null}
+                            {(l.actor || l.author) ? <span style={{ fontSize: 10, color: C.tt }}>by {l.actor || l.author}</span> : null}
                           </div>
 
                           {isNote ? (
@@ -3252,7 +3359,7 @@ Requirements:
                             ) : (
                               <div style={{ marginTop: 6 }}>
                                 <div style={{ fontSize: 12, color: C.tx, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{l.note || ""}</div>
-                                {l.editedAt ? <div style={{ marginTop: 4, fontSize: 10, color: C.tt }}>edited {new Date(l.editedAt).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</div> : null}
+                                {l.editedAt ? <div style={{ marginTop: 4, fontSize: 10, color: C.tt }}>edited {new Date(l.editedAt).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}{l.editedBy ? ` by ${l.editedBy}` : ""}</div> : null}
                                 {l.id && !isReadOnly ? (
                                   <button onClick={() => startEditActivityNote(l)} style={{ marginTop: 5, padding: "4px 8px", borderRadius: 7, border: `1px solid ${C.bd}`, background: "transparent", color: C.ts, cursor: "pointer", fontSize: 10, fontFamily: ft }}>
                                     Edit Note
@@ -3295,6 +3402,7 @@ Requirements:
                 <span>{stCounts.won} won</span>
                 <span>{(proj.sendLog || []).length} sends logged</span>
                 <span>{dueSeqCount} seq due</span>
+                {!!proj.archivedArtists?.length && <span>{proj.archivedArtists.length} archived</span>}
                 {!!proj.internalRoster?.names?.length && <span>{internalMatchCount} platform matches</span>}
               </div>
             </div>
