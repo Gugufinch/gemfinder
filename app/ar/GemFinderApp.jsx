@@ -109,7 +109,7 @@ const DEFAULT_LAYOUT = {
   showHealth: false,
   showModels: false,
   showTeam: false,
-  showQueue: false,
+  showQueue: true,
   showFunnel: false,
   showAB: false,
   showFilters: true,
@@ -254,6 +254,30 @@ function sD(iso) { if (!iso) return ""; return new Date(iso).toLocaleDateString(
 function daysBetween(a, b) { return Math.floor((new Date(b) - new Date(a)) / 864e5); }
 function todayISO() { return new Date().toISOString().slice(0, 10); }
 function addDaysISO(iso, days) { const d = new Date(`${iso}T00:00:00`); d.setDate(d.getDate() + days); return d.toISOString().slice(0, 10); }
+function operationalDate(now = new Date()) {
+  const d = new Date(now);
+  if (d.getHours() < 6) d.setDate(d.getDate() - 1);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+function operationalTodayISO() {
+  return operationalDate().toISOString().slice(0, 10);
+}
+function operationalDateLabel() {
+  return operationalDate().toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+}
+function nowLabel() {
+  return new Date().toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+function operationalDateLabelFor(now) {
+  return operationalDate(now).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+}
+function nowLabelFor(now) {
+  return new Date(now).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+function operationalTodayISOFor(now) {
+  return operationalDate(now).toISOString().slice(0, 10);
+}
 function spotifyUrl(name) {
   const clean = (name || "").trim();
   if (!clean) return "https://open.spotify.com/";
@@ -288,6 +312,20 @@ function platformCopyGuide(platformId = "instagram_dm") {
 
 function normalizeLayout(layout) {
   return { ...DEFAULT_LAYOUT, ...(layout || {}) };
+}
+function threadNeedsReply(thread) {
+  if (!thread) return false;
+  if (thread.lastMessageDirection !== "inbound") return false;
+  if (!thread.lastInboundAt) return false;
+  if (!thread.lastOutboundAt) return true;
+  return String(thread.lastOutboundAt) < String(thread.lastInboundAt);
+}
+function matchesInboundWindow(thread, days, now = new Date()) {
+  if (!thread?.lastInboundAt || days === "all") return true;
+  const parsedDays = Number(days);
+  if (!Number.isFinite(parsedDays) || parsedDays <= 0) return true;
+  const diffMs = new Date(now).getTime() - new Date(thread.lastInboundAt).getTime();
+  return diffMs <= parsedDays * 86400000;
 }
 
 function wordsCount(text) {
@@ -1116,9 +1154,9 @@ function confidenceScore(sent) {
   return Math.min(100, Math.round((sent / 30) * 100));
 }
 
-function buildHealthAlerts(enriched, proj) {
+function buildHealthAlerts(enriched, proj, now = new Date()) {
   const alerts = [];
-  const today = todayISO();
+  const today = operationalTodayISOFor(now);
   const scopedNames = new Set(enriched.map(a => a.n));
   const seqDue = Object.entries(proj?.sequenceState || {}).filter(([name, ss]) => scopedNames.has(name) && ss?.status === "active" && ss.nextDue && ss.nextDue <= today).length;
   if (seqDue > 0) alerts.push({ level: "high", label: `${seqDue} follow-up touches due now`, action: "Open Queue and clear due follow-ups first." });
@@ -1204,8 +1242,8 @@ function addLog(proj, name, action, kind = "event", extra = {}) {
 }
 
 // ═══ SMART QUEUE ═══
-function buildQueue(enriched, sequenceState) {
-  const today = todayISO();
+function buildQueue(enriched, sequenceState, now = new Date()) {
+  const today = operationalTodayISOFor(now);
   const items = [];
   const byName = Object.fromEntries(enriched.map(a => [a.n, a]));
 
@@ -1407,6 +1445,39 @@ async function apiDisconnectGmail() {
   }
 }
 
+async function apiGetProjectInbox(projectId, threadKey = "") {
+  try {
+    const params = new URLSearchParams({ projectId });
+    if (threadKey) params.set("threadKey", threadKey);
+    const res = await fetch(`/api/ar/gmail/project-threads?${params.toString()}`, { cache: "no-store" });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return { ok: false, error: data.error || "Could not load project inbox" };
+    return {
+      ok: true,
+      threads: Array.isArray(data.threads) ? data.threads : [],
+      messages: Array.isArray(data.messages) ? data.messages : [],
+      connections: Array.isArray(data.connections) ? data.connections : [],
+    };
+  } catch {
+    return { ok: false, error: "Network error loading project inbox" };
+  }
+}
+
+async function apiUpdateGmailThread(payload) {
+  try {
+    const res = await fetch("/api/ar/gmail/thread", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return { ok: false, error: data.error || "Could not update thread" };
+    return { ok: true, thread: data.thread || null };
+  } catch {
+    return { ok: false, error: "Network error updating thread" };
+  }
+}
+
 function parseCSV(text) {
   const lines = text.split(/\r?\n/).filter(l => l.trim());
   if (lines.length < 2) return [];
@@ -1577,7 +1648,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [editLogNoteId, setEditLogNoteId] = useState("");
   const [editLogNoteText, setEditLogNoteText] = useState("");
   const [showFilters, setShowFilters] = useState(true);
-  const [showQueue, setShowQueue] = useState(false);
+  const [showQueue, setShowQueue] = useState(true);
+  const [clockNow, setClockNow] = useState(() => new Date());
   const [reportStart, setReportStart] = useState(addDaysISO(todayISO(), -29));
   const [reportEnd, setReportEnd] = useState(todayISO());
   const [projectMode, setProjectMode] = useState("work");
@@ -1618,6 +1690,16 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [gmailStatus, setGmailStatus] = useState({ available: false, currentUserConnected: false, currentUserGmail: "", connections: [] });
   const [gmailStatusLoading, setGmailStatusLoading] = useState(false);
   const [artistInbox, setArtistInbox] = useState({ threads: [], messages: [], connections: [] });
+  const [projectInbox, setProjectInbox] = useState({ threads: [], messages: [], connections: [] });
+  const [projectInboxLoading, setProjectInboxLoading] = useState(false);
+  const [selectedProjectThreadKey, setSelectedProjectThreadKey] = useState("");
+  const [inboxArtistQuery, setInboxArtistQuery] = useState("");
+  const [inboxStageFilter, setInboxStageFilter] = useState("all");
+  const [inboxOwnerFilter, setInboxOwnerFilter] = useState("all");
+  const [inboxMailboxFilter, setInboxMailboxFilter] = useState("all");
+  const [inboxNeedsReplyOnly, setInboxNeedsReplyOnly] = useState(false);
+  const [inboxInboundDays, setInboxInboundDays] = useState("all");
+  const [threadWorkflowSaving, setThreadWorkflowSaving] = useState(false);
   const [inboxLoading, setInboxLoading] = useState(false);
   const [syncingInbox, setSyncingInbox] = useState(false);
   const [selectedThreadKey, setSelectedThreadKey] = useState("");
@@ -1808,6 +1890,11 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   }, [loading]);
 
   useEffect(() => {
+    const timer = window.setInterval(() => setClockNow(new Date()), 60000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
     if (!authUserId) return;
     let cancelled = false;
     (async () => {
@@ -1828,6 +1915,35 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       cancelled = true;
     };
   }, [authUserId]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    const gmail = url.searchParams.get("gmail") || "";
+    const gmailError = url.searchParams.get("gmail_error") || "";
+    if (!gmail && !gmailError) return;
+
+    if (gmail === "connected") {
+      flash("Gmail connected");
+      refreshGmailStatus();
+    } else if (gmail === "missing_refresh_token") {
+      flash("Google did not return a refresh token. Disconnect and reconnect Gmail, then approve consent again.", "err");
+    } else if (gmail === "not_configured") {
+      flash("Google OAuth is not configured on this deployment.", "err");
+    } else if (gmail === "auth_required") {
+      flash("Sign in before connecting Gmail.", "err");
+    } else if (gmail === "forbidden") {
+      flash("Viewer role cannot connect Gmail.", "err");
+    } else if (gmail === "state_error") {
+      flash("Gmail connection state expired. Try connecting again.", "err");
+    } else if (gmailError) {
+      flash(decodeURIComponent(gmailError), "err");
+    }
+
+    url.searchParams.delete("gmail");
+    url.searchParams.delete("gmail_error");
+    window.history.replaceState({}, "", `${url.pathname}${url.search || ""}${url.hash || ""}`);
+  }, []);
 
   useEffect(() => {
     if (!authUserId) return;
@@ -1959,6 +2075,32 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       cancelled = true;
     };
   }, [proj?.id, selA?.n]);
+
+  useEffect(() => {
+    if (!proj?.id) return;
+    let cancelled = false;
+    (async () => {
+      setProjectInboxLoading(true);
+      const result = await apiGetProjectInbox(proj.id, selectedProjectThreadKey || "");
+      if (cancelled) return;
+      if (result.ok) {
+        setProjectInbox({
+          threads: result.threads || [],
+          messages: result.messages || [],
+          connections: result.connections || gmailStatus.connections || [],
+        });
+        setSelectedProjectThreadKey(prev => {
+          const keys = new Set((result.threads || []).map(item => item.threadKey));
+          if (prev && keys.has(prev)) return prev;
+          return result.threads?.[0]?.threadKey || "";
+        });
+      }
+      setProjectInboxLoading(false);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [proj?.id, selectedProjectThreadKey]);
 
   useEffect(() => {
     if (loading) return;
@@ -2355,7 +2497,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   };
 
   const connectGmail = () => {
-    window.location.href = `/api/ar/gmail/connect?returnTo=${encodeURIComponent("/ar")}`;
+    const returnTo = `${window.location.pathname || "/ar"}${window.location.search || ""}`;
+    window.location.href = `/api/ar/gmail/connect?returnTo=${encodeURIComponent(returnTo.startsWith("/ar") ? returnTo : "/ar")}`;
   };
 
   const disconnectGmail = async () => {
@@ -2391,6 +2534,29 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     return result;
   };
 
+  const loadProjectInbox = async (projectId, threadKey = "") => {
+    if (!projectId) return { ok: false, error: "No project selected" };
+    setProjectInboxLoading(true);
+    const result = await apiGetProjectInbox(projectId, threadKey);
+    setProjectInboxLoading(false);
+    if (!result.ok) {
+      flash(result.error || "Could not load project inbox", "err");
+      return result;
+    }
+    setProjectInbox({
+      threads: result.threads || [],
+      messages: result.messages || [],
+      connections: result.connections || gmailStatus.connections || [],
+    });
+    setSelectedProjectThreadKey(prev => {
+      const keys = new Set((result.threads || []).map(item => item.threadKey));
+      if (threadKey && keys.has(threadKey)) return threadKey;
+      if (prev && keys.has(prev)) return prev;
+      return result.threads?.[0]?.threadKey || "";
+    });
+    return result;
+  };
+
   const syncArtistInbox = async (artist, senderUserId = "") => {
     if (!requireEditor()) return { ok: false, error: "Editor role required" };
     if (!proj?.id || !artist?.e) {
@@ -2421,6 +2587,9 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     });
     if (result.connections) {
       setGmailStatus((prev) => ({ ...prev, connections: result.connections }));
+    }
+    if (proj?.id) {
+      await loadProjectInbox(proj.id, selectedProjectThreadKey || "");
     }
     if (result.errors?.length) {
       flash(result.errors[0], "err");
@@ -3025,6 +3194,9 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     });
     setSelectedThreadKey(result.threadKey || result.threads?.[0]?.threadKey || "");
     setDetailTab("inbox");
+    if (proj?.id) {
+      await loadProjectInbox(proj.id, result.threadKey || selectedProjectThreadKey || "");
+    }
     await trackSend(artist, draft, "gmail_api", { subject: parsed.subject });
     flash(`Email sent from ${result.senderGmailEmail || "Gmail"}`);
   };
@@ -3063,8 +3235,69 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     });
     setSelectedThreadKey(result.threadKey || selectedThreadKey || result.threads?.[0]?.threadKey || "");
     setGmailReplyDraft("");
+    if (proj?.id) {
+      await loadProjectInbox(proj.id, result.threadKey || selectedProjectThreadKey || "");
+    }
     await trackSend(artist, { key: "gmail_reply", channel: "email", text: `Subject: ${subject}\n\n${body}`, variantId: "GMAIL" }, "gmail_api", { subject, sequenceStep: "Inbox reply" });
     flash(`Reply sent from ${result.senderGmailEmail || "Gmail"}`);
+  };
+
+  const sendProjectInboxReply = async thread => {
+    if (!requireEditor()) return;
+    if (!proj || !thread) return;
+    if (!gmailSendUserId) { flash("Select a connected Gmail sender first", "err"); return; }
+    const artist = thread.artist || null;
+    const targetEmail = artist?.e || thread.counterpartyEmail || "";
+    if (!targetEmail) { flash("No artist email on file for this thread", "err"); return; }
+    const body = gmailReplyDraft.trim();
+    if (!body) { flash("Reply body is empty", "err"); return; }
+    const latestSubject = selectedProjectThreadMessages[selectedProjectThreadMessages.length - 1]?.subject || thread.subject || `Re: ${thread.artistName}`;
+    const subject = /^re:/i.test(latestSubject) ? latestSubject : `Re: ${latestSubject}`;
+    setGmailSending(true);
+    const result = await apiSendGmail({
+      projectId: proj.id,
+      artistName: thread.artistName,
+      artistEmail: targetEmail,
+      senderUserId: gmailSendUserId,
+      subject,
+      body,
+      threadKey: thread.threadKey,
+      externalThreadId: thread.externalThreadId,
+    });
+    setGmailSending(false);
+    if (!result.ok) {
+      flash(result.error || "Could not send reply", "err");
+      return;
+    }
+    await loadProjectInbox(proj.id, result.threadKey || thread.threadKey);
+    if (selA?.n === thread.artistName) {
+      await loadArtistInbox(selA);
+    }
+    setGmailReplyDraft("");
+    if (artist) {
+      await trackSend(artist, { key: "gmail_reply", channel: "email", text: `Subject: ${subject}\n\n${body}`, variantId: "GMAIL" }, "gmail_api", { subject, sequenceStep: "Inbox reply" });
+    }
+    flash(`Reply sent from ${result.senderGmailEmail || "Gmail"}`);
+  };
+
+  const updateInboxThread = async (threadKey, changes) => {
+    if (!requireEditor()) return null;
+    setThreadWorkflowSaving(true);
+    const result = await apiUpdateGmailThread({ threadKey, ...changes });
+    setThreadWorkflowSaving(false);
+    if (!result.ok || !result.thread) {
+      flash(result.error || "Could not update thread", "err");
+      return null;
+    }
+    setProjectInbox(prev => ({
+      ...prev,
+      threads: (prev.threads || []).map(item => item.threadKey === threadKey ? result.thread : item),
+    }));
+    setArtistInbox(prev => ({
+      ...prev,
+      threads: (prev.threads || []).map(item => item.threadKey === threadKey ? result.thread : item),
+    }));
+    return result.thread;
   };
 
   const enrollSeq = async (artist, sequenceId) => {
@@ -3362,10 +3595,15 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     }));
   }, [reportStart, reportEnd, reportActivityEntries, reportSendEntries]);
 
-  const queue = useMemo(() => buildQueue(reportScopedArtists, proj?.sequenceState || {}), [reportScopedArtists, proj]);
+  const operationalDayLabel = useMemo(() => operationalDateLabelFor(clockNow), [clockNow]);
+  const queueUpdatedLabel = useMemo(() => nowLabelFor(clockNow), [clockNow]);
+  const queue = useMemo(() => buildQueue(reportScopedArtists, proj?.sequenceState || {}, clockNow), [reportScopedArtists, proj, clockNow]);
   const abRows = useMemo(() => buildABLeaderboard(proj?.abStats || {}), [proj]);
-  const dueSeqCount = useMemo(() => Object.values(proj?.sequenceState || {}).filter(ss => ss?.status === "active" && ss.nextDue && ss.nextDue <= todayISO()).length, [proj]);
-  const healthAlerts = useMemo(() => buildHealthAlerts(reportScopedArtists, proj || {}), [reportScopedArtists, proj]);
+  const dueSeqCount = useMemo(
+    () => Object.values(proj?.sequenceState || {}).filter(ss => ss?.status === "active" && ss.nextDue && ss.nextDue <= operationalTodayISOFor(clockNow)).length,
+    [proj, clockNow],
+  );
+  const healthAlerts = useMemo(() => buildHealthAlerts(reportScopedArtists, proj || {}, clockNow), [reportScopedArtists, proj, clockNow]);
   const internalMatchCount = useMemo(() => enriched.filter(a => a.onPlatform).length, [enriched]);
   const workspaceOverview = useMemo(() => {
     return projects.reduce((acc, project) => {
@@ -3375,10 +3613,88 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         if (isContactedStage(state?.stage)) acc.contacted += 1;
         if (state?.stage === "live") acc.live += 1;
       });
-      acc.due += Object.values(project.sequenceState || {}).filter(ss => ss?.status === "active" && ss.nextDue && ss.nextDue <= todayISO()).length;
+      acc.due += Object.values(project.sequenceState || {}).filter(ss => ss?.status === "active" && ss.nextDue && ss.nextDue <= operationalTodayISOFor(clockNow)).length;
       return acc;
     }, { projects: 0, artists: 0, contacted: 0, live: 0, due: 0 });
-  }, [projects]);
+  }, [projects, clockNow]);
+  const inboxMailboxOptions = useMemo(() => {
+    const source = (projectInbox.connections?.length ? projectInbox.connections : gmailStatus.connections) || [];
+    return source.filter(item => item?.connected);
+  }, [projectInbox.connections, gmailStatus.connections]);
+  const artistByName = useMemo(() => Object.fromEntries(enriched.map(item => [item.n, item])), [enriched]);
+  const projectInboxThreads = useMemo(() => {
+    const rows = (projectInbox.threads || []).map(thread => {
+      const artist = artistByName[thread.artistName] || null;
+      const mailbox = inboxMailboxOptions.find(item => item.userId === thread.senderUserId) || null;
+      const threadOwner = inboxMailboxOptions.find(item => item.userId === thread.threadOwnerUserId) || null;
+      return {
+        ...thread,
+        artist,
+        mailboxLabel: mailbox ? `${mailbox.workspaceEmail.split("@")[0]} · ${mailbox.gmailEmail}` : thread.senderGmailEmail,
+        threadOwnerLabel: threadOwner ? threadOwner.workspaceEmail.split("@")[0] : "",
+        needsReply: threadNeedsReply(thread),
+      };
+    });
+    return rows
+      .filter(thread => {
+        if (inboxArtistQuery) {
+          const q = inboxArtistQuery.toLowerCase();
+          const hay = `${thread.artistName} ${thread.subject} ${thread.snippet} ${thread.counterpartyEmail}`.toLowerCase();
+          if (!hay.includes(q)) return false;
+        }
+        if (inboxStageFilter !== "all") {
+          const stage = thread.artist?.stage || "prospect";
+          if (!matchesStageFilter(stage, inboxStageFilter)) return false;
+        }
+        if (inboxOwnerFilter !== "all") {
+          const owner = thread.artist?.owner || "";
+          if (inboxOwnerFilter === "__unassigned__") {
+            if (owner) return false;
+          } else if (owner !== inboxOwnerFilter) {
+            return false;
+          }
+        }
+        if (inboxMailboxFilter !== "all" && thread.senderUserId !== inboxMailboxFilter) return false;
+        if (inboxNeedsReplyOnly && !thread.needsReply) return false;
+        if (!matchesInboundWindow(thread, inboxInboundDays, clockNow)) return false;
+        return true;
+      })
+      .sort((a, b) => (b.lastMessageAt || "").localeCompare(a.lastMessageAt || ""));
+  }, [
+    projectInbox.threads,
+    artistByName,
+    inboxMailboxOptions,
+    inboxArtistQuery,
+    inboxStageFilter,
+    inboxOwnerFilter,
+    inboxMailboxFilter,
+    inboxNeedsReplyOnly,
+    inboxInboundDays,
+    clockNow,
+  ]);
+  const selectedProjectThread = useMemo(
+    () => projectInboxThreads.find(item => item.threadKey === selectedProjectThreadKey) || projectInboxThreads[0] || null,
+    [projectInboxThreads, selectedProjectThreadKey],
+  );
+  const selectedProjectThreadMessages = useMemo(
+    () => selectedProjectThread ? (projectInbox.messages || []).filter(item => item.threadKey === selectedProjectThread.threadKey).sort((a, b) => (a.sentAt || "").localeCompare(b.sentAt || "")) : [],
+    [selectedProjectThread, projectInbox.messages],
+  );
+  const latestProjectInboundMessage = useMemo(
+    () => [...selectedProjectThreadMessages].reverse().find(item => item.direction === "inbound") || null,
+    [selectedProjectThreadMessages],
+  );
+  useEffect(() => {
+    if (!projectMode || projectMode !== "inbox") return;
+    if (!projectInboxThreads.length) {
+      if (selectedProjectThreadKey) setSelectedProjectThreadKey("");
+      return;
+    }
+    if (!selectedProjectThread) return;
+    if (selectedProjectThread.threadKey !== selectedProjectThreadKey) {
+      setSelectedProjectThreadKey(selectedProjectThread.threadKey);
+    }
+  }, [projectMode, projectInboxThreads, selectedProjectThread, selectedProjectThreadKey]);
   const handleKanbanDrop = async (stageId, droppedName = "") => {
     if (!canEdit) {
       flash("Viewer role is read-only", "err");
@@ -4350,6 +4666,7 @@ Requirements:
               <div style={{ display: "flex", gap: 4, background: C.sa, borderRadius: 12, padding: 4, border: `1px solid ${C.bd}` }}>
                 {[
                   ["work", "Work"],
+                  ["inbox", `Inbox${projectInboxThreads.length ? ` (${projectInboxThreads.length})` : ""}`],
                   ["report", "Report"],
                 ].map(([modeId, label]) => (
                   <button
@@ -4382,7 +4699,13 @@ Requirements:
               </span>
             </div>
             <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-              <span style={{ fontSize: 11, color: C.tt }}>{projectMode === "work" ? "Daily operating view" : "Reporting and review"}</span>
+              <span style={{ fontSize: 11, color: C.tt }}>
+                {projectMode === "work"
+                  ? `${operationalDayLabel} · updated ${queueUpdatedLabel} · resets 6:00 AM`
+                  : projectMode === "inbox"
+                    ? `Shared project inbox · ${queueUpdatedLabel}`
+                    : "Reporting and review"}
+              </span>
             </div>
           </div>
         </div>
@@ -4607,25 +4930,48 @@ Requirements:
           </div>
         )}
 
-        {projectMode === "work" && queue.length > 0 && (
+        {projectMode === "work" && (
           <div style={{ ...cS, padding: "12px 14px", marginBottom: 12 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: showQueue ? 10 : 0, flexWrap: "wrap" }}>
               <div>
                 <div style={{ fontSize: 13, fontWeight: 700 }}>Today Queue</div>
-                <div style={{ fontSize: 11, color: C.tt }}>Highest-priority actions for the current scope.</div>
+                <div style={{ fontSize: 11, color: C.tt }}>
+                  {operationalDayLabel} · highest-priority actions for the current scope · resets at 6:00 AM
+                </div>
               </div>
-              <button onClick={() => setProjectMode("report")} style={actionBtn(false, "neutral")}>Open Reports</button>
-            </div>
-            <div style={{ display: "grid", gap: 6 }}>
-              {queue.slice(0, 4).map((q, i) => (
-                <button key={i} onClick={() => openQuickArtist(q.artist)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", borderRadius: 10, border: `1px solid ${C.bd}`, background: C.sa, cursor: "pointer", fontFamily: ft, textAlign: "left" }}>
-                  <span style={{ fontSize: 14 }}>{q.icon}</span>
-                  <span style={{ fontWeight: 700, minWidth: 120, color: C.tx }}>{q.artist.n}</span>
-                  <span style={{ color: C.ts, flex: 1, fontSize: 12 }}>{q.label}</span>
-                  <span style={{ ...mkP(true, sc(q.artist.stage, C), sb(q.artist.stage, C)), fontSize: 10, padding: "2px 8px" }}>{SM[q.artist.stage]?.label}</span>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                <button onClick={() => workspaceUser === currentActor ? changeWorkspaceUser(ALL_USER_VIEW) : changeWorkspaceUser(currentActor)} style={actionBtn(false, "neutral")}>
+                  {workspaceUser === currentActor ? "Team Queue" : `My Queue (${currentActor})`}
                 </button>
-              ))}
+                <button onClick={() => setShowQueue(!showQueue)} style={actionBtn(false, "neutral")}>
+                  {showQueue ? "Minimize" : "Expand"}
+                </button>
+                <button onClick={() => setProjectMode("report")} style={actionBtn(false, "neutral")}>Open Reports</button>
+              </div>
             </div>
+            {showQueue && (
+              queue.length > 0 ? (
+                <div style={{ display: "grid", gap: 6 }}>
+                  {queue.slice(0, 6).map((q, i) => (
+                    <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", borderRadius: 10, border: `1px solid ${C.bd}`, background: C.sa }}>
+                      <button onClick={() => openQuickArtist(q.artist)} style={{ display: "flex", alignItems: "center", gap: 10, flex: 1, minWidth: 0, background: "none", border: "none", cursor: "pointer", fontFamily: ft, textAlign: "left", padding: 0 }}>
+                        <span style={{ fontSize: 14 }}>{q.icon}</span>
+                        <span style={{ fontWeight: 700, minWidth: 120, color: C.tx }}>{q.artist.n}</span>
+                        <span style={{ color: C.ts, flex: 1, fontSize: 12 }}>{q.label}</span>
+                        <span style={{ ...mkP(true, sc(q.artist.stage, C), sb(q.artist.stage, C)), fontSize: 10, padding: "2px 8px", cursor: "pointer" }}>{SM[q.artist.stage]?.label}</span>
+                      </button>
+                      {!q.artist.owner && !isReadOnly && (
+                        <button onClick={() => assignOwner(q.artist.n, currentActor)} style={{ ...actionBtn(true, "good"), padding: "6px 10px", fontSize: 11 }}>
+                          Assign to Me
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div style={{ fontSize: 12, color: C.ts }}>No queued actions for this scope right now. Last refreshed {queueUpdatedLabel}.</div>
+              )
+            )}
           </div>
         )}
 
@@ -4707,6 +5053,249 @@ Requirements:
             ) : (
               <div style={{ fontSize: 12, color: C.tt }}>No queued actions in the selected reporting scope.</div>
             )}
+          </div>
+        )}
+
+        {projectMode === "inbox" && (
+          <div style={{ display: "grid", gap: 14, marginBottom: 16 }}>
+            <div style={{ ...cS, padding: "16px 18px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+                <div>
+                  <div style={{ fontSize: 14, fontWeight: 700 }}>Joint Inbox</div>
+                  <div style={{ fontSize: 11, color: C.tt }}>
+                    Shared thread view across this project. Sync happens from artist profiles and sent Gmail threads land here automatically.
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  {!gmailStatus.currentUserConnected ? (
+                    <button onClick={connectGmail} disabled={gmailStatusLoading || isReadOnly} style={{ ...actionBtn(true, "accent"), ...lockStyle(gmailStatusLoading || isReadOnly) }}>
+                      {gmailStatusLoading ? "Checking..." : "Connect My Gmail"}
+                    </button>
+                  ) : (
+                    <button onClick={disconnectGmail} disabled={gmailStatusLoading || isReadOnly} style={{ ...actionBtn(true, "danger"), ...lockStyle(gmailStatusLoading || isReadOnly) }}>
+                      Disconnect My Gmail
+                    </button>
+                  )}
+                  <button onClick={() => loadProjectInbox(proj.id, selectedProjectThreadKey || "")} disabled={projectInboxLoading} style={actionBtn(false, "neutral")}>
+                    {projectInboxLoading ? "Refreshing..." : "Refresh Threads"}
+                  </button>
+                </div>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "minmax(160px, 1.4fr) repeat(5, minmax(120px, 1fr))", gap: 8 }}>
+                <input value={inboxArtistQuery} onChange={e => setInboxArtistQuery(e.target.value)} placeholder="Search artist, subject, or email" style={{ ...iS, width: "100%" }} />
+                <select value={inboxStageFilter} onChange={e => setInboxStageFilter(e.target.value)} style={{ ...iS, padding: "8px 10px", fontSize: 12 }}>
+                  <option value="all">All Stages</option>
+                  <option value="contacted">Contacted</option>
+                  {STAGES.map(stage => <option key={stage.id} value={stage.id}>{stage.label}</option>)}
+                </select>
+                <select value={inboxOwnerFilter} onChange={e => setInboxOwnerFilter(e.target.value)} style={{ ...iS, padding: "8px 10px", fontSize: 12 }}>
+                  <option value="all">All Owners</option>
+                  <option value="__unassigned__">Unassigned</option>
+                  {(proj.teamUsers || []).map(owner => <option key={owner} value={owner}>{owner}</option>)}
+                </select>
+                <select value={inboxMailboxFilter} onChange={e => setInboxMailboxFilter(e.target.value)} style={{ ...iS, padding: "8px 10px", fontSize: 12 }}>
+                  <option value="all">All Mailboxes</option>
+                  {inboxMailboxOptions.map(conn => (
+                    <option key={conn.userId} value={conn.userId}>{conn.workspaceEmail.split("@")[0]} · {conn.gmailEmail}</option>
+                  ))}
+                </select>
+                <select value={inboxInboundDays} onChange={e => setInboxInboundDays(e.target.value)} style={{ ...iS, padding: "8px 10px", fontSize: 12 }}>
+                  <option value="all">Any inbound age</option>
+                  <option value="3">Inbound last 3d</option>
+                  <option value="7">Inbound last 7d</option>
+                  <option value="14">Inbound last 14d</option>
+                  <option value="30">Inbound last 30d</option>
+                </select>
+                <label style={{ ...iS, display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
+                  <input type="checkbox" checked={inboxNeedsReplyOnly} onChange={e => setInboxNeedsReplyOnly(e.target.checked)} />
+                  Needs reply
+                </label>
+              </div>
+            </div>
+
+            <div style={{ ...cS, padding: "12px 14px" }}>
+              <div style={{ display: "grid", gridTemplateColumns: selectedProjectThread ? "380px 1fr" : "1fr", gap: 14 }}>
+                <div style={{ border: `1px solid ${C.bd}`, borderRadius: 14, overflow: "hidden", background: C.sa }}>
+                  <div style={{ padding: "10px 12px", borderBottom: `1px solid ${C.bd}`, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                    <div>
+                      <div style={{ fontSize: 12, fontWeight: 700 }}>Threads</div>
+                      <div style={{ fontSize: 10, color: C.tt }}>{projectInboxThreads.length} visible · updated {queueUpdatedLabel}</div>
+                    </div>
+                    {projectInboxLoading && <span style={{ fontSize: 10, color: C.tt }}>Loading…</span>}
+                  </div>
+                  <div style={{ maxHeight: "70vh", overflowY: "auto", padding: 10, display: "grid", gap: 8 }}>
+                    {projectInboxThreads.length ? projectInboxThreads.map(thread => (
+                      <button
+                        key={thread.threadKey}
+                        onClick={() => loadProjectInbox(proj.id, thread.threadKey)}
+                        style={{
+                          textAlign: "left",
+                          padding: "12px 12px",
+                          borderRadius: 12,
+                          border: `1px solid ${selectedProjectThread?.threadKey === thread.threadKey ? C.ac : C.bd}`,
+                          background: selectedProjectThread?.threadKey === thread.threadKey ? C.al : C.sf,
+                          cursor: "pointer",
+                          fontFamily: ft,
+                        }}
+                      >
+                        <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "flex-start", marginBottom: 6 }}>
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ fontSize: 13, fontWeight: 800, color: C.tx, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{thread.artistName}</div>
+                            <div style={{ fontSize: 11, color: C.ts, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{thread.subject || "No subject"}</div>
+                          </div>
+                          <span style={{ fontSize: 10, color: thread.lastMessageDirection === "inbound" ? C.gn : C.bu, fontWeight: 700 }}>
+                            {thread.lastMessageDirection === "inbound" ? "Inbound" : thread.lastMessageDirection === "outbound" ? "Outbound" : "None"}
+                          </span>
+                        </div>
+                        <div style={{ fontSize: 11, color: C.tt, lineHeight: 1.5, marginBottom: 6 }}>{thread.snippet || "No preview yet."}</div>
+                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 6 }}>
+                          <span style={{ ...mkP(true, thread.artist ? sc(thread.artist.stage, C) : C.tt, thread.artist ? sb(thread.artist.stage, C) : C.sa), cursor: "default", fontSize: 10, padding: "2px 8px" }}>
+                            {thread.artist ? SM[thread.artist.stage]?.label : "No artist"}
+                          </span>
+                          <span style={{ ...mkP(true, thread.status === "closed" ? C.tt : thread.status === "waiting" ? C.ab : C.ac, thread.status === "closed" ? C.sa : thread.status === "waiting" ? C.abb : C.al), cursor: "default", fontSize: 10, padding: "2px 8px" }}>
+                            {thread.status}
+                          </span>
+                          {thread.needsReply && <span style={{ ...mkP(true, C.rd, C.rb), cursor: "default", fontSize: 10, padding: "2px 8px" }}>Needs reply</span>}
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 10, color: C.tt, flexWrap: "wrap" }}>
+                          <span>{thread.mailboxLabel}</span>
+                          <span>{thread.artist?.owner || "Unassigned"} · {thread.artist?.followUp ? sD(thread.artist.followUp) : "No follow-up"}</span>
+                          <span>{rD(thread.lastMessageAt)}</span>
+                        </div>
+                      </button>
+                    )) : (
+                      <div style={{ fontSize: 12, color: C.ts, padding: "14px 8px" }}>
+                        No synced threads match the current filters.
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {selectedProjectThread && (
+                  <div style={{ border: `1px solid ${C.bd}`, borderRadius: 14, background: C.sf, overflow: "hidden" }}>
+                    <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.bd}`, background: C.sa }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
+                        <div>
+                          <div style={{ fontSize: 15, fontWeight: 800 }}>{selectedProjectThread.subject || "No subject"}</div>
+                          <div style={{ fontSize: 11, color: C.tt, marginTop: 3 }}>
+                            {selectedProjectThread.artistName} · {selectedProjectThread.mailboxLabel} · last activity {rD(selectedProjectThread.lastMessageAt)}
+                          </div>
+                        </div>
+                        {selectedProjectThread.artist && (
+                          <button onClick={() => openA(selectedProjectThread.artist)} style={actionBtn(false, "accent")}>Open Artist</button>
+                        )}
+                      </div>
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
+                        <span style={{ ...mkP(true, selectedProjectThread.artist ? sc(selectedProjectThread.artist.stage, C) : C.tt, selectedProjectThread.artist ? sb(selectedProjectThread.artist.stage, C) : C.sa), cursor: "default" }}>
+                          {selectedProjectThread.artist ? SM[selectedProjectThread.artist.stage]?.label : "No artist"}
+                        </span>
+                        <span style={{ ...mkP(true, selectedProjectThread.artist?.owner ? C.ts : C.rd, C.sa), cursor: "default" }}>
+                          Owner: {selectedProjectThread.artist?.owner || "Unassigned"}
+                        </span>
+                        <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>
+                          Next follow-up: {selectedProjectThread.artist?.followUp ? sD(selectedProjectThread.artist.followUp) : "Not set"}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div style={{ padding: 16, borderBottom: `1px solid ${C.bd}`, display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 10 }}>
+                      <label style={{ fontSize: 11, color: C.ts, display: "grid", gap: 4 }}>
+                        <span>Thread owner</span>
+                        <select
+                          value={selectedProjectThread.threadOwnerUserId || ""}
+                          disabled={threadWorkflowSaving || isReadOnly}
+                          onChange={e => updateInboxThread(selectedProjectThread.threadKey, { threadOwnerUserId: e.target.value })}
+                          style={{ ...iS, padding: "7px 10px", fontSize: 12, ...lockStyle(threadWorkflowSaving || isReadOnly) }}
+                        >
+                          <option value="">Unassigned</option>
+                          {inboxMailboxOptions.map(conn => (
+                            <option key={conn.userId} value={conn.userId}>{conn.workspaceEmail.split("@")[0]} · {conn.gmailEmail}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label style={{ fontSize: 11, color: C.ts, display: "grid", gap: 4 }}>
+                        <span>Status</span>
+                        <select
+                          value={selectedProjectThread.status || "open"}
+                          disabled={threadWorkflowSaving || isReadOnly}
+                          onChange={e => updateInboxThread(selectedProjectThread.threadKey, { status: e.target.value })}
+                          style={{ ...iS, padding: "7px 10px", fontSize: 12, ...lockStyle(threadWorkflowSaving || isReadOnly) }}
+                        >
+                          <option value="open">Open</option>
+                          <option value="waiting">Waiting</option>
+                          <option value="closed">Closed</option>
+                        </select>
+                      </label>
+                      <label style={{ fontSize: 11, color: C.ts, display: "grid", gap: 4 }}>
+                        <span>Thread follow-up</span>
+                        <input
+                          type="date"
+                          value={selectedProjectThread.nextFollowUpAt ? String(selectedProjectThread.nextFollowUpAt).slice(0, 10) : ""}
+                          disabled={threadWorkflowSaving || isReadOnly}
+                          onChange={e => updateInboxThread(selectedProjectThread.threadKey, { nextFollowUpAt: e.target.value })}
+                          style={{ ...iS, padding: "7px 10px", fontSize: 12, ...lockStyle(threadWorkflowSaving || isReadOnly) }}
+                        />
+                      </label>
+                    </div>
+
+                    <div style={{ maxHeight: 360, overflowY: "auto", padding: 16, display: "grid", gap: 10, borderBottom: `1px solid ${C.bd}` }}>
+                      {selectedProjectThreadMessages.length ? selectedProjectThreadMessages.map((message) => (
+                        <div key={message.messageKey} style={{ border: `1px solid ${message.direction === "inbound" ? C.bd : C.gd}`, borderRadius: 12, padding: "10px 12px", background: message.direction === "inbound" ? C.sa : C.gb }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", gap: 10, marginBottom: 6, flexWrap: "wrap" }}>
+                            <div style={{ fontSize: 11, fontWeight: 700, color: C.tx }}>
+                              {message.direction === "inbound" ? "Inbound" : "Outbound"} · {message.senderEmail || message.senderGmailEmail}
+                            </div>
+                            <div style={{ fontSize: 10, color: C.tt }}>{new Date(message.sentAt).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</div>
+                          </div>
+                          <div style={{ fontSize: 12, color: C.ts, whiteSpace: "pre-wrap", lineHeight: 1.6 }}>
+                            {message.bodyText || message.snippet || "No message body"}
+                          </div>
+                          {message.direction === "inbound" && (
+                            <div style={{ marginTop: 8 }}>
+                              <button onClick={() => setReplyInput(message.bodyText || message.snippet || "")} style={{ padding: "5px 10px", borderRadius: 8, border: `1px solid ${C.ac}`, background: C.al, color: C.ac, cursor: "pointer", fontSize: 11, fontFamily: ft }}>
+                                Use for Reply Intel
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )) : (
+                        <div style={{ fontSize: 12, color: C.ts }}>No messages loaded for this thread yet.</div>
+                      )}
+                    </div>
+
+                    <div style={{ padding: 16, background: C.sa }}>
+                      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
+                        <span style={{ fontSize: 11, color: C.ts }}>Send as</span>
+                        <select value={gmailSendUserId} disabled={isReadOnly || !inboxMailboxOptions.length} onChange={e => setGmailSendUserId(e.target.value)} style={{ ...iS, padding: "6px 10px", fontSize: 11, minWidth: 240, ...lockStyle(isReadOnly || !inboxMailboxOptions.length) }}>
+                          <option value="">Select mailbox</option>
+                          {inboxMailboxOptions.map((conn) => (
+                            <option key={conn.userId} value={conn.userId}>
+                              {conn.workspaceEmail.split("@")[0]} · {conn.gmailEmail}
+                            </option>
+                          ))}
+                        </select>
+                        {latestProjectInboundMessage && <span style={{ fontSize: 11, color: C.tt }}>Latest inbound: {rD(latestProjectInboundMessage.sentAt)}</span>}
+                      </div>
+                      <textarea value={gmailReplyDraft} readOnly={isReadOnly} onChange={e => setGmailReplyDraft(e.target.value)} placeholder="Write a reply here. Everyone in the project can see synced thread history." style={{ ...iS, width: "100%", minHeight: 120, resize: "vertical", fontSize: 12, ...lockStyle(isReadOnly) }} />
+                      <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+                        <button onClick={() => sendProjectInboxReply(selectedProjectThread)} disabled={gmailSending || !gmailSendUserId || isReadOnly} style={{ padding: "7px 14px", borderRadius: 10, border: "none", background: gmailSending ? C.bl : C.ac, color: "#fff", cursor: gmailSending || !gmailSendUserId || isReadOnly ? "not-allowed" : "pointer", fontSize: 12, fontWeight: 600, fontFamily: ft, ...lockStyle(gmailSending || !gmailSendUserId || isReadOnly) }}>
+                          {gmailSending ? "Sending..." : "Send Reply"}
+                        </button>
+                        <button onClick={() => latestProjectInboundMessage && setReplyInput(latestProjectInboundMessage.bodyText || latestProjectInboundMessage.snippet || "")} disabled={!latestProjectInboundMessage} style={{ padding: "7px 12px", borderRadius: 10, border: `1px solid ${C.bd}`, background: "transparent", color: C.ts, cursor: latestProjectInboundMessage ? "pointer" : "not-allowed", fontSize: 11, fontFamily: ft, opacity: latestProjectInboundMessage ? 1 : 0.55 }}>
+                          Use Latest Inbound
+                        </button>
+                        {replyResult?.draftResponse && (
+                          <button onClick={() => setGmailReplyDraft(replyResult.draftResponse)} style={{ padding: "7px 12px", borderRadius: 10, border: `1px solid ${C.pr}`, background: C.pb, color: C.pr, cursor: "pointer", fontSize: 11, fontFamily: ft }}>
+                            Load AI Reply Draft
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
         )}
 

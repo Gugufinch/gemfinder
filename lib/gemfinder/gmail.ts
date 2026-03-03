@@ -128,6 +128,15 @@ function parseFromHeader(value: string): { email: string; name: string } {
   };
 }
 
+function artistKeyFromName(name: string): string {
+  return String(name || '')
+    .toLowerCase()
+    .replace(/\(.*?\)/g, ' ')
+    .replace(/\b(ft|feat|featuring)\b\.?/g, ' ')
+    .replace(/[^a-z0-9]/g, '')
+    .trim();
+}
+
 function sentAtForMessage(message: GmailMessage): string {
   const internalDate = Number(message.internalDate || 0);
   if (internalDate > 0) return new Date(internalDate).toISOString();
@@ -292,14 +301,22 @@ export function threadToStoreRecords(input: {
     threadKey,
     projectId,
     artistName,
+    artistKey: artistKeyFromName(artistName),
     provider: 'gmail',
     externalThreadId,
     senderUserId,
     senderGmailEmail: senderGmailEmail.toLowerCase(),
     subject: subjectForThread(thread),
     participants: participantsForThread(thread),
+    counterpartyEmail: '',
     snippet: latestSnippet(thread),
     lastMessageAt: lastMessageAt(thread),
+    lastInboundAt: '',
+    lastOutboundAt: '',
+    lastMessageDirection: 'none',
+    threadOwnerUserId: '',
+    status: 'open',
+    nextFollowUpAt: '',
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
@@ -336,6 +353,22 @@ export function threadToStoreRecords(input: {
       inReplyTo: cleanHeaderValue(getHeader(message, 'In-Reply-To')),
     };
   });
+
+  const sortedMessages = [...messages].sort((a, b) => (a.sentAt || '').localeCompare(b.sentAt || ''));
+  const lastMessage = sortedMessages[sortedMessages.length - 1] || null;
+  const inboundMessages = sortedMessages.filter((message) => message.direction === 'inbound');
+  const outboundMessages = sortedMessages.filter((message) => message.direction === 'outbound');
+  const lastInbound = inboundMessages[inboundMessages.length - 1] || null;
+  const lastOutbound = outboundMessages[outboundMessages.length - 1] || null;
+  const counterpartyEmail =
+    lastInbound?.senderEmail ||
+    participantsForThread(thread).find((item) => item !== senderGmailEmail.toLowerCase()) ||
+    '';
+
+  threadRecord.counterpartyEmail = String(counterpartyEmail || '').trim().toLowerCase();
+  threadRecord.lastInboundAt = lastInbound?.sentAt || '';
+  threadRecord.lastOutboundAt = lastOutbound?.sentAt || '';
+  threadRecord.lastMessageDirection = lastMessage?.direction || 'none';
 
   return { thread: threadRecord, messages };
 }

@@ -51,14 +51,22 @@ export interface GmailThreadRecord {
   threadKey: string;
   projectId: string;
   artistName: string;
+  artistKey: string;
   provider: 'gmail';
   externalThreadId: string;
   senderUserId: string;
   senderGmailEmail: string;
   subject: string;
   participants: string[];
+  counterpartyEmail: string;
   snippet: string;
   lastMessageAt: string;
+  lastInboundAt: string;
+  lastOutboundAt: string;
+  lastMessageDirection: 'inbound' | 'outbound' | 'none';
+  threadOwnerUserId: string;
+  status: 'open' | 'waiting' | 'closed';
+  nextFollowUpAt: string;
   createdAt: string;
   updatedAt: string;
 }

@@ -37,14 +37,22 @@ create table if not exists gemfinder_gmail_threads (
   thread_key text primary key,
   project_id text not null,
   artist_name text not null,
+  artist_key text not null default '',
   provider text not null default 'gmail',
   external_thread_id text not null,
   sender_user_id text not null,
   sender_gmail_email text not null,
   subject text not null default '',
   participants jsonb not null default '[]'::jsonb,
+  counterparty_email text not null default '',
   snippet text not null default '',
   last_message_at timestamptz,
+  last_inbound_at timestamptz,
+  last_outbound_at timestamptz,
+  last_message_direction text not null default 'none',
+  thread_owner_user_id text not null default '',
+  status text not null default 'open',
+  next_follow_up_at timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -54,6 +62,15 @@ create unique index if not exists gemfinder_gmail_threads_unique_mailbox
 
 create index if not exists gemfinder_gmail_threads_artist_idx
   on gemfinder_gmail_threads (project_id, artist_name, updated_at desc);
+
+alter table gemfinder_gmail_threads add column if not exists artist_key text not null default '';
+alter table gemfinder_gmail_threads add column if not exists counterparty_email text not null default '';
+alter table gemfinder_gmail_threads add column if not exists last_inbound_at timestamptz;
+alter table gemfinder_gmail_threads add column if not exists last_outbound_at timestamptz;
+alter table gemfinder_gmail_threads add column if not exists last_message_direction text not null default 'none';
+alter table gemfinder_gmail_threads add column if not exists thread_owner_user_id text not null default '';
+alter table gemfinder_gmail_threads add column if not exists status text not null default 'open';
+alter table gemfinder_gmail_threads add column if not exists next_follow_up_at timestamptz;
 
 create table if not exists gemfinder_gmail_messages (
   message_key text primary key,
@@ -198,14 +215,22 @@ function normalizeThread(value: Partial<GmailThreadRecord>): GmailThreadRecord |
     threadKey: String(value.threadKey),
     projectId: String(value.projectId),
     artistName: String(value.artistName),
+    artistKey: String(value.artistKey || ''),
     provider: 'gmail',
     externalThreadId: String(value.externalThreadId),
     senderUserId: String(value.senderUserId),
     senderGmailEmail: String(value.senderGmailEmail).trim().toLowerCase(),
     subject: String(value.subject || ''),
     participants: normalizeStringArray(value.participants),
+    counterpartyEmail: String(value.counterpartyEmail || '').trim().toLowerCase(),
     snippet: String(value.snippet || ''),
     lastMessageAt: normalizeIso(value.lastMessageAt) || now,
+    lastInboundAt: normalizeIso(value.lastInboundAt),
+    lastOutboundAt: normalizeIso(value.lastOutboundAt),
+    lastMessageDirection: value.lastMessageDirection === 'inbound' || value.lastMessageDirection === 'outbound' ? value.lastMessageDirection : 'none',
+    threadOwnerUserId: String(value.threadOwnerUserId || ''),
+    status: value.status === 'waiting' || value.status === 'closed' ? value.status : 'open',
+    nextFollowUpAt: normalizeIso(value.nextFollowUpAt),
     createdAt: normalizeIso(value.createdAt) || now,
     updatedAt: normalizeIso(value.updatedAt) || now,
   };
@@ -297,14 +322,22 @@ function mapDbThread(row: Record<string, unknown>): GmailThreadRecord {
     threadKey: String(row.thread_key),
     projectId: String(row.project_id),
     artistName: String(row.artist_name),
+    artistKey: String(row.artist_key || ''),
     provider: 'gmail',
     externalThreadId: String(row.external_thread_id),
     senderUserId: String(row.sender_user_id),
     senderGmailEmail: String(row.sender_gmail_email).trim().toLowerCase(),
     subject: String(row.subject || ''),
     participants: normalizeStringArray(row.participants),
+    counterpartyEmail: String(row.counterparty_email || '').trim().toLowerCase(),
     snippet: String(row.snippet || ''),
     lastMessageAt: normalizeIso(row.last_message_at) || new Date().toISOString(),
+    lastInboundAt: normalizeIso(row.last_inbound_at),
+    lastOutboundAt: normalizeIso(row.last_outbound_at),
+    lastMessageDirection: row.last_message_direction === 'inbound' || row.last_message_direction === 'outbound' ? row.last_message_direction : 'none',
+    threadOwnerUserId: String(row.thread_owner_user_id || ''),
+    status: row.status === 'waiting' || row.status === 'closed' ? row.status : 'open',
+    nextFollowUpAt: normalizeIso(row.next_follow_up_at),
     createdAt: normalizeIso(row.created_at) || new Date().toISOString(),
     updatedAt: normalizeIso(row.updated_at) || new Date().toISOString(),
   };
@@ -466,6 +499,43 @@ export async function listArtistInbox(projectId: string, artistName: string): Pr
   };
 }
 
+export async function listProjectInbox(projectId: string): Promise<{ threads: GmailThreadRecord[] }> {
+  if (!projectId) return { threads: [] };
+
+  if (!hasDatabase()) {
+    const local = await readLocalStore();
+    const threads = local.threads
+      .filter((item) => item.projectId === projectId)
+      .sort((a, b) => (b.lastMessageAt || '').localeCompare(a.lastMessageAt || ''));
+    return { threads };
+  }
+
+  await ensureSchema();
+  const res = await getPool().query(
+    'select * from gemfinder_gmail_threads where project_id = $1 order by last_message_at desc nulls last, updated_at desc',
+    [projectId],
+  );
+  return { threads: res.rows.map((row) => mapDbThread(row)) };
+}
+
+export async function listThreadMessages(threadKey: string): Promise<GmailMessageRecord[]> {
+  if (!threadKey) return [];
+
+  if (!hasDatabase()) {
+    const local = await readLocalStore();
+    return local.messages
+      .filter((item) => item.threadKey === threadKey)
+      .sort((a, b) => (a.sentAt || '').localeCompare(b.sentAt || ''));
+  }
+
+  await ensureSchema();
+  const res = await getPool().query(
+    'select * from gemfinder_gmail_messages where thread_key = $1 order by sent_at asc nulls last, created_at asc',
+    [threadKey],
+  );
+  return res.rows.map((row) => mapDbMessage(row));
+}
+
 export async function upsertArtistInbox(
   thread: GmailThreadRecord,
   messages: GmailMessageRecord[],
@@ -476,8 +546,16 @@ export async function upsertArtistInbox(
 
   if (!hasDatabase()) {
     const local = await readLocalStore();
+    const existingThread = local.threads.find((item) => item.threadKey === normalizedThread.threadKey) || null;
+    const mergedThread = {
+      ...existingThread,
+      ...normalizedThread,
+      threadOwnerUserId: normalizedThread.threadOwnerUserId || existingThread?.threadOwnerUserId || '',
+      status: normalizedThread.status || existingThread?.status || 'open',
+      nextFollowUpAt: normalizedThread.nextFollowUpAt || existingThread?.nextFollowUpAt || '',
+    };
     const nextThreads = local.threads.filter((item) => item.threadKey !== normalizedThread.threadKey);
-    nextThreads.push(normalizedThread);
+    nextThreads.push(mergedThread);
 
     const messageMap = new Map(local.messages.map((item) => [item.messageKey, item]));
     normalizedMessages.forEach((item) => {
@@ -496,28 +574,42 @@ export async function upsertArtistInbox(
   const db = getPool();
   await db.query(
     `insert into gemfinder_gmail_threads (
-      thread_key, project_id, artist_name, provider, external_thread_id, sender_user_id, sender_gmail_email,
-      subject, participants, snippet, last_message_at, created_at, updated_at
+      thread_key, project_id, artist_name, artist_key, provider, external_thread_id, sender_user_id, sender_gmail_email,
+      subject, participants, counterparty_email, snippet, last_message_at, last_inbound_at, last_outbound_at,
+      last_message_direction, thread_owner_user_id, status, next_follow_up_at, created_at, updated_at
     )
-    values ($1, $2, $3, 'gmail', $4, $5, $6, $7, $8::jsonb, $9, $10::timestamptz, $11::timestamptz, $12::timestamptz)
+    values ($1, $2, $3, $4, 'gmail', $5, $6, $7, $8, $9::jsonb, $10, $11, $12::timestamptz, $13::timestamptz, $14::timestamptz, $15, $16, $17, $18::timestamptz, $19::timestamptz, $20::timestamptz)
     on conflict (thread_key)
     do update set
+      artist_key = excluded.artist_key,
       subject = excluded.subject,
       participants = excluded.participants,
+      counterparty_email = excluded.counterparty_email,
       snippet = excluded.snippet,
       last_message_at = excluded.last_message_at,
+      last_inbound_at = excluded.last_inbound_at,
+      last_outbound_at = excluded.last_outbound_at,
+      last_message_direction = excluded.last_message_direction,
       updated_at = excluded.updated_at`,
     [
       normalizedThread.threadKey,
       normalizedThread.projectId,
       normalizedThread.artistName,
+      normalizedThread.artistKey,
       normalizedThread.externalThreadId,
       normalizedThread.senderUserId,
       normalizedThread.senderGmailEmail,
       normalizedThread.subject,
       JSON.stringify(normalizedThread.participants),
+      normalizedThread.counterpartyEmail,
       normalizedThread.snippet,
       normalizedThread.lastMessageAt,
+      normalizedThread.lastInboundAt || null,
+      normalizedThread.lastOutboundAt || null,
+      normalizedThread.lastMessageDirection,
+      normalizedThread.threadOwnerUserId,
+      normalizedThread.status,
+      normalizedThread.nextFollowUpAt || null,
       normalizedThread.createdAt,
       normalizedThread.updatedAt,
     ],
@@ -573,4 +665,48 @@ export async function upsertArtistInbox(
       ],
     );
   }
+}
+
+export async function updateGmailThreadWorkflow(
+  threadKey: string,
+  changes: Partial<Pick<GmailThreadRecord, 'threadOwnerUserId' | 'status' | 'nextFollowUpAt'>>,
+): Promise<GmailThreadRecord | null> {
+  if (!threadKey) return null;
+
+  if (!hasDatabase()) {
+    const local = await readLocalStore();
+    const existing = local.threads.find((item) => item.threadKey === threadKey);
+    if (!existing) return null;
+    const updated = normalizeThread({
+      ...existing,
+      threadOwnerUserId: changes.threadOwnerUserId !== undefined ? String(changes.threadOwnerUserId || '') : existing.threadOwnerUserId,
+      status: changes.status !== undefined ? changes.status : existing.status,
+      nextFollowUpAt: changes.nextFollowUpAt !== undefined ? changes.nextFollowUpAt : existing.nextFollowUpAt,
+      updatedAt: new Date().toISOString(),
+    });
+    if (!updated) return null;
+    await writeLocalStore({
+      ...local,
+      threads: local.threads.map((item) => (item.threadKey === threadKey ? updated : item)),
+    });
+    return updated;
+  }
+
+  await ensureSchema();
+  const res = await getPool().query(
+    `update gemfinder_gmail_threads
+      set thread_owner_user_id = $2,
+          status = $3,
+          next_follow_up_at = $4::timestamptz,
+          updated_at = now()
+      where thread_key = $1
+      returning *`,
+    [
+      threadKey,
+      String(changes.threadOwnerUserId || ''),
+      changes.status === 'waiting' || changes.status === 'closed' ? changes.status : 'open',
+      changes.nextFollowUpAt ? changes.nextFollowUpAt : null,
+    ],
+  );
+  return res.rows[0] ? mapDbThread(res.rows[0]) : null;
 }
