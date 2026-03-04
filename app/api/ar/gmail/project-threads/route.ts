@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getAuthUserById } from '@/lib/gemfinder/auth-store';
-import { listProjectInbox, listThreadMessages, listWorkspaceGmailConnections } from '@/lib/gemfinder/gmail-store';
+import { listProjectInbox, listThreadMessages, listThreadMessagesForKeys, listWorkspaceGmailConnections } from '@/lib/gemfinder/gmail-store';
 
 const querySchema = z.object({
   projectId: z.string().min(1).max(120),
   threadKey: z.string().max(240).optional(),
+  threadKeys: z.array(z.string().min(1).max(240)).optional(),
 });
 
 export async function GET(req: NextRequest) {
@@ -18,13 +19,21 @@ export async function GET(req: NextRequest) {
   const parsed = querySchema.safeParse({
     projectId: req.nextUrl.searchParams.get('projectId') || '',
     threadKey: req.nextUrl.searchParams.get('threadKey') || undefined,
+    threadKeys: (req.nextUrl.searchParams.get('threadKeys') || '')
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean),
   });
   if (!parsed.success) {
     return NextResponse.json({ error: 'Invalid inbox query', details: parsed.error.issues }, { status: 400 });
   }
 
   const inbox = await listProjectInbox(parsed.data.projectId);
-  const messages = parsed.data.threadKey ? await listThreadMessages(parsed.data.threadKey) : [];
+  const messages = parsed.data.threadKeys?.length
+    ? await listThreadMessagesForKeys(parsed.data.threadKeys)
+    : parsed.data.threadKey
+      ? await listThreadMessages(parsed.data.threadKey)
+      : [];
   const connections = await listWorkspaceGmailConnections();
   return NextResponse.json({ ok: true, threads: inbox.threads, messages, connections });
 }

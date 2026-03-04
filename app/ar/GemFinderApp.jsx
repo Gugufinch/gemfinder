@@ -1516,10 +1516,11 @@ async function apiDisconnectGmail() {
   }
 }
 
-async function apiGetProjectInbox(projectId, threadKey = "") {
+async function apiGetProjectInbox(projectId, threadKey = "", threadKeys = []) {
   try {
     const params = new URLSearchParams({ projectId });
     if (threadKey) params.set("threadKey", threadKey);
+    if (Array.isArray(threadKeys) && threadKeys.length) params.set("threadKeys", threadKeys.filter(Boolean).join(","));
     const res = await fetch(`/api/ar/gmail/project-threads?${params.toString()}`, { cache: "no-store" });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) return { ok: false, error: data.error || "Could not load project inbox" };
@@ -2219,7 +2220,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     let cancelled = false;
     (async () => {
       setProjectInboxLoading(true);
-      const result = await apiGetProjectInbox(proj.id, selectedProjectThreadKey || "");
+      const result = await apiGetProjectInbox(proj.id);
       if (cancelled) return;
       if (result.ok) {
         setProjectInbox({
@@ -2227,18 +2228,13 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
           messages: result.messages || [],
           connections: result.connections || gmailStatus.connections || [],
         });
-        setSelectedProjectThreadKey(prev => {
-          const keys = new Set((result.threads || []).map(item => item.threadKey));
-          if (prev && keys.has(prev)) return prev;
-          return result.threads?.[0]?.threadKey || "";
-        });
       }
       setProjectInboxLoading(false);
     })();
     return () => {
       cancelled = true;
     };
-  }, [proj?.id, selectedProjectThreadKey]);
+  }, [proj?.id]);
 
   useEffect(() => {
     if (loading) return;
@@ -2711,10 +2707,10 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     return result;
   };
 
-  const loadProjectInbox = async (projectId, threadKey = "") => {
+  const loadProjectInbox = async (projectId, threadKey = "", threadKeys = []) => {
     if (!projectId) return { ok: false, error: "No project selected" };
     setProjectInboxLoading(true);
-    const result = await apiGetProjectInbox(projectId, threadKey);
+    const result = await apiGetProjectInbox(projectId, threadKey, threadKeys);
     setProjectInboxLoading(false);
     if (!result.ok) {
       flash(result.error || "Could not load project inbox", "err");
@@ -2728,10 +2724,17 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     setSelectedProjectThreadKey(prev => {
       const keys = new Set((result.threads || []).map(item => item.threadKey));
       if (threadKey && keys.has(threadKey)) return threadKey;
-      if (prev && keys.has(prev)) return prev;
-      return result.threads?.[0]?.threadKey || "";
+      if (!threadKeys.length && prev && keys.has(prev)) return prev;
+      return threadKey || prev || result.threads?.[0]?.threadKey || "";
     });
     return result;
+  };
+
+  const selectProjectInboxThread = async thread => {
+    if (!proj?.id || !thread) return { ok: false, error: "No thread selected" };
+    const sourceKeys = Array.from(new Set((thread.sourceThreadKeys || [thread.primaryThreadKey || thread.threadKey]).filter(Boolean)));
+    setSelectedProjectThreadKey(thread.threadKey);
+    return loadProjectInbox(proj.id, thread.threadKey, sourceKeys);
   };
 
   const syncArtistInbox = async (artist, senderUserId = "") => {
@@ -2766,7 +2769,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       setGmailStatus((prev) => ({ ...prev, connections: result.connections }));
     }
     if (proj?.id) {
-      await loadProjectInbox(proj.id, selectedProjectThreadKey || "");
+      await loadProjectInbox(proj.id);
     }
     await refreshGmailStatus();
     if (result.errors?.length) {
@@ -3447,8 +3450,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       senderUserId: gmailSendUserId,
       subject,
       body,
-      threadKey: thread.threadKey,
-      externalThreadId: thread.externalThreadId,
+      threadKey: thread.primaryThreadKey || thread.threadKey,
+      externalThreadId: thread.primaryExternalThreadId || thread.externalThreadId,
     });
     setGmailSending(false);
     if (!result.ok) {
@@ -3458,7 +3461,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       flash(result.error || "Could not send reply", "err");
       return;
     }
-    await loadProjectInbox(proj.id, result.threadKey || thread.threadKey);
+    const refreshedKeys = Array.from(new Set([...(thread.sourceThreadKeys || []), result.threadKey || thread.primaryThreadKey || thread.threadKey].filter(Boolean)));
+    await loadProjectInbox(proj.id, thread.threadKey, refreshedKeys);
     if (selA?.n === thread.artistName) {
       await loadArtistInbox(selA);
     }
@@ -3472,22 +3476,26 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
 
   const updateInboxThread = async (threadKey, changes) => {
     if (!requireEditor()) return null;
+    const threadKeys = Array.isArray(threadKey) ? Array.from(new Set(threadKey.filter(Boolean))) : [threadKey].filter(Boolean);
+    if (!threadKeys.length) return null;
     setThreadWorkflowSaving(true);
-    const result = await apiUpdateGmailThread({ threadKey, ...changes });
+    const results = await Promise.all(threadKeys.map(key => apiUpdateGmailThread({ threadKey: key, ...changes })));
     setThreadWorkflowSaving(false);
-    if (!result.ok || !result.thread) {
-      flash(result.error || "Could not update thread", "err");
+    const failed = results.find(result => !result.ok || !result.thread);
+    if (failed) {
+      flash(failed.error || "Could not update thread", "err");
       return null;
     }
+    const updates = new Map(results.filter(result => result.thread).map(result => [result.thread.threadKey, result.thread]));
     setProjectInbox(prev => ({
       ...prev,
-      threads: (prev.threads || []).map(item => item.threadKey === threadKey ? result.thread : item),
+      threads: (prev.threads || []).map(item => updates.get(item.threadKey) || item),
     }));
     setArtistInbox(prev => ({
       ...prev,
-      threads: (prev.threads || []).map(item => item.threadKey === threadKey ? result.thread : item),
+      threads: (prev.threads || []).map(item => updates.get(item.threadKey) || item),
     }));
-    return result.thread;
+    return results[0]?.thread || null;
   };
 
   const enrollSeq = async (artist, sequenceId) => {
@@ -3825,11 +3833,53 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         needsReply: threadNeedsReply(thread),
       };
     });
-    return rows
+    const grouped = new Map();
+    rows.forEach(thread => {
+      const artistKey = String(thread.artist?.n || thread.artistName || thread.counterpartyEmail || thread.subject || thread.threadKey).trim().toLowerCase();
+      const mailboxKey = String(thread.senderUserId || thread.senderGmailEmail || "mailbox").trim().toLowerCase();
+      const groupKey = `${mailboxKey}::${artistKey}`;
+      const existing = grouped.get(groupKey);
+      if (!existing) {
+        grouped.set(groupKey, {
+          ...thread,
+          threadKey: groupKey,
+          primaryThreadKey: thread.threadKey,
+          primaryExternalThreadId: thread.externalThreadId,
+          sourceThreadKeys: [thread.threadKey],
+          threadCount: 1,
+          searchHaystack: `${thread.artistName} ${thread.subject || ""} ${thread.snippet || ""} ${thread.counterpartyEmail || ""}`.toLowerCase(),
+        });
+        return;
+      }
+      const existingTime = existing.lastMessageAt || "";
+      const nextTime = thread.lastMessageAt || "";
+      const shouldReplace = nextTime > existingTime;
+      const mergedThread = shouldReplace ? { ...existing, ...thread } : { ...existing };
+      mergedThread.threadKey = groupKey;
+      mergedThread.primaryThreadKey = shouldReplace ? thread.threadKey : existing.primaryThreadKey;
+      mergedThread.primaryExternalThreadId = shouldReplace ? thread.externalThreadId : existing.primaryExternalThreadId;
+      mergedThread.sourceThreadKeys = Array.from(new Set([...(existing.sourceThreadKeys || []), thread.threadKey]));
+      mergedThread.threadCount = mergedThread.sourceThreadKeys.length;
+      mergedThread.needsReply = existing.needsReply || thread.needsReply;
+      mergedThread.status = existing.status === "open" || thread.status === "open"
+        ? "open"
+        : existing.status === "waiting" || thread.status === "waiting"
+          ? "waiting"
+          : shouldReplace ? thread.status : existing.status;
+      mergedThread.threadOwnerUserId = existing.threadOwnerUserId || thread.threadOwnerUserId || "";
+      mergedThread.threadOwnerLabel = existing.threadOwnerLabel || thread.threadOwnerLabel || "";
+      mergedThread.nextFollowUpAt = existing.nextFollowUpAt || thread.nextFollowUpAt || "";
+      mergedThread.internalNote = existing.internalNote || thread.internalNote || "";
+      mergedThread.internalNoteUpdatedAt = existing.internalNoteUpdatedAt || thread.internalNoteUpdatedAt || "";
+      mergedThread.internalNoteUpdatedBy = existing.internalNoteUpdatedBy || thread.internalNoteUpdatedBy || "";
+      mergedThread.searchHaystack = `${existing.searchHaystack || ""} ${thread.artistName} ${thread.subject || ""} ${thread.snippet || ""} ${thread.counterpartyEmail || ""}`.toLowerCase();
+      grouped.set(groupKey, mergedThread);
+    });
+    return [...grouped.values()]
       .filter(thread => {
         if (inboxArtistQuery) {
           const q = inboxArtistQuery.toLowerCase();
-          const hay = `${thread.artistName} ${thread.subject} ${thread.snippet} ${thread.counterpartyEmail}`.toLowerCase();
+          const hay = thread.searchHaystack || `${thread.artistName} ${thread.subject} ${thread.snippet} ${thread.counterpartyEmail}`.toLowerCase();
           if (!hay.includes(q)) return false;
         }
         if (inboxStageFilter !== "all") {
@@ -3863,15 +3913,21 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     clockNow,
   ]);
   const projectInboxActionableCount = useMemo(
-    () => (projectInbox.threads || []).filter(threadIsActionable).length,
-    [projectInbox.threads],
+    () => projectInboxThreads.filter(threadIsActionable).length,
+    [projectInboxThreads],
   );
   const selectedProjectThread = useMemo(
     () => projectInboxThreads.find(item => item.threadKey === selectedProjectThreadKey) || projectInboxThreads[0] || null,
     [projectInboxThreads, selectedProjectThreadKey],
   );
   const selectedProjectThreadMessages = useMemo(
-    () => selectedProjectThread ? (projectInbox.messages || []).filter(item => item.threadKey === selectedProjectThread.threadKey).sort((a, b) => (a.sentAt || "").localeCompare(b.sentAt || "")) : [],
+    () => {
+      if (!selectedProjectThread) return [];
+      const keySet = new Set(selectedProjectThread.sourceThreadKeys || [selectedProjectThread.primaryThreadKey || selectedProjectThread.threadKey]);
+      return (projectInbox.messages || [])
+        .filter(item => keySet.has(item.threadKey))
+        .sort((a, b) => (a.sentAt || "").localeCompare(b.sentAt || ""));
+    },
     [selectedProjectThread, projectInbox.messages],
   );
   const activeArtistInboxThread = useMemo(() => {
@@ -3888,11 +3944,14 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       if (selectedProjectThreadKey) setSelectedProjectThreadKey("");
       return;
     }
-    if (!selectedProjectThread) return;
-    if (selectedProjectThread.threadKey !== selectedProjectThreadKey) {
-      setSelectedProjectThreadKey(selectedProjectThread.threadKey);
+    const targetThread = selectedProjectThread || projectInboxThreads[0] || null;
+    if (!targetThread) return;
+    const sourceKeys = new Set(targetThread.sourceThreadKeys || [targetThread.primaryThreadKey || targetThread.threadKey]);
+    const hasLoadedMessages = (projectInbox.messages || []).some(item => sourceKeys.has(item.threadKey));
+    if (targetThread.threadKey !== selectedProjectThreadKey || !hasLoadedMessages) {
+      selectProjectInboxThread(targetThread);
     }
-  }, [projectMode, projectInboxThreads, selectedProjectThread, selectedProjectThreadKey]);
+  }, [projectMode, projectInboxThreads, selectedProjectThread, selectedProjectThreadKey, projectInbox.messages]);
   useEffect(() => {
     setReplyInput("");
     setFollowUpDraft("");
@@ -5131,6 +5190,16 @@ Requirements:
 
   // ═══ PROJECT ═══
   if (screen === "project" && proj) {
+    const greetingHour = clockNow.getHours();
+    const greetingLabel = greetingHour < 12 ? "Good morning" : greetingHour < 18 ? "Good afternoon" : "Good evening";
+    const greetingName = (currentActor || "Team").split("@")[0];
+    const projectDateLabel = clockNow.toLocaleString("en-US", {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    });
     const projectModeMeta = {
       work: {
         nav: "Pipeline",
@@ -5152,88 +5221,145 @@ Requirements:
       },
     };
     const activeModeMeta = projectModeMeta[projectMode] || projectModeMeta.work;
-    const sidebarStats = [
-      { label: "Artists", value: enriched.length, tone: C.tx, bg: C.sa },
-      { label: "Contacted", value: contactedCount, tone: C.bu, bg: C.bb },
-      { label: "Live", value: stCounts.live || 0, tone: C.lv, bg: C.lvb },
-      { label: "Due", value: dueSeqCount, tone: C.ab, bg: C.abb },
+    const connectedMailboxText = gmailConnected
+      ? (gmailConnectionMeta?.provider_email || "Connected")
+      : "Not connected";
+    const spotlightLine = projectMode === "work"
+      ? `${queue.length} priority actions in scope. ${dueSeqCount} follow-ups due by 6:00 AM.`
+      : projectMode === "inbox"
+        ? `${projectInboxActionableCount} inbox threads still need attention. Sync from artist inboxes to pull the latest replies.`
+        : `${reportActivityStats.actions} logged actions in range. ${reportScopedArtists.length} artists in the current reporting scope.`;
+    const sidebarModeItems = [
+      ["work", projectModeMeta.work.nav, "⌂"],
+      ["inbox", projectModeMeta.inbox.nav, "✉"],
+      ["report", projectModeMeta.report.nav, "↗"],
     ];
+    const overviewCards = [
+      { label: "Artists", value: enriched.length, tone: C.tx, accent: C.ac, helper: "in this project" },
+      { label: "Contacted", value: contactedCount, tone: C.bu, accent: C.bu, helper: "sent or beyond" },
+      { label: "Live", value: stCounts.live || 0, tone: C.lv, accent: C.lv, helper: "fully set up" },
+      { label: "Due Today", value: dueSeqCount, tone: C.ab, accent: C.ab, helper: operationalDayLabel },
+    ];
+    const scopeDescription = workspaceUser === ALL_USER_VIEW
+      ? "Whole team view"
+      : workspaceUser === UNASSIGNED_USER_VIEW
+        ? "Only unassigned artists"
+        : `${workspaceUser}'s workspace`;
 
     return (
-      <div style={{ fontFamily: ft, background: C.bg, minHeight: "100vh", color: C.tx, display: "grid", gridTemplateColumns: "290px minmax(0,1fr)" }}>
+      <div style={{ fontFamily: ft, background: C.bg, minHeight: "100vh", color: C.tx, display: "grid", gridTemplateColumns: "320px minmax(0,1fr)" }}>
         <Toast /><style>{css}</style>
 
         <aside style={{ background: C.sf, borderRight: `1px solid ${C.bd}`, display: "flex", flexDirection: "column", minHeight: "100vh", position: "sticky", top: 0 }}>
-          <div style={{ padding: "22px 18px 18px", borderBottom: `1px solid ${C.bd}` }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
-              <img src="/gemfinder-logo.png" alt="GEMFINDER logo" style={{ width: 38, height: 38, objectFit: "contain" }} />
+          <div style={{ padding: "22px 20px 18px", borderBottom: `1px solid ${C.bd}` }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
+              <img src="/gemfinder-logo.png" alt="GEMFINDER logo" style={{ width: 42, height: 42, objectFit: "contain" }} />
               <div>
                 <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 3.2, color: C.ac, textTransform: "uppercase", marginBottom: 2 }}>GEMFINDER</div>
-                <div style={{ fontSize: 18, fontWeight: 800, letterSpacing: "-0.02em" }}>{proj.name}</div>
+                <div style={{ fontSize: 14, fontWeight: 800, letterSpacing: "-0.02em" }}>Artist Ops Hub</div>
               </div>
             </div>
-            <div style={{ fontSize: 12, color: C.ts, lineHeight: 1.6 }}>
-              {proj.desc || "Shared outreach workspace for pipeline movement, inbox handling, and reporting."}
+            <div style={{ borderRadius: 22, border: `1px solid ${C.bd}`, background: C.sa, padding: "16px 16px 14px" }}>
+              <div style={{ fontSize: 11, color: C.tt, textTransform: "uppercase", letterSpacing: 1.2, marginBottom: 8 }}>Current project</div>
+              <div style={{ fontSize: 28, fontWeight: 800, letterSpacing: "-0.04em", lineHeight: 1.02, marginBottom: 8 }}>{proj.name}</div>
+              <div style={{ fontSize: 12, color: C.ts, lineHeight: 1.55, marginBottom: 14 }}>
+                {proj.desc || "Shared outreach workspace for pipeline movement, inbox handling, and reporting."}
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 8, marginBottom: 12 }}>
+                {[
+                  ["Artists", enriched.length],
+                  ["Contacted", contactedCount],
+                  ["Live", stCounts.live || 0],
+                ].map(([label, value]) => (
+                  <div key={label} style={{ borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sf, padding: "8px 10px" }}>
+                    <div style={{ fontSize: 10, color: C.tt, textTransform: "uppercase", letterSpacing: 1 }}>{label}</div>
+                    <div style={{ fontSize: 20, fontWeight: 800, lineHeight: 1.1 }}>{value}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, fontSize: 11, color: C.ts }}>
+                <span>{operationalDayLabel}</span>
+                <button onClick={() => { setScreen("hub"); setShowQuickDrawer(false); setSearch(""); setGf("All"); setSf("all"); setPf("all"); }} style={{ background: "none", border: "none", padding: 0, color: C.ac, cursor: "pointer", fontSize: 11, fontWeight: 700, fontFamily: ft }}>
+                  Back to projects
+                </button>
+              </div>
             </div>
-            <button onClick={() => { setScreen("hub"); setShowQuickDrawer(false); setSearch(""); setGf("All"); setSf("all"); setPf("all"); }} style={{ marginTop: 12, background: "none", border: "none", padding: 0, color: C.ac, cursor: "pointer", fontSize: 11, fontWeight: 700, fontFamily: ft }}>← Back to projects</button>
           </div>
 
-          <div style={{ padding: "18px", borderBottom: `1px solid ${C.bd}` }}>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-              {sidebarStats.map(card => (
-                <div key={card.label} style={{ borderRadius: 12, border: `1px solid ${C.bd}`, background: card.bg, padding: "10px 12px" }}>
-                  <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 1.1, color: C.tt, marginBottom: 6 }}>{card.label}</div>
-                  <div style={{ fontSize: 20, fontWeight: 800, color: card.tone, lineHeight: 1 }}>{card.value}</div>
-                </div>
+          <div style={{ padding: "18px 20px 16px" }}>
+            <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 1.3, color: C.tt, marginBottom: 10 }}>Workspace</div>
+            <div style={{ display: "grid", gap: 8 }}>
+              {sidebarModeItems.map(([modeId, label, icon]) => (
+                <button
+                  key={modeId}
+                  onClick={() => setProjectMode(modeId)}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 12,
+                    width: "100%",
+                    padding: "13px 14px",
+                    borderRadius: 16,
+                    border: `1px solid ${projectMode === modeId ? `${C.ac}50` : C.bd}`,
+                    background: projectMode === modeId ? C.al : "transparent",
+                    color: projectMode === modeId ? C.ac : C.ts,
+                    cursor: "pointer",
+                    fontSize: 14,
+                    fontWeight: 700,
+                    fontFamily: ft,
+                    textAlign: "left",
+                  }}
+                >
+                  <span style={{
+                    width: 26,
+                    height: 26,
+                    borderRadius: 9,
+                    border: `1px solid ${projectMode === modeId ? `${C.ac}34` : C.bd}`,
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    background: projectMode === modeId ? C.sf : C.sa,
+                    flexShrink: 0,
+                  }}>
+                    {icon}
+                  </span>
+                  <span>{label}</span>
+                </button>
               ))}
             </div>
           </div>
 
-          <div style={{ padding: "18px", display: "grid", gap: 8 }}>
-            {[
-              ["work", projectModeMeta.work.nav, "⌂"],
-              ["inbox", projectModeMeta.inbox.nav, "✉"],
-              ["report", projectModeMeta.report.nav, "↗"],
-            ].map(([modeId, label, icon]) => (
-              <button
-                key={modeId}
-                onClick={() => setProjectMode(modeId)}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                  width: "100%",
-                  padding: "12px 14px",
-                  borderRadius: 14,
-                  border: `1px solid ${projectMode === modeId ? `${C.ac}44` : C.bd}`,
-                  background: projectMode === modeId ? C.al : "transparent",
-                  color: projectMode === modeId ? C.ac : C.ts,
-                  cursor: "pointer",
-                  fontSize: 14,
-                  fontWeight: 700,
-                  fontFamily: ft,
-                  textAlign: "left",
-                }}
-              >
-                <span style={{ width: 18, textAlign: "center" }}>{icon}</span>
-                <span>{label}</span>
-              </button>
-            ))}
-          </div>
-
-          <div style={{ padding: "0 18px 18px", borderBottom: `1px solid ${C.bd}` }}>
-            <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 1.2, color: C.tt, marginBottom: 8 }}>Scope</div>
-            <select value={workspaceUser} onChange={e => changeWorkspaceUser(e.target.value)} style={{ ...iS, width: "100%", padding: "10px 12px", fontSize: 13 }}>
-              <option value={ALL_USER_VIEW}>All</option>
-              <option value={UNASSIGNED_USER_VIEW}>Unassigned</option>
-              {(proj.teamUsers || DEFAULT_TEAM_USERS).map(u => <option key={u} value={u}>{u}</option>)}
-            </select>
-            <div style={{ fontSize: 11, color: C.tt, marginTop: 8 }}>
-              {workspaceUser === ALL_USER_VIEW ? "Whole team" : workspaceUser === UNASSIGNED_USER_VIEW ? "Unassigned artists" : `${workspaceUser}'s view`}
+          <div style={{ padding: "0 20px 18px", borderBottom: `1px solid ${C.bd}` }}>
+            <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 1.3, color: C.tt, marginBottom: 10 }}>Scope</div>
+            <div style={{ borderRadius: 18, border: `1px solid ${C.bd}`, background: C.sa, padding: "14px 14px 12px" }}>
+              <select value={workspaceUser} onChange={e => changeWorkspaceUser(e.target.value)} style={{ ...iS, width: "100%", padding: "11px 12px", fontSize: 13, marginBottom: 8 }}>
+                <option value={ALL_USER_VIEW}>All</option>
+                <option value={UNASSIGNED_USER_VIEW}>Unassigned</option>
+                {(proj.teamUsers || DEFAULT_TEAM_USERS).map(u => <option key={u} value={u}>{u}</option>)}
+              </select>
+              <div style={{ fontSize: 11, color: C.tt, lineHeight: 1.5 }}>{scopeDescription}</div>
             </div>
           </div>
 
-          <div style={{ padding: "18px", display: "grid", gap: 8, marginTop: "auto", borderTop: `1px solid ${C.bd}` }}>
+          <div style={{ padding: "18px 20px", display: "grid", gap: 10 }}>
+            <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 1.3, color: C.tt }}>Snapshot</div>
+            <div style={{ borderRadius: 18, border: `1px solid ${C.bd}`, background: C.sa, padding: "14px 14px 12px", display: "grid", gap: 10 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 12 }}>
+                <span style={{ color: C.tt }}>Mode</span>
+                <span style={{ fontWeight: 700 }}>{activeModeMeta.nav}</span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 12 }}>
+                <span style={{ color: C.tt }}>Mailbox</span>
+                <span style={{ fontWeight: 700, color: gmailConnected ? C.gn : C.rd, textAlign: "right" }}>{connectedMailboxText}</span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 12 }}>
+                <span style={{ color: C.tt }}>Follow-ups due</span>
+                <span style={{ fontWeight: 700, color: dueSeqCount ? C.ab : C.tx }}>{dueSeqCount}</span>
+              </div>
+            </div>
+          </div>
+
+          <div style={{ padding: "18px 20px", display: "grid", gap: 10, marginTop: "auto", borderTop: `1px solid ${C.bd}` }}>
             <div style={{ fontSize: 11, color: C.tt, lineHeight: 1.6 }}>
               {authLabel}
               <span style={{ display: "inline-block", marginLeft: 6, fontSize: 10, padding: "2px 8px", borderRadius: 999, border: `1px solid ${C.bd}`, background: C.sa, color: C.ts, textTransform: "uppercase" }}>
@@ -5249,14 +5375,36 @@ Requirements:
         </aside>
 
         <main style={{ minWidth: 0 }}>
-          <div style={{ padding: "24px 28px 28px" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 14, flexWrap: "wrap", marginBottom: 18 }}>
+          <div style={{ padding: "26px 30px 30px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, flexWrap: "wrap", marginBottom: 18 }}>
               <div>
-                <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 2.2, color: C.ac, textTransform: "uppercase", marginBottom: 6 }}>{activeModeMeta.eyebrow}</div>
-                <div style={{ fontSize: 32, fontWeight: 800, letterSpacing: "-0.04em", lineHeight: 1.05 }}>{activeModeMeta.title}</div>
-                <div style={{ fontSize: 13, color: C.ts, marginTop: 6, lineHeight: 1.6 }}>{activeModeMeta.helper}</div>
+                <div style={{ fontSize: 15, color: C.tt, marginBottom: 6 }}>{greetingLabel}, {greetingName}</div>
+                <div style={{ fontSize: 36, fontWeight: 800, letterSpacing: "-0.04em", lineHeight: 1.02 }}>{activeModeMeta.title}</div>
+                <div style={{ fontSize: 13, color: C.ts, marginTop: 6 }}>{projectDateLabel}</div>
               </div>
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+              <div style={{ fontSize: 13, color: C.ts, paddingTop: 8 }}>
+                {projectMode === "inbox" ? `Connected mailbox: ${connectedMailboxText}` : `${scopeDescription} · ${operationalDayLabel}`}
+              </div>
+            </div>
+
+            <div style={{ ...cS, padding: "18px 20px", marginBottom: 18, background: C.sa }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 14, flexWrap: "wrap" }}>
+                <div>
+                  <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 1.8, textTransform: "uppercase", color: C.ac, marginBottom: 6 }}>{activeModeMeta.eyebrow}</div>
+                  <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 6 }}>{spotlightLine}</div>
+                  <div style={{ fontSize: 12, color: C.ts, lineHeight: 1.6 }}>{activeModeMeta.helper}</div>
+                </div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                  {overviewCards.map(card => (
+                    <div key={card.label} style={{ minWidth: 124, borderRadius: 16, border: `1px solid ${C.bd}`, background: C.sf, padding: "12px 14px" }}>
+                      <div style={{ fontSize: 11, color: C.tt, textTransform: "uppercase", letterSpacing: 1 }}>{card.label}</div>
+                      <div style={{ fontSize: 28, fontWeight: 800, color: card.tone, lineHeight: 1.05, marginTop: 6 }}>{card.value}</div>
+                      <div style={{ fontSize: 11, color: C.ts, marginTop: 4 }}>{card.helper}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end", marginTop: 14 }}>
                 {projectMode === "work" && !isReadOnly && (
                   <>
                     <button onClick={() => setShowDiscover(true)} style={{ ...actionBtn(true, "accent"), ...lockStyle(isReadOnly) }}>AI Discover</button>
@@ -5291,7 +5439,7 @@ Requirements:
                         Disconnect My Gmail
                       </button>
                     )}
-                    <button onClick={() => loadProjectInbox(proj.id, selectedProjectThreadKey || "")} disabled={projectInboxLoading} style={actionBtn(false, "neutral")}>
+                    <button onClick={() => loadProjectInbox(proj.id, selectedProjectThread?.threadKey || "", selectedProjectThread?.sourceThreadKeys || [])} disabled={projectInboxLoading} style={actionBtn(false, "neutral")}>
                       {projectInboxLoading ? "Reloading..." : "Reload Stored Threads"}
                     </button>
                   </>
@@ -5695,7 +5843,7 @@ Requirements:
                     {projectInboxThreads.length ? projectInboxThreads.map(thread => (
                       <button
                         key={thread.threadKey}
-                        onClick={() => loadProjectInbox(proj.id, thread.threadKey)}
+                        onClick={() => selectProjectInboxThread(thread)}
                         style={{
                           textAlign: "left",
                           padding: "12px 12px",
@@ -5776,7 +5924,7 @@ Requirements:
                         <select
                           value={selectedProjectThread.threadOwnerUserId || ""}
                           disabled={threadWorkflowSaving || isReadOnly}
-                          onChange={e => updateInboxThread(selectedProjectThread.threadKey, { threadOwnerUserId: e.target.value })}
+                          onChange={e => updateInboxThread(selectedProjectThread.sourceThreadKeys || [selectedProjectThread.primaryThreadKey || selectedProjectThread.threadKey], { threadOwnerUserId: e.target.value })}
                           style={{ ...iS, padding: "7px 10px", fontSize: 12, ...lockStyle(threadWorkflowSaving || isReadOnly) }}
                         >
                           <option value="">Unassigned</option>
@@ -5790,7 +5938,7 @@ Requirements:
                         <select
                           value={selectedProjectThread.status || "open"}
                           disabled={threadWorkflowSaving || isReadOnly}
-                          onChange={e => updateInboxThread(selectedProjectThread.threadKey, { status: e.target.value })}
+                          onChange={e => updateInboxThread(selectedProjectThread.sourceThreadKeys || [selectedProjectThread.primaryThreadKey || selectedProjectThread.threadKey], { status: e.target.value })}
                           style={{ ...iS, padding: "7px 10px", fontSize: 12, ...lockStyle(threadWorkflowSaving || isReadOnly) }}
                         >
                           <option value="open">Open</option>
@@ -5804,7 +5952,7 @@ Requirements:
                           type="date"
                           value={selectedProjectThread.nextFollowUpAt ? String(selectedProjectThread.nextFollowUpAt).slice(0, 10) : ""}
                           disabled={threadWorkflowSaving || isReadOnly}
-                          onChange={e => updateInboxThread(selectedProjectThread.threadKey, { nextFollowUpAt: e.target.value })}
+                          onChange={e => updateInboxThread(selectedProjectThread.sourceThreadKeys || [selectedProjectThread.primaryThreadKey || selectedProjectThread.threadKey], { nextFollowUpAt: e.target.value })}
                           style={{ ...iS, padding: "7px 10px", fontSize: 12, ...lockStyle(threadWorkflowSaving || isReadOnly) }}
                         />
                       </label>
@@ -5815,14 +5963,14 @@ Requirements:
                         <div style={{ fontSize: 12, fontWeight: 700, color: C.ab }}>Internal team note</div>
                         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                           <button
-                            onClick={() => updateInboxThread(selectedProjectThread.threadKey, { internalNote: projectThreadNoteDraft })}
+                            onClick={() => updateInboxThread(selectedProjectThread.sourceThreadKeys || [selectedProjectThread.primaryThreadKey || selectedProjectThread.threadKey], { internalNote: projectThreadNoteDraft })}
                             disabled={threadWorkflowSaving || isReadOnly || projectThreadNoteDraft === String(selectedProjectThread.internalNote || "")}
                             style={{ padding: "6px 10px", borderRadius: 9, border: `1px solid ${C.abd}`, background: "#fff8cc", color: C.ab, cursor: threadWorkflowSaving || isReadOnly || projectThreadNoteDraft === String(selectedProjectThread.internalNote || "") ? "not-allowed" : "pointer", fontSize: 11, fontFamily: ft, ...lockStyle(threadWorkflowSaving || isReadOnly || projectThreadNoteDraft === String(selectedProjectThread.internalNote || "")) }}
                           >
                             Save note
                           </button>
                           <button
-                            onClick={() => updateInboxThread(selectedProjectThread.threadKey, { status: "closed" })}
+                            onClick={() => updateInboxThread(selectedProjectThread.sourceThreadKeys || [selectedProjectThread.primaryThreadKey || selectedProjectThread.threadKey], { status: "closed" })}
                             disabled={threadWorkflowSaving || isReadOnly || selectedProjectThread.status === "closed"}
                             style={{ padding: "6px 10px", borderRadius: 9, border: `1px solid ${C.bd}`, background: C.sf, color: C.ts, cursor: threadWorkflowSaving || isReadOnly || selectedProjectThread.status === "closed" ? "not-allowed" : "pointer", fontSize: 11, fontFamily: ft, ...lockStyle(threadWorkflowSaving || isReadOnly || selectedProjectThread.status === "closed") }}
                           >

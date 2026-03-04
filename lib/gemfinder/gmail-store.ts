@@ -608,6 +608,26 @@ export async function listThreadMessages(threadKey: string): Promise<GmailMessag
   return res.rows.map((row) => mapDbMessage(row));
 }
 
+export async function listThreadMessagesForKeys(threadKeys: string[]): Promise<GmailMessageRecord[]> {
+  const keys = Array.from(new Set((threadKeys || []).map((item) => String(item || "").trim()).filter(Boolean)));
+  if (!keys.length) return [];
+
+  if (!hasDatabase()) {
+    const local = await readLocalStore();
+    const keySet = new Set(keys);
+    return local.messages
+      .filter((item) => keySet.has(item.threadKey))
+      .sort((a, b) => (a.sentAt || '').localeCompare(b.sentAt || ''));
+  }
+
+  await ensureSchema();
+  const res = await getPool().query(
+    'select * from gemfinder_gmail_messages where thread_key = any($1::text[]) order by sent_at asc nulls last, created_at asc',
+    [keys],
+  );
+  return res.rows.map((row) => mapDbMessage(row));
+}
+
 export async function upsertArtistInbox(
   thread: GmailThreadRecord,
   messages: GmailMessageRecord[],
