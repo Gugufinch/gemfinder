@@ -1786,6 +1786,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [gmailSendUserId, setGmailSendUserId] = useState(authUserId || "");
   const [gmailReplyDraft, setGmailReplyDraft] = useState("");
   const [gmailSending, setGmailSending] = useState(false);
+  const [artistThreadNoteDraft, setArtistThreadNoteDraft] = useState("");
+  const [projectThreadNoteDraft, setProjectThreadNoteDraft] = useState("");
   const availableGmailConnections = useMemo(() => {
     const entries = [
       ...(Array.isArray(gmailStatus.connections) ? gmailStatus.connections : []),
@@ -3872,6 +3874,10 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     () => selectedProjectThread ? (projectInbox.messages || []).filter(item => item.threadKey === selectedProjectThread.threadKey).sort((a, b) => (a.sentAt || "").localeCompare(b.sentAt || "")) : [],
     [selectedProjectThread, projectInbox.messages],
   );
+  const activeArtistInboxThread = useMemo(() => {
+    const threads = (artistInbox.threads || []).slice().sort((a, b) => (b.lastMessageAt || "").localeCompare(a.lastMessageAt || ""));
+    return threads.find(item => item.threadKey === selectedThreadKey) || threads[0] || null;
+  }, [artistInbox.threads, selectedThreadKey]);
   const latestProjectInboundMessage = useMemo(
     () => [...selectedProjectThreadMessages].reverse().find(item => item.direction === "inbound") || null,
     [selectedProjectThreadMessages],
@@ -3897,6 +3903,12 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     }
     setReplyResult(null);
   }, [selectedThreadKey, selectedProjectThreadKey]);
+  useEffect(() => {
+    setArtistThreadNoteDraft(activeArtistInboxThread?.internalNote || "");
+  }, [activeArtistInboxThread?.threadKey, activeArtistInboxThread?.internalNote]);
+  useEffect(() => {
+    setProjectThreadNoteDraft(selectedProjectThread?.internalNote || "");
+  }, [selectedProjectThread?.threadKey, selectedProjectThread?.internalNote]);
   const handleKanbanDrop = async (stageId, droppedName = "") => {
     if (!canEdit) {
       flash("Viewer role is read-only", "err");
@@ -4715,17 +4727,21 @@ Requirements:
                       </div>
 
                       <div style={{ padding: 16, borderBottom: `1px solid ${C.bd}`, background: C.abb }}>
-                        <div style={{ fontSize: 12, fontWeight: 700, color: C.ab, marginBottom: 6 }}>Internal team note</div>
+                        <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 6 }}>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: C.ab }}>Internal team note</div>
+                          <button
+                            onClick={() => updateInboxThread(selectedThread.threadKey, { internalNote: artistThreadNoteDraft })}
+                            disabled={threadWorkflowSaving || isReadOnly || artistThreadNoteDraft === String(selectedThread.internalNote || "")}
+                            style={{ padding: "6px 10px", borderRadius: 9, border: `1px solid ${C.abd}`, background: "#fff8cc", color: C.ab, cursor: threadWorkflowSaving || isReadOnly || artistThreadNoteDraft === String(selectedThread.internalNote || "") ? "not-allowed" : "pointer", fontSize: 11, fontFamily: ft, ...lockStyle(threadWorkflowSaving || isReadOnly || artistThreadNoteDraft === String(selectedThread.internalNote || "")) }}
+                          >
+                            Save note
+                          </button>
+                        </div>
                         <div style={{ fontSize: 11, color: C.ts, marginBottom: 8 }}>Yellow note only for GEMFINDER. This never sends to the contact.</div>
                         <textarea
-                          key={`artist-thread-note-${selectedThread.threadKey}`}
-                          defaultValue={selectedThread.internalNote || ""}
+                          value={artistThreadNoteDraft}
                           readOnly={isReadOnly}
-                          onBlur={e => {
-                            if (isReadOnly) return;
-                            if (String(e.target.value || "") === String(selectedThread.internalNote || "")) return;
-                            updateInboxThread(selectedThread.threadKey, { internalNote: e.target.value });
-                          }}
+                          onChange={e => setArtistThreadNoteDraft(e.target.value)}
                           placeholder="Leave an internal note for the team..."
                           style={{ ...iS, width: "100%", minHeight: 78, resize: "vertical", fontSize: 12, background: "#fff8cc", borderColor: C.abd, ...lockStyle(isReadOnly) }}
                         />
@@ -4771,6 +4787,9 @@ Requirements:
                           ))}
                           </select>
                           {latestInboundMessage && <span style={{ fontSize: 11, color: C.tt }}>Latest inbound: {rD(latestInboundMessage.sentAt)}</span>}
+                          <button onClick={() => syncArtistInbox(a, selectedThread.senderUserId)} disabled={syncingInbox || isReadOnly} style={{ padding: "6px 10px", borderRadius: 9, border: `1px solid ${C.bd}`, background: C.sf, color: C.ts, cursor: syncingInbox || isReadOnly ? "not-allowed" : "pointer", fontSize: 11, fontFamily: ft, ...lockStyle(syncingInbox || isReadOnly) }}>
+                            {syncingInbox ? "Syncing..." : "Sync This Artist"}
+                          </button>
                         </div>
                         {!selectedMailboxReady && (
                           <div style={{ marginBottom: 8, padding: "8px 10px", borderRadius: 10, border: `1px solid ${C.abd}`, background: C.abb, fontSize: 11, color: C.ts }}>
@@ -5550,7 +5569,7 @@ Requirements:
                 <div>
                   <div style={{ fontSize: 14, fontWeight: 700 }}>Joint Inbox</div>
                   <div style={{ fontSize: 11, color: C.tt }}>
-                    Shared thread view across this project. Sync happens from artist profiles and sent Gmail threads land here automatically.
+                    Shared thread view across this project. New replies appear after you sync an artist inbox. Sent Gmail threads land here automatically.
                   </div>
                 </div>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -5564,7 +5583,7 @@ Requirements:
                     </button>
                   )}
                   <button onClick={() => loadProjectInbox(proj.id, selectedProjectThreadKey || "")} disabled={projectInboxLoading} style={actionBtn(false, "neutral")}>
-                    {projectInboxLoading ? "Refreshing..." : "Refresh Threads"}
+                    {projectInboxLoading ? "Reloading..." : "Reload Stored Threads"}
                   </button>
                 </div>
               </div>
@@ -5733,24 +5752,28 @@ Requirements:
                     <div style={{ padding: 16, borderBottom: `1px solid ${C.bd}`, background: C.abb }}>
                       <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 6 }}>
                         <div style={{ fontSize: 12, fontWeight: 700, color: C.ab }}>Internal team note</div>
-                        <button
-                          onClick={() => updateInboxThread(selectedProjectThread.threadKey, { status: "closed" })}
-                          disabled={threadWorkflowSaving || isReadOnly || selectedProjectThread.status === "closed"}
-                          style={{ padding: "6px 10px", borderRadius: 9, border: `1px solid ${C.bd}`, background: C.sf, color: C.ts, cursor: threadWorkflowSaving || isReadOnly || selectedProjectThread.status === "closed" ? "not-allowed" : "pointer", fontSize: 11, fontFamily: ft, ...lockStyle(threadWorkflowSaving || isReadOnly || selectedProjectThread.status === "closed") }}
-                        >
-                          Mark Done
-                        </button>
+                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                          <button
+                            onClick={() => updateInboxThread(selectedProjectThread.threadKey, { internalNote: projectThreadNoteDraft })}
+                            disabled={threadWorkflowSaving || isReadOnly || projectThreadNoteDraft === String(selectedProjectThread.internalNote || "")}
+                            style={{ padding: "6px 10px", borderRadius: 9, border: `1px solid ${C.abd}`, background: "#fff8cc", color: C.ab, cursor: threadWorkflowSaving || isReadOnly || projectThreadNoteDraft === String(selectedProjectThread.internalNote || "") ? "not-allowed" : "pointer", fontSize: 11, fontFamily: ft, ...lockStyle(threadWorkflowSaving || isReadOnly || projectThreadNoteDraft === String(selectedProjectThread.internalNote || "")) }}
+                          >
+                            Save note
+                          </button>
+                          <button
+                            onClick={() => updateInboxThread(selectedProjectThread.threadKey, { status: "closed" })}
+                            disabled={threadWorkflowSaving || isReadOnly || selectedProjectThread.status === "closed"}
+                            style={{ padding: "6px 10px", borderRadius: 9, border: `1px solid ${C.bd}`, background: C.sf, color: C.ts, cursor: threadWorkflowSaving || isReadOnly || selectedProjectThread.status === "closed" ? "not-allowed" : "pointer", fontSize: 11, fontFamily: ft, ...lockStyle(threadWorkflowSaving || isReadOnly || selectedProjectThread.status === "closed") }}
+                          >
+                            Mark Done
+                          </button>
+                        </div>
                       </div>
                       <div style={{ fontSize: 11, color: C.ts, marginBottom: 8 }}>Yellow note only for the team. This never sends to the contact.</div>
                       <textarea
-                        key={`project-thread-note-${selectedProjectThread.threadKey}`}
-                        defaultValue={selectedProjectThread.internalNote || ""}
+                        value={projectThreadNoteDraft}
                         readOnly={isReadOnly}
-                        onBlur={e => {
-                          if (isReadOnly) return;
-                          if (String(e.target.value || "") === String(selectedProjectThread.internalNote || "")) return;
-                          updateInboxThread(selectedProjectThread.threadKey, { internalNote: e.target.value });
-                        }}
+                        onChange={e => setProjectThreadNoteDraft(e.target.value)}
                         placeholder="Leave an internal note for this thread..."
                         style={{ ...iS, width: "100%", minHeight: 78, resize: "vertical", fontSize: 12, background: "#fff8cc", borderColor: C.abd, ...lockStyle(isReadOnly) }}
                       />
@@ -5798,6 +5821,11 @@ Requirements:
                           ))}
                         </select>
                         {latestProjectInboundMessage && <span style={{ fontSize: 11, color: C.tt }}>Latest inbound: {rD(latestProjectInboundMessage.sentAt)}</span>}
+                        {selectedProjectThread.artist && (
+                          <button onClick={() => syncArtistInbox(selectedProjectThread.artist, selectedProjectThread.senderUserId)} disabled={syncingInbox || isReadOnly} style={{ padding: "6px 10px", borderRadius: 9, border: `1px solid ${C.bd}`, background: C.sf, color: C.ts, cursor: syncingInbox || isReadOnly ? "not-allowed" : "pointer", fontSize: 11, fontFamily: ft, ...lockStyle(syncingInbox || isReadOnly) }}>
+                            {syncingInbox ? "Syncing..." : "Sync This Artist"}
+                          </button>
+                        )}
                       </div>
                       <textarea value={gmailReplyDraft} readOnly={isReadOnly} onChange={e => setGmailReplyDraft(e.target.value)} placeholder="Write a reply here. Everyone in the project can see synced thread history." style={{ ...iS, width: "100%", minHeight: 120, resize: "vertical", fontSize: 12, ...lockStyle(isReadOnly) }} />
                       <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
