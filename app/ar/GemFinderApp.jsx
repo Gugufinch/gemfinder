@@ -5135,85 +5135,125 @@ Requirements:
       <Toast /><style>{css}</style>
 
       <div style={{ borderBottom: `1px solid ${C.bd}`, background: C.sf }}>
-        <div style={{ maxWidth: 1240, margin: "0 auto", padding: "16px 24px 14px" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 14 }}>
-            <div>
-              <button onClick={() => { setScreen("hub"); setShowQuickDrawer(false); setSearch(""); setGf("All"); setSf("all"); setPf("all"); }} style={{ fontSize: 11, color: C.ac, background: "none", border: "none", cursor: "pointer", fontFamily: ft, fontWeight: 600, padding: 0, marginBottom: 4 }}>← Projects</button>
-              <div style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-0.02em" }}>{proj.name}</div>
-              <div style={{ fontSize: 12, color: C.ts, marginTop: 4, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-                <span>{enriched.length} artists</span>
-                <span>{contactedCount} contacted</span>
-                <span>{stCounts.won} won</span>
-                <span>{stCounts.live || 0} live</span>
-                <span>{(proj.sendLog || []).length} sends logged</span>
-                <span>{dueSeqCount} follow-ups due</span>
-                {!!proj.archivedArtists?.length && <span>{proj.archivedArtists.length} archived</span>}
-                {!!proj.internalRoster?.names?.length && <span>{internalMatchCount} platform matches</span>}
-                <span style={{ fontSize: 11, color: C.tt }}>{authLabel}</span>
-                <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 999, border: `1px solid ${C.bd}`, background: C.sa, color: C.ts, textTransform: "uppercase" }}>
-                  {roleLabel}
-                </span>
-              </div>
-            </div>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-              <button disabled={isReadOnly} onClick={() => setShowDiscover(true)} style={{ ...actionBtn(true, "accent"), ...lockStyle(isReadOnly) }}>AI Discover</button>
-              <button disabled={isReadOnly} onClick={() => setShowAddArtist(true)} style={{ ...actionBtn(true, "good"), ...lockStyle(isReadOnly) }}>+ Artist</button>
-              <label style={{ ...actionBtn(false, "neutral"), ...lockStyle(isReadOnly) }}>
-                Import CSV
-                <input type="file" accept=".csv" ref={fr} onChange={importCSV} disabled={isReadOnly} />
-              </label>
-              <button onClick={() => setShowProjectMenu(true)} style={actionBtn(false, "neutral")}>More</button>
-              <DkBtn />
-            </div>
-          </div>
+        <div style={{ maxWidth: 1240, margin: "0 auto", padding: "18px 24px 14px" }}>
+          {(() => {
+            const projectModeMeta = {
+              work: {
+                eyebrow: "Workspace",
+                helper: `${operationalDayLabel} · updated ${queueUpdatedLabel} · resets 6:00 AM`,
+              },
+              inbox: {
+                eyebrow: "Inbox",
+                helper: `Shared project inbox · ${queueUpdatedLabel}`,
+              },
+              report: {
+                eyebrow: "Reporting",
+                helper: "Team reporting and pipeline review",
+              },
+            };
+            const activeModeMeta = projectModeMeta[projectMode] || projectModeMeta.work;
+            const summaryCards = [
+              { label: "Artists", value: enriched.length, tone: C.tx, bg: C.sa },
+              { label: "Contacted", value: contactedCount, tone: C.bu, bg: C.bb },
+              { label: "Live", value: stCounts.live || 0, tone: C.lv, bg: C.lvb },
+              { label: "Due", value: dueSeqCount, tone: C.ab, bg: C.abb },
+            ];
 
-          <div style={{ marginTop: 14, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-              <div style={{ display: "flex", gap: 4, background: C.sa, borderRadius: 12, padding: 4, border: `1px solid ${C.bd}` }}>
-                {[
-                  ["work", "Work"],
-                  ["inbox", `Inbox${projectInboxActionableCount ? ` (${projectInboxActionableCount})` : ""}`],
-                  ["report", "Report"],
-                ].map(([modeId, label]) => (
-                  <button
-                    key={modeId}
-                    onClick={() => setProjectMode(modeId)}
-                    style={{
-                      padding: "7px 14px",
-                      borderRadius: 10,
-                      border: "none",
-                      background: projectMode === modeId ? C.ac : "transparent",
-                      color: projectMode === modeId ? "#fff" : C.ts,
-                      cursor: "pointer",
-                      fontSize: 12,
-                      fontWeight: 700,
-                      fontFamily: ft,
-                    }}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-              <span style={{ fontSize: 11, color: C.tt }}>Scope</span>
-              <select value={workspaceUser} onChange={e => changeWorkspaceUser(e.target.value)} style={{ ...iS, padding: "6px 10px", fontSize: 12 }}>
-                <option value={ALL_USER_VIEW}>All</option>
-                <option value={UNASSIGNED_USER_VIEW}>Unassigned</option>
-                {(proj.teamUsers || DEFAULT_TEAM_USERS).map(u => <option key={u} value={u}>{u}</option>)}
-              </select>
-              <span style={{ fontSize: 11, color: C.tt }}>
-                {workspaceUser === ALL_USER_VIEW ? "Whole team" : workspaceUser === UNASSIGNED_USER_VIEW ? "Unassigned artists" : `${workspaceUser}'s view`}
-              </span>
-            </div>
-            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-              <span style={{ fontSize: 11, color: C.tt }}>
-                {projectMode === "work"
-                  ? `${operationalDayLabel} · updated ${queueUpdatedLabel} · resets 6:00 AM`
-                  : projectMode === "inbox"
-                    ? `Shared project inbox · ${queueUpdatedLabel}`
-                    : "Reporting and review"}
-              </span>
-            </div>
-          </div>
+            return (
+              <>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 18 }}>
+                  <div style={{ flex: "1 1 620px", minWidth: 0 }}>
+                    <button onClick={() => { setScreen("hub"); setShowQuickDrawer(false); setSearch(""); setGf("All"); setSf("all"); setPf("all"); }} style={{ fontSize: 11, color: C.ac, background: "none", border: "none", cursor: "pointer", fontFamily: ft, fontWeight: 600, padding: 0, marginBottom: 6 }}>← Projects</button>
+                    <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 2.2, color: C.ac, textTransform: "uppercase", marginBottom: 6 }}>{activeModeMeta.eyebrow}</div>
+                    <div style={{ fontSize: 24, fontWeight: 800, letterSpacing: "-0.03em" }}>{proj.name}</div>
+                    <div style={{ fontSize: 12, color: C.ts, marginTop: 6, lineHeight: 1.6, maxWidth: 720 }}>
+                      {proj.desc || "Shared outreach workspace for pipeline movement, inbox handling, and reporting."}
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(124px,1fr))", gap: 8, marginTop: 14, maxWidth: 760 }}>
+                      {summaryCards.map(card => (
+                        <div key={card.label} style={{ borderRadius: 12, border: `1px solid ${C.bd}`, background: card.bg, padding: "10px 12px" }}>
+                          <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 1.1, color: C.tt, marginBottom: 6 }}>{card.label}</div>
+                          <div style={{ fontSize: 22, fontWeight: 800, color: card.tone, lineHeight: 1 }}>{card.value}</div>
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginTop: 10, fontSize: 11, color: C.tt }}>
+                      <span>{(proj.sendLog || []).length} sends logged</span>
+                      {!!proj.archivedArtists?.length && <span>{proj.archivedArtists.length} archived</span>}
+                      {!!proj.internalRoster?.names?.length && <span>{internalMatchCount} platform matches</span>}
+                    </div>
+                  </div>
+
+                  <div style={{ flex: "0 1 420px", minWidth: 280, display: "grid", gap: 10, justifyItems: "end" }}>
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end", alignItems: "center" }}>
+                      <span style={{ fontSize: 11, color: C.tt, maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{authLabel}</span>
+                      <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 999, border: `1px solid ${C.bd}`, background: C.sa, color: C.ts, textTransform: "uppercase" }}>
+                        {roleLabel}
+                      </span>
+                    </div>
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                      {projectMode === "work" && !isReadOnly && (
+                        <>
+                          <button onClick={() => setShowDiscover(true)} style={{ ...actionBtn(true, "accent"), ...lockStyle(isReadOnly) }}>AI Discover</button>
+                          <button onClick={() => setShowAddArtist(true)} style={{ ...actionBtn(true, "good"), ...lockStyle(isReadOnly) }}>+ Artist</button>
+                          <label style={{ ...actionBtn(false, "neutral"), ...lockStyle(isReadOnly) }}>
+                            Import CSV
+                            <input type="file" accept=".csv" ref={fr} onChange={importCSV} disabled={isReadOnly} />
+                          </label>
+                        </>
+                      )}
+                      <button onClick={() => setShowProjectMenu(true)} style={actionBtn(false, "neutral")}>Project Tools</button>
+                      <DkBtn />
+                    </div>
+                  </div>
+                </div>
+
+                <div style={{ marginTop: 14, paddingTop: 12, borderTop: `1px solid ${C.bd}`, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                    <div style={{ display: "flex", gap: 4, background: C.sa, borderRadius: 12, padding: 4, border: `1px solid ${C.bd}` }}>
+                      {[
+                        ["work", "Work"],
+                        ["inbox", `Inbox${projectInboxActionableCount ? ` (${projectInboxActionableCount})` : ""}`],
+                        ["report", "Report"],
+                      ].map(([modeId, label]) => (
+                        <button
+                          key={modeId}
+                          onClick={() => setProjectMode(modeId)}
+                          style={{
+                            padding: "7px 14px",
+                            borderRadius: 10,
+                            border: "none",
+                            background: projectMode === modeId ? C.ac : "transparent",
+                            color: projectMode === modeId ? "#fff" : C.ts,
+                            cursor: "pointer",
+                            fontSize: 12,
+                            fontWeight: 700,
+                            fontFamily: ft,
+                          }}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", borderRadius: 12, border: `1px solid ${C.bd}`, background: C.sa }}>
+                      <span style={{ fontSize: 11, color: C.tt }}>Scope</span>
+                      <select value={workspaceUser} onChange={e => changeWorkspaceUser(e.target.value)} style={{ ...iS, padding: "5px 10px", fontSize: 12, minWidth: 150 }}>
+                        <option value={ALL_USER_VIEW}>All</option>
+                        <option value={UNASSIGNED_USER_VIEW}>Unassigned</option>
+                        {(proj.teamUsers || DEFAULT_TEAM_USERS).map(u => <option key={u} value={u}>{u}</option>)}
+                      </select>
+                      <span style={{ fontSize: 11, color: C.tt }}>
+                        {workspaceUser === ALL_USER_VIEW ? "Whole team" : workspaceUser === UNASSIGNED_USER_VIEW ? "Unassigned artists" : `${workspaceUser}'s view`}
+                      </span>
+                    </div>
+                  </div>
+                  <div style={{ fontSize: 11, color: C.tt }}>
+                    {activeModeMeta.helper}
+                  </div>
+                </div>
+              </>
+            );
+          })()}
         </div>
       </div>
 
