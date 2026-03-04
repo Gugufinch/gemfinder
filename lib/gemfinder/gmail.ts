@@ -419,6 +419,9 @@ export function threadToStoreRecords(input: {
     threadOwnerUserId: '',
     status: 'open',
     nextFollowUpAt: '',
+    internalNote: '',
+    internalNoteUpdatedAt: '',
+    internalNoteUpdatedBy: '',
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };

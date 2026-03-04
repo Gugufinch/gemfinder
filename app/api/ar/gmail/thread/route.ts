@@ -8,6 +8,7 @@ const schema = z.object({
   threadOwnerUserId: z.string().max(120).optional(),
   status: z.enum(['open', 'waiting', 'closed']).optional(),
   nextFollowUpAt: z.string().max(40).optional(),
+  internalNote: z.string().max(4000).optional(),
 });
 
 export async function PATCH(req: NextRequest) {
@@ -30,7 +31,8 @@ export async function PATCH(req: NextRequest) {
     threadOwnerUserId: parsed.data.threadOwnerUserId,
     status: parsed.data.status,
     nextFollowUpAt: parsed.data.nextFollowUpAt,
-  });
+    internalNote: parsed.data.internalNote,
+  }, actor.email);
   if (!thread) {
     return NextResponse.json({ error: 'Thread not found' }, { status: 404 });
   }

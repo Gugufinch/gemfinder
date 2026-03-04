@@ -77,6 +77,9 @@ export interface GmailThreadRecord {
   threadOwnerUserId: string;
   status: 'open' | 'waiting' | 'closed';
   nextFollowUpAt: string;
+  internalNote: string;
+  internalNoteUpdatedAt: string;
+  internalNoteUpdatedBy: string;
   createdAt: string;
   updatedAt: string;
 }

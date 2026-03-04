@@ -62,6 +62,9 @@ create table if not exists gemfinder_gmail_threads (
   thread_owner_user_id text not null default '',
   status text not null default 'open',
   next_follow_up_at timestamptz,
+  internal_note text not null default '',
+  internal_note_updated_at timestamptz,
+  internal_note_updated_by text not null default '',
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -80,6 +83,9 @@ alter table gemfinder_gmail_threads add column if not exists last_message_direct
 alter table gemfinder_gmail_threads add column if not exists thread_owner_user_id text not null default '';
 alter table gemfinder_gmail_threads add column if not exists status text not null default 'open';
 alter table gemfinder_gmail_threads add column if not exists next_follow_up_at timestamptz;
+alter table gemfinder_gmail_threads add column if not exists internal_note text not null default '';
+alter table gemfinder_gmail_threads add column if not exists internal_note_updated_at timestamptz;
+alter table gemfinder_gmail_threads add column if not exists internal_note_updated_by text not null default '';
 
 create table if not exists gemfinder_gmail_messages (
   message_key text primary key,
@@ -244,6 +250,9 @@ function normalizeThread(value: Partial<GmailThreadRecord>): GmailThreadRecord |
     threadOwnerUserId: String(value.threadOwnerUserId || ''),
     status: value.status === 'waiting' || value.status === 'closed' ? value.status : 'open',
     nextFollowUpAt: normalizeIso(value.nextFollowUpAt),
+    internalNote: String(value.internalNote || ''),
+    internalNoteUpdatedAt: normalizeIso(value.internalNoteUpdatedAt),
+    internalNoteUpdatedBy: String(value.internalNoteUpdatedBy || ''),
     createdAt: normalizeIso(value.createdAt) || now,
     updatedAt: normalizeIso(value.updatedAt) || now,
   };
@@ -361,6 +370,9 @@ function mapDbThread(row: Record<string, unknown>): GmailThreadRecord {
     threadOwnerUserId: String(row.thread_owner_user_id || ''),
     status: row.status === 'waiting' || row.status === 'closed' ? row.status : 'open',
     nextFollowUpAt: normalizeIso(row.next_follow_up_at),
+    internalNote: String(row.internal_note || ''),
+    internalNoteUpdatedAt: normalizeIso(row.internal_note_updated_at),
+    internalNoteUpdatedBy: String(row.internal_note_updated_by || ''),
     createdAt: normalizeIso(row.created_at) || new Date().toISOString(),
     updatedAt: normalizeIso(row.updated_at) || new Date().toISOString(),
   };
@@ -613,6 +625,9 @@ export async function upsertArtistInbox(
       threadOwnerUserId: normalizedThread.threadOwnerUserId || existingThread?.threadOwnerUserId || '',
       status: normalizedThread.status || existingThread?.status || 'open',
       nextFollowUpAt: normalizedThread.nextFollowUpAt || existingThread?.nextFollowUpAt || '',
+      internalNote: normalizedThread.internalNote || existingThread?.internalNote || '',
+      internalNoteUpdatedAt: normalizedThread.internalNoteUpdatedAt || existingThread?.internalNoteUpdatedAt || '',
+      internalNoteUpdatedBy: normalizedThread.internalNoteUpdatedBy || existingThread?.internalNoteUpdatedBy || '',
     };
     const nextThreads = local.threads.filter((item) => item.threadKey !== normalizedThread.threadKey);
     nextThreads.push(mergedThread);
@@ -636,9 +651,9 @@ export async function upsertArtistInbox(
     `insert into gemfinder_gmail_threads (
       thread_key, project_id, artist_name, artist_key, provider, external_thread_id, sender_user_id, sender_gmail_email,
       subject, participants, counterparty_email, snippet, last_message_at, last_inbound_at, last_outbound_at,
-      last_message_direction, thread_owner_user_id, status, next_follow_up_at, created_at, updated_at
+      last_message_direction, thread_owner_user_id, status, next_follow_up_at, internal_note, internal_note_updated_at, internal_note_updated_by, created_at, updated_at
     )
-    values ($1, $2, $3, $4, 'gmail', $5, $6, $7, $8, $9::jsonb, $10, $11, $12::timestamptz, $13::timestamptz, $14::timestamptz, $15, $16, $17, $18::timestamptz, $19::timestamptz, $20::timestamptz)
+    values ($1, $2, $3, $4, 'gmail', $5, $6, $7, $8, $9::jsonb, $10, $11, $12::timestamptz, $13::timestamptz, $14::timestamptz, $15, $16, $17, $18::timestamptz, $19, $20::timestamptz, $21, $22::timestamptz, $23::timestamptz)
     on conflict (thread_key)
     do update set
       artist_key = excluded.artist_key,
@@ -670,6 +685,9 @@ export async function upsertArtistInbox(
       normalizedThread.threadOwnerUserId,
       normalizedThread.status,
       normalizedThread.nextFollowUpAt || null,
+      normalizedThread.internalNote,
+      normalizedThread.internalNoteUpdatedAt || null,
+      normalizedThread.internalNoteUpdatedBy,
       normalizedThread.createdAt,
       normalizedThread.updatedAt,
     ],
@@ -729,9 +747,12 @@ export async function upsertArtistInbox(
 
 export async function updateGmailThreadWorkflow(
   threadKey: string,
-  changes: Partial<Pick<GmailThreadRecord, 'threadOwnerUserId' | 'status' | 'nextFollowUpAt'>>,
+  changes: Partial<Pick<GmailThreadRecord, 'threadOwnerUserId' | 'status' | 'nextFollowUpAt' | 'internalNote'>>,
+  actorLabel = '',
 ): Promise<GmailThreadRecord | null> {
   if (!threadKey) return null;
+  const noteTouched = changes.internalNote !== undefined;
+  const now = new Date().toISOString();
 
   if (!hasDatabase()) {
     const local = await readLocalStore();
@@ -742,7 +763,10 @@ export async function updateGmailThreadWorkflow(
       threadOwnerUserId: changes.threadOwnerUserId !== undefined ? String(changes.threadOwnerUserId || '') : existing.threadOwnerUserId,
       status: changes.status !== undefined ? changes.status : existing.status,
       nextFollowUpAt: changes.nextFollowUpAt !== undefined ? changes.nextFollowUpAt : existing.nextFollowUpAt,
-      updatedAt: new Date().toISOString(),
+      internalNote: noteTouched ? String(changes.internalNote || '') : existing.internalNote,
+      internalNoteUpdatedAt: noteTouched ? now : existing.internalNoteUpdatedAt,
+      internalNoteUpdatedBy: noteTouched ? actorLabel : existing.internalNoteUpdatedBy,
+      updatedAt: now,
     });
     if (!updated) return null;
     await writeLocalStore({
@@ -753,19 +777,40 @@ export async function updateGmailThreadWorkflow(
   }
 
   await ensureSchema();
-  const res = await getPool().query(
+  const db = getPool();
+  const existingRes = await db.query('select * from gemfinder_gmail_threads where thread_key = $1 limit 1', [threadKey]);
+  const existing = existingRes.rows[0] ? mapDbThread(existingRes.rows[0]) : null;
+  if (!existing) return null;
+  const merged = normalizeThread({
+    ...existing,
+    threadOwnerUserId: changes.threadOwnerUserId !== undefined ? String(changes.threadOwnerUserId || '') : existing.threadOwnerUserId,
+    status: changes.status !== undefined ? changes.status : existing.status,
+    nextFollowUpAt: changes.nextFollowUpAt !== undefined ? changes.nextFollowUpAt : existing.nextFollowUpAt,
+    internalNote: noteTouched ? String(changes.internalNote || '') : existing.internalNote,
+    internalNoteUpdatedAt: noteTouched ? now : existing.internalNoteUpdatedAt,
+    internalNoteUpdatedBy: noteTouched ? actorLabel : existing.internalNoteUpdatedBy,
+    updatedAt: now,
+  });
+  if (!merged) return null;
+  const res = await db.query(
     `update gemfinder_gmail_threads
       set thread_owner_user_id = $2,
           status = $3,
           next_follow_up_at = $4::timestamptz,
+          internal_note = $5,
+          internal_note_updated_at = $6::timestamptz,
+          internal_note_updated_by = $7,
           updated_at = now()
       where thread_key = $1
       returning *`,
     [
       threadKey,
-      String(changes.threadOwnerUserId || ''),
-      changes.status === 'waiting' || changes.status === 'closed' ? changes.status : 'open',
-      changes.nextFollowUpAt ? changes.nextFollowUpAt : null,
+      merged.threadOwnerUserId,
+      merged.status,
+      merged.nextFollowUpAt || null,
+      merged.internalNote,
+      merged.internalNoteUpdatedAt || null,
+      merged.internalNoteUpdatedBy,
     ],
   );
   return res.rows[0] ? mapDbThread(res.rows[0]) : null;

@@ -320,6 +320,11 @@ function threadNeedsReply(thread) {
   if (!thread.lastOutboundAt) return true;
   return String(thread.lastOutboundAt) < String(thread.lastInboundAt);
 }
+function threadIsActionable(thread) {
+  if (!thread) return false;
+  if (String(thread.status || "open") !== "open") return false;
+  return threadNeedsReply(thread);
+}
 function matchesInboundWindow(thread, days, now = new Date()) {
   if (!thread?.lastInboundAt || days === "all") return true;
   const parsedDays = Number(days);
@@ -2524,11 +2529,13 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     setBatch(false);
   };
 
-  const runReplyClassifier = async artist => {
+  const runReplyClassifier = async (artist, replyTextOverride = "") => {
     if (!requireEditor()) return;
-    if (!replyInput.trim()) { flash("Paste a reply first", "err"); return; }
+    const sourceText = String(replyTextOverride || replyInput || "").trim();
+    if (!sourceText) { flash("No reply text available yet", "err"); return; }
+    setReplyInput(sourceText);
     setReplyLoading(true);
-    const res = await classifyReplyText(artist, replyInput.trim(), intel?.ok ? intel.text : "", currentAiProvider, getStoredAiKey(currentAiProvider), taskModel("reply"));
+    const res = await classifyReplyText(artist, sourceText, intel?.ok ? intel.text : "", currentAiProvider, getStoredAiKey(currentAiProvider), taskModel("reply"));
     setReplyLoading(false);
     if (!res.ok) { flash(res.text || "Reply analysis failed", "err"); return; }
     const parsed = parseReplyIntel(res.text);
@@ -2551,13 +2558,14 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     await setSt(artist.n, next);
   };
 
-  const runFollowUpWriter = async artist => {
+  const runFollowUpWriter = async (artist, replyTextOverride = "") => {
     if (!requireEditor()) return;
     const sends = (proj?.sendLog || []).filter(s => s.artist === artist.n);
     const latestSend = sends.length ? sends[sends.length - 1] : null;
     const preferredChannel = latestSend?.channel || (artist.e ? "email" : "dm");
     const history = sends.slice(-4).map(s => `${new Date(s.sentAt).toLocaleDateString()}: ${s.channel.toUpperCase()} via ${s.provider} v${s.variantId || "NA"}`).join("\n");
-    const replyText = replyInput.trim();
+    const replyText = String(replyTextOverride || replyInput || "").trim();
+    if (replyText) setReplyInput(replyText);
     const context = [
       `Current stage: ${proj?.pipeline?.[artist.n]?.stage || "prospect"}`,
       `Owner: ${proj?.assignments?.[artist.n] || "Unassigned"}`,
@@ -3852,6 +3860,10 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     inboxInboundDays,
     clockNow,
   ]);
+  const projectInboxActionableCount = useMemo(
+    () => (projectInbox.threads || []).filter(threadIsActionable).length,
+    [projectInbox.threads],
+  );
   const selectedProjectThread = useMemo(
     () => projectInboxThreads.find(item => item.threadKey === selectedProjectThreadKey) || projectInboxThreads[0] || null,
     [projectInboxThreads, selectedProjectThreadKey],
@@ -3875,6 +3887,16 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       setSelectedProjectThreadKey(selectedProjectThread.threadKey);
     }
   }, [projectMode, projectInboxThreads, selectedProjectThread, selectedProjectThreadKey]);
+  useEffect(() => {
+    setReplyInput("");
+    setFollowUpDraft("");
+    setGmailReplyDraft("");
+    if (screen === "detail" && selA && proj) {
+      setReplyResult(proj.replyIntel?.[selA.n] || null);
+      return;
+    }
+    setReplyResult(null);
+  }, [selectedThreadKey, selectedProjectThreadKey]);
   const handleKanbanDrop = async (stageId, droppedName = "") => {
     if (!canEdit) {
       flash("Viewer role is read-only", "err");
@@ -4080,6 +4102,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     const sendHistory = (proj?.sendLog || []).filter(s => s.artist === a.n).slice(-8).reverse();
     const connectedGmailAccounts = availableGmailConnections;
     const inboxThreads = (artistInbox.threads || []).slice().sort((x, y) => (y.lastMessageAt || "").localeCompare(x.lastMessageAt || ""));
+    const artistInboxActionableCount = inboxThreads.filter(threadIsActionable).length;
     const selectedThread = inboxThreads.find((item) => item.threadKey === selectedThreadKey) || inboxThreads[0] || null;
     const selectedThreadMessages = selectedThread
       ? (artistInbox.messages || []).filter((item) => item.threadKey === selectedThread.threadKey).sort((x, y) => (x.sentAt || "").localeCompare(y.sentAt || ""))
@@ -4235,7 +4258,7 @@ Requirements:
                 {[
                   ["overview", "Overview"],
                   ["outreach", "Outreach"],
-                  ["inbox", `Inbox${inboxThreads.length ? ` (${inboxThreads.length})` : ""}`],
+                  ["inbox", `Inbox${artistInboxActionableCount ? ` (${artistInboxActionableCount})` : ""}`],
                   ["activity", "Activity"],
                 ].map(([id, label]) => (
                   <button
@@ -4638,7 +4661,11 @@ Requirements:
                             <div style={{ fontSize: 12, fontWeight: 700, color: C.tx, marginBottom: 4 }}>{thread.subject || "No subject"}</div>
                             <div style={{ fontSize: 11, color: C.ts, marginBottom: 4 }}>{thread.senderGmailEmail}</div>
                             <div style={{ fontSize: 11, color: C.tt, lineHeight: 1.5 }}>{thread.snippet || "No preview yet."}</div>
-                            <div style={{ fontSize: 10, color: C.tt, marginTop: 6 }}>{rD(thread.lastMessageAt)}</div>
+                            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
+                              <span style={{ fontSize: 10, color: C.tt }}>{rD(thread.lastMessageAt)}</span>
+                              {threadIsActionable(thread) && <span style={{ ...mkP(true, C.rd, C.rb), cursor: "default", fontSize: 10, padding: "1px 8px" }}>Needs reply</span>}
+                              {thread.internalNote && <span style={{ ...mkP(true, C.ab, C.abb), cursor: "default", fontSize: 10, padding: "1px 8px" }}>Team note</span>}
+                            </div>
                           </button>
                         ))}
                       </div>
@@ -4650,10 +4677,63 @@ Requirements:
                   {selectedThread && (
                     <div style={{ border: `1px solid ${C.bd}`, borderRadius: 12, background: C.sf, overflow: "hidden" }}>
                       <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.bd}`, background: C.sa }}>
-                        <div style={{ fontSize: 14, fontWeight: 700 }}>{selectedThread.subject || "No subject"}</div>
-                        <div style={{ fontSize: 11, color: C.tt, marginTop: 3 }}>
-                          Mailbox: {selectedThread.senderGmailEmail} · {selectedThreadMessages.length} message{selectedThreadMessages.length === 1 ? "" : "s"}
+                        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "flex-start" }}>
+                          <div>
+                            <div style={{ fontSize: 14, fontWeight: 700 }}>{selectedThread.subject || "No subject"}</div>
+                            <div style={{ fontSize: 11, color: C.tt, marginTop: 3 }}>
+                              Mailbox: {selectedThread.senderGmailEmail} · {selectedThreadMessages.length} message{selectedThreadMessages.length === 1 ? "" : "s"}
+                            </div>
+                          </div>
+                          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                            <select
+                              value={selectedThread.status || "open"}
+                              disabled={threadWorkflowSaving || isReadOnly}
+                              onChange={e => updateInboxThread(selectedThread.threadKey, { status: e.target.value })}
+                              style={{ ...iS, padding: "6px 10px", fontSize: 11, minWidth: 120, ...lockStyle(threadWorkflowSaving || isReadOnly) }}
+                            >
+                              <option value="open">Open</option>
+                              <option value="waiting">Waiting</option>
+                              <option value="closed">Closed</option>
+                            </select>
+                            <button
+                              onClick={() => updateInboxThread(selectedThread.threadKey, { status: "closed" })}
+                              disabled={threadWorkflowSaving || isReadOnly || selectedThread.status === "closed"}
+                              style={{ padding: "6px 10px", borderRadius: 9, border: `1px solid ${C.bd}`, background: C.sf, color: C.ts, cursor: threadWorkflowSaving || isReadOnly || selectedThread.status === "closed" ? "not-allowed" : "pointer", fontSize: 11, fontFamily: ft, ...lockStyle(threadWorkflowSaving || isReadOnly || selectedThread.status === "closed") }}
+                            >
+                              Mark Done
+                            </button>
+                          </div>
                         </div>
+                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
+                          <span style={{ ...mkP(true, threadIsActionable(selectedThread) ? C.rd : C.ts, threadIsActionable(selectedThread) ? C.rb : C.sa), cursor: "default", fontSize: 10, padding: "2px 8px" }}>
+                            {threadIsActionable(selectedThread) ? "Needs reply" : "No reply needed"}
+                          </span>
+                          <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default", fontSize: 10, padding: "2px 8px" }}>
+                            Inbox badge counts open threads that still need a reply
+                          </span>
+                        </div>
+                      </div>
+
+                      <div style={{ padding: 16, borderBottom: `1px solid ${C.bd}`, background: C.abb }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: C.ab, marginBottom: 6 }}>Internal team note</div>
+                        <div style={{ fontSize: 11, color: C.ts, marginBottom: 8 }}>Yellow note only for GEMFINDER. This never sends to the contact.</div>
+                        <textarea
+                          key={`artist-thread-note-${selectedThread.threadKey}`}
+                          defaultValue={selectedThread.internalNote || ""}
+                          readOnly={isReadOnly}
+                          onBlur={e => {
+                            if (isReadOnly) return;
+                            if (String(e.target.value || "") === String(selectedThread.internalNote || "")) return;
+                            updateInboxThread(selectedThread.threadKey, { internalNote: e.target.value });
+                          }}
+                          placeholder="Leave an internal note for the team..."
+                          style={{ ...iS, width: "100%", minHeight: 78, resize: "vertical", fontSize: 12, background: "#fff8cc", borderColor: C.abd, ...lockStyle(isReadOnly) }}
+                        />
+                        {selectedThread.internalNoteUpdatedAt && (
+                          <div style={{ fontSize: 10, color: C.tt, marginTop: 6 }}>
+                            Updated {rD(selectedThread.internalNoteUpdatedAt)}{selectedThread.internalNoteUpdatedBy ? ` by ${selectedThread.internalNoteUpdatedBy}` : ""}
+                          </div>
+                        )}
                       </div>
 
                       <div style={{ maxHeight: 320, overflowY: "auto", padding: 16, display: "grid", gap: 10 }}>
@@ -4671,7 +4751,7 @@ Requirements:
                             {message.direction === "inbound" && (
                               <div style={{ marginTop: 8 }}>
                                 <button onClick={() => setReplyInput(message.bodyText || message.snippet || "")} style={{ padding: "5px 10px", borderRadius: 8, border: `1px solid ${C.ac}`, background: C.al, color: C.ac, cursor: "pointer", fontSize: 11, fontFamily: ft }}>
-                                  Use for Reply Intel
+                                  Use as AI Context
                                 </button>
                               </div>
                             )}
@@ -4705,12 +4785,56 @@ Requirements:
                           <button onClick={() => latestInboundMessage && setReplyInput(latestInboundMessage.bodyText || latestInboundMessage.snippet || "")} disabled={!latestInboundMessage} style={{ padding: "7px 12px", borderRadius: 10, border: `1px solid ${C.bd}`, background: "transparent", color: C.ts, cursor: latestInboundMessage ? "pointer" : "not-allowed", fontSize: 11, fontFamily: ft, opacity: latestInboundMessage ? 1 : 0.55 }}>
                             Use Latest Inbound
                           </button>
+                          <button onClick={() => runReplyClassifier(a, latestInboundMessage?.bodyText || latestInboundMessage?.snippet || "")} disabled={!postSendUnlocked || replyLoading || isReadOnly} style={{ padding: "7px 12px", borderRadius: 10, border: `1px solid ${C.ac}`, background: C.al, color: C.ac, cursor: !postSendUnlocked || replyLoading || isReadOnly ? "not-allowed" : "pointer", fontSize: 11, fontFamily: ft, opacity: !postSendUnlocked ? 0.55 : 1, ...lockStyle(!postSendUnlocked || replyLoading || isReadOnly) }}>
+                            {replyLoading ? "Analyzing..." : "Analyze Reply"}
+                          </button>
+                          <button onClick={() => runFollowUpWriter(a, latestInboundMessage?.bodyText || latestInboundMessage?.snippet || "")} disabled={!postSendUnlocked || followUpLoading || isReadOnly} style={{ padding: "7px 12px", borderRadius: 10, border: `1px solid ${C.pr}`, background: C.pb, color: C.pr, cursor: !postSendUnlocked || followUpLoading || isReadOnly ? "not-allowed" : "pointer", fontSize: 11, fontFamily: ft, opacity: !postSendUnlocked ? 0.55 : 1, ...lockStyle(!postSendUnlocked || followUpLoading || isReadOnly) }}>
+                            {followUpLoading ? "Generating..." : "AI Follow-up"}
+                          </button>
                           {replyResult?.draftResponse && (
                             <button onClick={() => setGmailReplyDraft(replyResult.draftResponse)} style={{ padding: "7px 12px", borderRadius: 10, border: `1px solid ${C.pr}`, background: C.pb, color: C.pr, cursor: "pointer", fontSize: 11, fontFamily: ft }}>
                               Load AI Reply Draft
                             </button>
                           )}
+                          {followUpDraft && (
+                            <button onClick={() => setGmailReplyDraft(followUpDraft)} style={{ padding: "7px 12px", borderRadius: 10, border: `1px solid ${C.abd}`, background: C.abb, color: C.ab, cursor: "pointer", fontSize: 11, fontFamily: ft }}>
+                              Load AI Follow-up
+                            </button>
+                          )}
                         </div>
+                        {replyResult && (
+                          <div style={{ marginTop: 10, padding: "10px 12px", borderRadius: 10, border: `1px solid ${C.bd}`, background: C.sf }}>
+                            <div style={{ fontSize: 11, color: C.ts }}>
+                              <strong style={{ color: C.tx }}>Intent:</strong> {replyResult.intent || "unknown"} · <strong style={{ color: C.tx }}>Sentiment:</strong> {replyResult.sentiment || "unknown"} · <strong style={{ color: C.tx }}>Urgency:</strong> {replyResult.urgency || "unknown"}
+                            </div>
+                            <div style={{ marginTop: 4, fontSize: 11, color: C.ts }}>
+                              <strong style={{ color: C.tx }}>Recommended:</strong> {replyResult.nextAction || "No recommendation"}
+                            </div>
+                            <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+                              {replyResult.nextStage && SM[replyResult.nextStage] && (
+                                <button disabled={isReadOnly} onClick={() => applyReplySuggestedStage(a)} style={{ padding: "5px 10px", borderRadius: 8, border: `1px solid ${C.bd}`, background: "transparent", color: C.ts, cursor: isReadOnly ? "not-allowed" : "pointer", fontSize: 11, fontFamily: ft, ...lockStyle(isReadOnly) }}>
+                                  Apply Stage: {SM[replyResult.nextStage].label}
+                                </button>
+                              )}
+                              {replyResult.draftResponse && (
+                                <button onClick={() => cp(replyResult.draftResponse, "reply_response")} style={{ padding: "5px 10px", borderRadius: 8, border: `1px solid ${C.bd}`, background: "transparent", color: C.ts, cursor: "pointer", fontSize: 11, fontFamily: ft }}>
+                                  Copy AI Reply
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        )}
+                        {followUpDraft && (
+                          <div style={{ marginTop: 10, padding: "10px 12px", borderRadius: 10, border: `1px solid ${C.abd}`, background: C.abb }}>
+                            <div style={{ fontSize: 11, fontWeight: 700, color: C.ab, marginBottom: 4 }}>AI follow-up draft</div>
+                            <div style={{ fontSize: 12, color: C.ts, whiteSpace: "pre-wrap", lineHeight: 1.55 }}>{compactText(followUpDraft, 340)}</div>
+                            <div style={{ marginTop: 8 }}>
+                              <button onClick={() => cp(followUpDraft, "followup")} style={{ padding: "5px 10px", borderRadius: 8, border: `1px solid ${C.abd}`, background: "transparent", color: C.ab, cursor: "pointer", fontSize: 11, fontFamily: ft }}>
+                                Copy Follow-up
+                              </button>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     </div>
                   )}
@@ -4718,53 +4842,6 @@ Requirements:
               )}
             </div>
           )}
-
-          {detailTab === "inbox" && (postSendUnlocked ? (
-            <>
-              <div style={{ ...cS, padding: "20px 24px", marginBottom: 16 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
-                  <div>
-                    <div style={{ fontSize: 14, fontWeight: 700 }}>💬 Reply Intelligence</div>
-                    <div style={{ fontSize: 11, color: C.tt }}>Model: {modelLabel(taskModel("reply"))} · {currentAiProvider === "openai" ? "OpenAI" : "Anthropic"}</div>
-                  </div>
-                  <button onClick={() => runReplyClassifier(a)} disabled={replyLoading || isReadOnly} style={{ padding: "6px 14px", borderRadius: 9, border: `1.5px solid ${C.ac}`, background: replyLoading ? C.sa : C.al, color: C.ac, cursor: replyLoading ? "wait" : isReadOnly ? "not-allowed" : "pointer", fontSize: 11, fontWeight: 600, fontFamily: ft, ...lockStyle(isReadOnly) }}>{replyLoading ? "Analyzing..." : "Analyze Reply"}</button>
-                </div>
-                <textarea value={replyInput} readOnly={isReadOnly} onChange={e => setReplyInput(e.target.value)} placeholder="Paste artist reply text here..." style={{ ...iS, width: "100%", minHeight: 90, resize: "vertical", fontSize: 12, marginBottom: 8, ...lockStyle(isReadOnly) }} />
-                {replyResult && (
-                  <div style={{ padding: "10px 12px", borderRadius: 10, background: C.sa, border: `1px solid ${C.bd}`, fontSize: 12, color: C.ts }}>
-                    <div><strong style={{ color: C.tx }}>Intent:</strong> {replyResult.intent || "unknown"} | <strong style={{ color: C.tx }}>Sentiment:</strong> {replyResult.sentiment || "unknown"} | <strong style={{ color: C.tx }}>Urgency:</strong> {replyResult.urgency || "unknown"}</div>
-                    <div style={{ marginTop: 4 }}><strong style={{ color: C.tx }}>Recommended:</strong> {replyResult.nextAction || "No recommendation"}</div>
-                    {replyResult.draftResponse && (
-                      <div style={{ marginTop: 8 }}>
-                        <div style={{ fontSize: 11, color: C.tt, marginBottom: 4 }}>Suggested Response</div>
-                        <textarea value={replyResult.draftResponse} readOnly={isReadOnly} onChange={e => setReplyResult({ ...replyResult, draftResponse: e.target.value })} style={{ ...iS, width: "100%", minHeight: 80, fontSize: 12, resize: "vertical", ...lockStyle(isReadOnly) }} />
-                      </div>
-                    )}
-                    <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
-                      {replyResult.nextStage && SM[replyResult.nextStage] && <button disabled={isReadOnly} onClick={() => applyReplySuggestedStage(a)} style={{ padding: "5px 10px", borderRadius: 8, border: `1px solid ${C.bd}`, background: "transparent", color: C.ts, cursor: isReadOnly ? "not-allowed" : "pointer", fontSize: 11, fontFamily: ft, ...lockStyle(isReadOnly) }}>Apply Stage: {SM[replyResult.nextStage].label}</button>}
-                      {replyResult.draftResponse && <button onClick={() => cp(replyResult.draftResponse, "reply_response")} style={{ padding: "5px 10px", borderRadius: 8, border: `1px solid ${C.bd}`, background: "transparent", color: C.ts, cursor: "pointer", fontSize: 11, fontFamily: ft }}>Copy Response</button>}
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              <div style={{ ...cS, padding: "20px 24px", marginBottom: 16 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-                  <div>
-                    <div style={{ fontSize: 14, fontWeight: 700 }}>⏭ Auto Follow-up Writer</div>
-                    <div style={{ fontSize: 11, color: C.tt }}>Model: {modelLabel(taskModel("followup"))} · {currentAiProvider === "openai" ? "OpenAI" : "Anthropic"}</div>
-                  </div>
-                  <button onClick={() => runFollowUpWriter(a)} disabled={followUpLoading || isReadOnly} style={{ padding: "6px 14px", borderRadius: 9, border: `1.5px solid ${C.pr}`, background: followUpLoading ? C.sa : C.pb, color: C.pr, cursor: followUpLoading ? "wait" : isReadOnly ? "not-allowed" : "pointer", fontSize: 11, fontWeight: 600, fontFamily: ft, ...lockStyle(isReadOnly) }}>{followUpLoading ? "Generating..." : "Generate Follow-up"}</button>
-                </div>
-                <textarea value={followUpDraft} readOnly={isReadOnly} onChange={e => setFollowUpDraft(e.target.value)} placeholder="Generated follow-up draft will appear here..." style={{ ...iS, width: "100%", minHeight: 95, resize: "vertical", fontSize: 12, ...lockStyle(isReadOnly) }} />
-                {followUpDraft && <div style={{ marginTop: 8 }}><button onClick={() => cp(followUpDraft, "followup")} style={{ padding: "6px 10px", borderRadius: 8, border: `1px solid ${C.bd}`, background: "transparent", color: C.ts, cursor: "pointer", fontSize: 11, fontFamily: ft }}>Copy Follow-up</button></div>}
-              </div>
-            </>
-          ) : (
-            <div style={{ ...cS, padding: "14px 16px", marginBottom: 16, fontSize: 12, color: C.ts }}>
-              Reply intelligence and follow-up writer unlock once stage is <strong style={{ color: C.tx }}>Sent</strong> or later.
-            </div>
-          ))}
 
           {detailTab === "activity" && <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
             <div style={{ ...cS, padding: "16px 20px" }}>
@@ -5002,8 +5079,8 @@ Requirements:
                       Open Inbox
                     </button>
                     {latestArtistInboundMessage && (
-                      <button onClick={() => setReplyInput(latestArtistInboundMessage.bodyText || latestArtistInboundMessage.snippet || "")} style={{ ...actionBtn(true, "accent") }}>
-                        Use in Reply Intel
+                      <button onClick={() => { setDetailTab("inbox"); setReplyInput(latestArtistInboundMessage.bodyText || latestArtistInboundMessage.snippet || ""); }} style={{ ...actionBtn(true, "accent") }}>
+                        Load Reply Context
                       </button>
                     )}
                   </div>
@@ -5076,7 +5153,7 @@ Requirements:
               <div style={{ display: "flex", gap: 4, background: C.sa, borderRadius: 12, padding: 4, border: `1px solid ${C.bd}` }}>
                 {[
                   ["work", "Work"],
-                  ["inbox", `Inbox${projectInboxThreads.length ? ` (${projectInboxThreads.length})` : ""}`],
+                  ["inbox", `Inbox${projectInboxActionableCount ? ` (${projectInboxActionableCount})` : ""}`],
                   ["report", "Report"],
                 ].map(([modeId, label]) => (
                   <button
@@ -5567,6 +5644,7 @@ Requirements:
                             {thread.status}
                           </span>
                           {thread.needsReply && <span style={{ ...mkP(true, C.rd, C.rb), cursor: "default", fontSize: 10, padding: "2px 8px" }}>Needs reply</span>}
+                          {thread.internalNote && <span style={{ ...mkP(true, C.ab, C.abb), cursor: "default", fontSize: 10, padding: "2px 8px" }}>Team note</span>}
                         </div>
                         <div style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 10, color: C.tt, flexWrap: "wrap" }}>
                           <span>{thread.mailboxLabel}</span>
@@ -5605,6 +5683,9 @@ Requirements:
                         </span>
                         <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>
                           Next follow-up: {selectedProjectThread.artist?.followUp ? sD(selectedProjectThread.artist.followUp) : "Not set"}
+                        </span>
+                        <span style={{ ...mkP(true, threadIsActionable(selectedProjectThread) ? C.rd : C.ts, threadIsActionable(selectedProjectThread) ? C.rb : C.sa), cursor: "default" }}>
+                          {threadIsActionable(selectedProjectThread) ? "Needs reply" : "No reply needed"}
                         </span>
                       </div>
                     </div>
@@ -5649,6 +5730,37 @@ Requirements:
                       </label>
                     </div>
 
+                    <div style={{ padding: 16, borderBottom: `1px solid ${C.bd}`, background: C.abb }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 6 }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: C.ab }}>Internal team note</div>
+                        <button
+                          onClick={() => updateInboxThread(selectedProjectThread.threadKey, { status: "closed" })}
+                          disabled={threadWorkflowSaving || isReadOnly || selectedProjectThread.status === "closed"}
+                          style={{ padding: "6px 10px", borderRadius: 9, border: `1px solid ${C.bd}`, background: C.sf, color: C.ts, cursor: threadWorkflowSaving || isReadOnly || selectedProjectThread.status === "closed" ? "not-allowed" : "pointer", fontSize: 11, fontFamily: ft, ...lockStyle(threadWorkflowSaving || isReadOnly || selectedProjectThread.status === "closed") }}
+                        >
+                          Mark Done
+                        </button>
+                      </div>
+                      <div style={{ fontSize: 11, color: C.ts, marginBottom: 8 }}>Yellow note only for the team. This never sends to the contact.</div>
+                      <textarea
+                        key={`project-thread-note-${selectedProjectThread.threadKey}`}
+                        defaultValue={selectedProjectThread.internalNote || ""}
+                        readOnly={isReadOnly}
+                        onBlur={e => {
+                          if (isReadOnly) return;
+                          if (String(e.target.value || "") === String(selectedProjectThread.internalNote || "")) return;
+                          updateInboxThread(selectedProjectThread.threadKey, { internalNote: e.target.value });
+                        }}
+                        placeholder="Leave an internal note for this thread..."
+                        style={{ ...iS, width: "100%", minHeight: 78, resize: "vertical", fontSize: 12, background: "#fff8cc", borderColor: C.abd, ...lockStyle(isReadOnly) }}
+                      />
+                      {selectedProjectThread.internalNoteUpdatedAt && (
+                        <div style={{ fontSize: 10, color: C.tt, marginTop: 6 }}>
+                          Updated {rD(selectedProjectThread.internalNoteUpdatedAt)}{selectedProjectThread.internalNoteUpdatedBy ? ` by ${selectedProjectThread.internalNoteUpdatedBy}` : ""}
+                        </div>
+                      )}
+                    </div>
+
                     <div style={{ maxHeight: 360, overflowY: "auto", padding: 16, display: "grid", gap: 10, borderBottom: `1px solid ${C.bd}` }}>
                       {selectedProjectThreadMessages.length ? selectedProjectThreadMessages.map((message) => (
                         <div key={message.messageKey} style={{ border: `1px solid ${message.direction === "inbound" ? C.bd : C.gd}`, borderRadius: 12, padding: "10px 12px", background: message.direction === "inbound" ? C.sa : C.gb }}>
@@ -5664,7 +5776,7 @@ Requirements:
                           {message.direction === "inbound" && (
                             <div style={{ marginTop: 8 }}>
                               <button onClick={() => setReplyInput(message.bodyText || message.snippet || "")} style={{ padding: "5px 10px", borderRadius: 8, border: `1px solid ${C.ac}`, background: C.al, color: C.ac, cursor: "pointer", fontSize: 11, fontFamily: ft }}>
-                                Use for Reply Intel
+                                Use as AI Context
                               </button>
                             </div>
                           )}
@@ -5695,12 +5807,56 @@ Requirements:
                         <button onClick={() => latestProjectInboundMessage && setReplyInput(latestProjectInboundMessage.bodyText || latestProjectInboundMessage.snippet || "")} disabled={!latestProjectInboundMessage} style={{ padding: "7px 12px", borderRadius: 10, border: `1px solid ${C.bd}`, background: "transparent", color: C.ts, cursor: latestProjectInboundMessage ? "pointer" : "not-allowed", fontSize: 11, fontFamily: ft, opacity: latestProjectInboundMessage ? 1 : 0.55 }}>
                           Use Latest Inbound
                         </button>
+                        <button onClick={() => selectedProjectThread.artist && runReplyClassifier(selectedProjectThread.artist, latestProjectInboundMessage?.bodyText || latestProjectInboundMessage?.snippet || "")} disabled={!selectedProjectThread.artist || replyLoading || isReadOnly} style={{ padding: "7px 12px", borderRadius: 10, border: `1px solid ${C.ac}`, background: C.al, color: C.ac, cursor: !selectedProjectThread.artist || replyLoading || isReadOnly ? "not-allowed" : "pointer", fontSize: 11, fontFamily: ft, opacity: selectedProjectThread.artist ? 1 : 0.55, ...lockStyle(!selectedProjectThread.artist || replyLoading || isReadOnly) }}>
+                          {replyLoading ? "Analyzing..." : "Analyze Reply"}
+                        </button>
+                        <button onClick={() => selectedProjectThread.artist && runFollowUpWriter(selectedProjectThread.artist, latestProjectInboundMessage?.bodyText || latestProjectInboundMessage?.snippet || "")} disabled={!selectedProjectThread.artist || followUpLoading || isReadOnly} style={{ padding: "7px 12px", borderRadius: 10, border: `1px solid ${C.pr}`, background: C.pb, color: C.pr, cursor: !selectedProjectThread.artist || followUpLoading || isReadOnly ? "not-allowed" : "pointer", fontSize: 11, fontFamily: ft, opacity: selectedProjectThread.artist ? 1 : 0.55, ...lockStyle(!selectedProjectThread.artist || followUpLoading || isReadOnly) }}>
+                          {followUpLoading ? "Generating..." : "AI Follow-up"}
+                        </button>
                         {replyResult?.draftResponse && (
                           <button onClick={() => setGmailReplyDraft(replyResult.draftResponse)} style={{ padding: "7px 12px", borderRadius: 10, border: `1px solid ${C.pr}`, background: C.pb, color: C.pr, cursor: "pointer", fontSize: 11, fontFamily: ft }}>
                             Load AI Reply Draft
                           </button>
                         )}
+                        {followUpDraft && (
+                          <button onClick={() => setGmailReplyDraft(followUpDraft)} style={{ padding: "7px 12px", borderRadius: 10, border: `1px solid ${C.abd}`, background: C.abb, color: C.ab, cursor: "pointer", fontSize: 11, fontFamily: ft }}>
+                            Load AI Follow-up
+                          </button>
+                        )}
                       </div>
+                      {replyResult && (
+                        <div style={{ marginTop: 10, padding: "10px 12px", borderRadius: 10, border: `1px solid ${C.bd}`, background: C.sf }}>
+                          <div style={{ fontSize: 11, color: C.ts }}>
+                            <strong style={{ color: C.tx }}>Intent:</strong> {replyResult.intent || "unknown"} · <strong style={{ color: C.tx }}>Sentiment:</strong> {replyResult.sentiment || "unknown"} · <strong style={{ color: C.tx }}>Urgency:</strong> {replyResult.urgency || "unknown"}
+                          </div>
+                          <div style={{ marginTop: 4, fontSize: 11, color: C.ts }}>
+                            <strong style={{ color: C.tx }}>Recommended:</strong> {replyResult.nextAction || "No recommendation"}
+                          </div>
+                          <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+                            {selectedProjectThread.artist && replyResult.nextStage && SM[replyResult.nextStage] && (
+                              <button disabled={isReadOnly} onClick={() => applyReplySuggestedStage(selectedProjectThread.artist)} style={{ padding: "5px 10px", borderRadius: 8, border: `1px solid ${C.bd}`, background: "transparent", color: C.ts, cursor: isReadOnly ? "not-allowed" : "pointer", fontSize: 11, fontFamily: ft, ...lockStyle(isReadOnly) }}>
+                                Apply Stage: {SM[replyResult.nextStage].label}
+                              </button>
+                            )}
+                            {replyResult.draftResponse && (
+                              <button onClick={() => cp(replyResult.draftResponse, "reply_response")} style={{ padding: "5px 10px", borderRadius: 8, border: `1px solid ${C.bd}`, background: "transparent", color: C.ts, cursor: "pointer", fontSize: 11, fontFamily: ft }}>
+                                Copy AI Reply
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                      {followUpDraft && (
+                        <div style={{ marginTop: 10, padding: "10px 12px", borderRadius: 10, border: `1px solid ${C.abd}`, background: C.abb }}>
+                          <div style={{ fontSize: 11, fontWeight: 700, color: C.ab, marginBottom: 4 }}>AI follow-up draft</div>
+                          <div style={{ fontSize: 12, color: C.ts, whiteSpace: "pre-wrap", lineHeight: 1.55 }}>{compactText(followUpDraft, 340)}</div>
+                          <div style={{ marginTop: 8 }}>
+                            <button onClick={() => cp(followUpDraft, "followup")} style={{ padding: "5px 10px", borderRadius: 8, border: `1px solid ${C.abd}`, background: "transparent", color: C.ab, cursor: "pointer", fontSize: 11, fontFamily: ft }}>
+                              Copy Follow-up
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}
