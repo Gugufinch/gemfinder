@@ -1867,6 +1867,40 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     ::-webkit-scrollbar{width:6px}
     ::-webkit-scrollbar-track{background:transparent}
     ::-webkit-scrollbar-thumb{background:${C.bd};border-radius:3px}
+    .gf-project-shell{display:grid;grid-template-columns:320px minmax(0,1fr);min-height:100vh;background:${C.bg}}
+    .gf-project-sidebar{position:sticky;top:0;height:100vh;display:flex;flex-direction:column;background:${C.sf};border-right:1px solid ${C.bd}}
+    .gf-project-sidebar-card{border:1px solid ${C.bd};border-radius:22px;background:${C.sa};box-shadow:${C.sw}}
+    .gf-project-sidebar-section{padding:18px 20px}
+    .gf-project-main{min-width:0;background:${C.bg}}
+    .gf-project-main-inner{padding:28px 32px 40px}
+    .gf-project-hero{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(280px,0.95fr);gap:16px;margin-bottom:18px}
+    .gf-project-headline{font-size:42px;font-weight:800;letter-spacing:-0.05em;line-height:0.98;color:${C.tx}}
+    .gf-project-kicker{font-size:11px;font-weight:700;letter-spacing:2.2px;text-transform:uppercase;color:${C.ac};margin-bottom:10px}
+    .gf-project-subline{font-size:14px;color:${C.ts};line-height:1.65}
+    .gf-project-sidebar-nav{display:grid;gap:8px}
+    .gf-project-nav-btn{display:flex;align-items:center;gap:12px;width:100%;padding:13px 14px;border-radius:16px;border:1px solid ${C.bd};background:transparent;color:${C.ts};cursor:pointer;font-size:14px;font-weight:700;font-family:${ft};text-align:left}
+    .gf-project-nav-btn.active{border-color:${C.ac}50;background:${C.al};color:${C.ac}}
+    .gf-project-nav-icon{width:28px;height:28px;border-radius:10px;border:1px solid ${C.bd};display:inline-flex;align-items:center;justify-content:center;background:${C.sa};flex-shrink:0}
+    .gf-project-nav-btn.active .gf-project-nav-icon{border-color:${C.ac}34;background:${C.sf}}
+    .gf-project-nav-meta{display:flex;justify-content:space-between;align-items:center;gap:8px;width:100%}
+    .gf-project-nav-hint{font-size:10px;color:${C.tt};font-weight:500}
+    .gf-project-utility-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+    .gf-project-utility-card{padding:12px 14px;border:1px solid ${C.bd};border-radius:16px;background:${C.sf}}
+    .gf-project-utility-label{font-size:10px;color:${C.tt};text-transform:uppercase;letter-spacing:1px;margin-bottom:8px}
+    .gf-project-utility-value{font-size:24px;font-weight:800;line-height:1;color:${C.tx}}
+    .gf-project-toolbar{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap}
+    .gf-project-toolbar-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+    .gf-project-spotlight{border:1px solid ${C.bd};border-radius:22px;background:${dark ? "linear-gradient(135deg, rgba(26,40,67,0.96) 0%, rgba(15,23,42,0.98) 100%)" : "linear-gradient(135deg, #ffffff 0%, #eef5ff 100%)"};padding:20px 22px;box-shadow:${C.sw}}
+    .gf-project-overview-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+    .gf-project-stat-card{padding:13px 14px;border:1px solid ${C.bd};border-radius:18px;background:${C.sf}}
+    .gf-project-stat-label{font-size:10px;color:${C.tt};text-transform:uppercase;letter-spacing:1.1px;margin-bottom:8px}
+    .gf-project-stat-value{font-size:30px;font-weight:800;line-height:1.02}
+    .gf-project-mode-banner{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap}
+    .gf-project-snapshot-row{display:flex;justify-content:space-between;gap:10px;font-size:12px;color:${C.ts}}
+    .gf-project-snapshot-row strong{color:${C.tx}}
+    .gf-project-project-card{padding:18px 18px 16px}
+    .gf-project-project-card-title{font-size:30px;font-weight:800;letter-spacing:-0.05em;line-height:0.98;margin-bottom:8px}
+    .gf-project-divider{border-top:1px solid ${C.bd}}
     .gf-detail-shell{display:grid;grid-template-columns:minmax(0,1fr);gap:18px;align-items:start}
     .gf-detail-main{min-width:0}
     .gf-detail-tabs{position:sticky;top:12px;z-index:12;display:flex;gap:8px;flex-wrap:wrap;padding:10px 12px;border:1px solid ${C.bd};border-radius:14px;background:${dark ? "rgba(17,26,43,0.92)" : "rgba(255,255,255,0.92)"};backdrop-filter:blur(12px);margin-bottom:16px}
@@ -1878,7 +1912,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     .gf-rail-kv-label{font-size:10px;letter-spacing:1.2px;text-transform:uppercase;color:${C.tt}}
     .gf-rail-kv-value{font-size:13px;font-weight:700;color:${C.tx};line-height:1.35}
     @media (min-width:1080px){.gf-detail-shell{grid-template-columns:minmax(0,1fr) 300px}}
-    @media (max-width:860px){.gf-detail-intel-grid{grid-template-columns:1fr}.gf-detail-tabs{top:8px}.gf-detail-sticky-footer{bottom:10px}}
+    @media (max-width:1160px){.gf-project-shell{grid-template-columns:1fr}.gf-project-sidebar{position:static;height:auto;border-right:none;border-bottom:1px solid ${C.bd}}.gf-project-main-inner{padding:24px 20px 32px}.gf-project-hero{grid-template-columns:1fr}.gf-project-overview-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+    @media (max-width:860px){.gf-detail-intel-grid{grid-template-columns:1fr}.gf-detail-tabs{top:8px}.gf-detail-sticky-footer{bottom:10px}.gf-project-overview-grid{grid-template-columns:1fr}.gf-project-headline{font-size:34px}}
   `;
   const actionBtn = (active = false, tint = "neutral") => {
     const tone = {
@@ -5230,15 +5265,26 @@ Requirements:
         ? `${projectInboxActionableCount} inbox threads still need attention. Sync from artist inboxes to pull the latest replies.`
         : `${reportActivityStats.actions} logged actions in range. ${reportScopedArtists.length} artists in the current reporting scope.`;
     const sidebarModeItems = [
-      ["work", projectModeMeta.work.nav, "⌂"],
-      ["inbox", projectModeMeta.inbox.nav, "✉"],
-      ["report", projectModeMeta.report.nav, "↗"],
+      { id: "work", label: projectModeMeta.work.nav, icon: "◫", hint: "daily operating view" },
+      { id: "inbox", label: projectModeMeta.inbox.nav, icon: "✉", hint: "shared comms" },
+      { id: "report", label: projectModeMeta.report.nav, icon: "↗", hint: "funnel + timeline" },
     ];
     const overviewCards = [
       { label: "Artists", value: enriched.length, tone: C.tx, accent: C.ac, helper: "in this project" },
       { label: "Contacted", value: contactedCount, tone: C.bu, accent: C.bu, helper: "sent or beyond" },
       { label: "Live", value: stCounts.live || 0, tone: C.lv, accent: C.lv, helper: "fully set up" },
       { label: "Due Today", value: dueSeqCount, tone: C.ab, accent: C.ab, helper: operationalDayLabel },
+    ];
+    const sidebarQuickStats = [
+      { label: "Artists", value: enriched.length },
+      { label: "Contacted", value: contactedCount },
+      { label: "Live", value: stCounts.live || 0 },
+    ];
+    const sidebarUtilityCards = [
+      { label: "Mailbox", value: connectedMailboxText, tone: gmailConnected ? C.gn : C.rd },
+      { label: "Follow-ups due", value: dueSeqCount, tone: dueSeqCount ? C.ab : C.tx },
+      { label: "Scope", value: workspaceUser === ALL_USER_VIEW ? "All" : workspaceUser === UNASSIGNED_USER_VIEW ? "Unassigned" : workspaceUser },
+      { label: "Updated", value: queueUpdatedLabel, tone: C.tx },
     ];
     const scopeDescription = workspaceUser === ALL_USER_VIEW
       ? "Whole team view"
@@ -5247,30 +5293,26 @@ Requirements:
         : `${workspaceUser}'s workspace`;
 
     return (
-      <div style={{ fontFamily: ft, background: C.bg, minHeight: "100vh", color: C.tx, display: "grid", gridTemplateColumns: "320px minmax(0,1fr)" }}>
+      <div className="gf-project-shell" style={{ fontFamily: ft, color: C.tx }}>
         <Toast /><style>{css}</style>
 
-        <aside style={{ background: C.sf, borderRight: `1px solid ${C.bd}`, display: "flex", flexDirection: "column", minHeight: "100vh", position: "sticky", top: 0 }}>
-          <div style={{ padding: "22px 20px 18px", borderBottom: `1px solid ${C.bd}` }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
+        <aside className="gf-project-sidebar">
+          <div className="gf-project-sidebar-section gf-project-divider" style={{ borderTop: "none" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
               <img src="/gemfinder-logo.png" alt="GEMFINDER logo" style={{ width: 42, height: 42, objectFit: "contain" }} />
               <div>
                 <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 3.2, color: C.ac, textTransform: "uppercase", marginBottom: 2 }}>GEMFINDER</div>
                 <div style={{ fontSize: 14, fontWeight: 800, letterSpacing: "-0.02em" }}>Artist Ops Hub</div>
               </div>
             </div>
-            <div style={{ borderRadius: 22, border: `1px solid ${C.bd}`, background: C.sa, padding: "16px 16px 14px" }}>
+            <div className="gf-project-sidebar-card gf-project-project-card">
               <div style={{ fontSize: 11, color: C.tt, textTransform: "uppercase", letterSpacing: 1.2, marginBottom: 8 }}>Current project</div>
-              <div style={{ fontSize: 28, fontWeight: 800, letterSpacing: "-0.04em", lineHeight: 1.02, marginBottom: 8 }}>{proj.name}</div>
+              <div className="gf-project-project-card-title">{proj.name}</div>
               <div style={{ fontSize: 12, color: C.ts, lineHeight: 1.55, marginBottom: 14 }}>
                 {proj.desc || "Shared outreach workspace for pipeline movement, inbox handling, and reporting."}
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 8, marginBottom: 12 }}>
-                {[
-                  ["Artists", enriched.length],
-                  ["Contacted", contactedCount],
-                  ["Live", stCounts.live || 0],
-                ].map(([label, value]) => (
+                {sidebarQuickStats.map(({ label, value }) => (
                   <div key={label} style={{ borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sf, padding: "8px 10px" }}>
                     <div style={{ fontSize: 10, color: C.tt, textTransform: "uppercase", letterSpacing: 1 }}>{label}</div>
                     <div style={{ fontSize: 20, fontWeight: 800, lineHeight: 1.1 }}>{value}</div>
@@ -5286,52 +5328,28 @@ Requirements:
             </div>
           </div>
 
-          <div style={{ padding: "18px 20px 16px" }}>
+          <div className="gf-project-sidebar-section gf-project-divider">
             <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 1.3, color: C.tt, marginBottom: 10 }}>Workspace</div>
-            <div style={{ display: "grid", gap: 8 }}>
-              {sidebarModeItems.map(([modeId, label, icon]) => (
+            <div className="gf-project-sidebar-nav">
+              {sidebarModeItems.map(item => (
                 <button
-                  key={modeId}
-                  onClick={() => setProjectMode(modeId)}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 12,
-                    width: "100%",
-                    padding: "13px 14px",
-                    borderRadius: 16,
-                    border: `1px solid ${projectMode === modeId ? `${C.ac}50` : C.bd}`,
-                    background: projectMode === modeId ? C.al : "transparent",
-                    color: projectMode === modeId ? C.ac : C.ts,
-                    cursor: "pointer",
-                    fontSize: 14,
-                    fontWeight: 700,
-                    fontFamily: ft,
-                    textAlign: "left",
-                  }}
+                  key={item.id}
+                  onClick={() => setProjectMode(item.id)}
+                  className={`gf-project-nav-btn${projectMode === item.id ? " active" : ""}`}
                 >
-                  <span style={{
-                    width: 26,
-                    height: 26,
-                    borderRadius: 9,
-                    border: `1px solid ${projectMode === modeId ? `${C.ac}34` : C.bd}`,
-                    display: "inline-flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    background: projectMode === modeId ? C.sf : C.sa,
-                    flexShrink: 0,
-                  }}>
-                    {icon}
+                  <span className="gf-project-nav-icon">{item.icon}</span>
+                  <span className="gf-project-nav-meta">
+                    <span>{item.label}</span>
+                    <span className="gf-project-nav-hint">{item.hint}</span>
                   </span>
-                  <span>{label}</span>
                 </button>
               ))}
             </div>
           </div>
 
-          <div style={{ padding: "0 20px 18px", borderBottom: `1px solid ${C.bd}` }}>
+          <div className="gf-project-sidebar-section gf-project-divider">
             <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 1.3, color: C.tt, marginBottom: 10 }}>Scope</div>
-            <div style={{ borderRadius: 18, border: `1px solid ${C.bd}`, background: C.sa, padding: "14px 14px 12px" }}>
+            <div className="gf-project-sidebar-card" style={{ padding: "14px 14px 12px", borderRadius: 18 }}>
               <select value={workspaceUser} onChange={e => changeWorkspaceUser(e.target.value)} style={{ ...iS, width: "100%", padding: "11px 12px", fontSize: 13, marginBottom: 8 }}>
                 <option value={ALL_USER_VIEW}>All</option>
                 <option value={UNASSIGNED_USER_VIEW}>Unassigned</option>
@@ -5341,73 +5359,97 @@ Requirements:
             </div>
           </div>
 
-          <div style={{ padding: "18px 20px", display: "grid", gap: 10 }}>
-            <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 1.3, color: C.tt }}>Snapshot</div>
-            <div style={{ borderRadius: 18, border: `1px solid ${C.bd}`, background: C.sa, padding: "14px 14px 12px", display: "grid", gap: 10 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 12 }}>
-                <span style={{ color: C.tt }}>Mode</span>
-                <span style={{ fontWeight: 700 }}>{activeModeMeta.nav}</span>
-              </div>
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 12 }}>
-                <span style={{ color: C.tt }}>Mailbox</span>
-                <span style={{ fontWeight: 700, color: gmailConnected ? C.gn : C.rd, textAlign: "right" }}>{connectedMailboxText}</span>
-              </div>
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 12 }}>
-                <span style={{ color: C.tt }}>Follow-ups due</span>
-                <span style={{ fontWeight: 700, color: dueSeqCount ? C.ab : C.tx }}>{dueSeqCount}</span>
-              </div>
+          <div className="gf-project-sidebar-section gf-project-divider">
+            <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 1.3, color: C.tt, marginBottom: 10 }}>Snapshot</div>
+            <div className="gf-project-utility-grid">
+              {sidebarUtilityCards.map(card => (
+                <div key={card.label} className="gf-project-utility-card">
+                  <div className="gf-project-utility-label">{card.label}</div>
+                  <div className="gf-project-utility-value" style={{ color: card.tone || C.tx, fontSize: card.label === "Mailbox" ? 16 : 24, lineHeight: 1.15 }}>
+                    {card.value}
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
 
-          <div style={{ padding: "18px 20px", display: "grid", gap: 10, marginTop: "auto", borderTop: `1px solid ${C.bd}` }}>
+          <div className="gf-project-sidebar-section gf-project-divider" style={{ marginTop: "auto" }}>
             <div style={{ fontSize: 11, color: C.tt, lineHeight: 1.6 }}>
               {authLabel}
               <span style={{ display: "inline-block", marginLeft: 6, fontSize: 10, padding: "2px 8px", borderRadius: 999, border: `1px solid ${C.bd}`, background: C.sa, color: C.ts, textTransform: "uppercase" }}>
                 {roleLabel}
               </span>
             </div>
-            <button onClick={() => setShowProjectMenu(true)} style={{ ...actionBtn(false, "neutral"), width: "100%", justifyContent: "center" }}>Project Tools</button>
-            <div style={{ display: "flex", gap: 8 }}>
+            <div style={{ display: "grid", gap: 8 }}>
+              <button onClick={() => setShowProjectMenu(true)} style={{ ...actionBtn(false, "neutral"), width: "100%", justifyContent: "center" }}>Project Tools</button>
+            </div>
+            <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
               <button onClick={signOut} style={{ ...actionBtn(false, "neutral"), flex: 1, justifyContent: "center" }}>Sign out</button>
               <DkBtn />
             </div>
           </div>
         </aside>
 
-        <main style={{ minWidth: 0 }}>
-          <div style={{ padding: "26px 30px 30px" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, flexWrap: "wrap", marginBottom: 18 }}>
-              <div>
-                <div style={{ fontSize: 15, color: C.tt, marginBottom: 6 }}>{greetingLabel}, {greetingName}</div>
-                <div style={{ fontSize: 36, fontWeight: 800, letterSpacing: "-0.04em", lineHeight: 1.02 }}>{activeModeMeta.title}</div>
-                <div style={{ fontSize: 13, color: C.ts, marginTop: 6 }}>{projectDateLabel}</div>
-              </div>
-              <div style={{ fontSize: 13, color: C.ts, paddingTop: 8 }}>
-                {projectMode === "inbox" ? `Connected mailbox: ${connectedMailboxText}` : `${scopeDescription} · ${operationalDayLabel}`}
-              </div>
-            </div>
-
-            <div style={{ ...cS, padding: "18px 20px", marginBottom: 18, background: C.sa }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 14, flexWrap: "wrap" }}>
-                <div>
-                  <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 1.8, textTransform: "uppercase", color: C.ac, marginBottom: 6 }}>{activeModeMeta.eyebrow}</div>
-                  <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 6 }}>{spotlightLine}</div>
-                  <div style={{ fontSize: 12, color: C.ts, lineHeight: 1.6 }}>{activeModeMeta.helper}</div>
+        <main className="gf-project-main">
+          <div className="gf-project-main-inner">
+            <div className="gf-project-hero">
+              <div className="gf-project-spotlight">
+                <div className="gf-project-kicker">{activeModeMeta.eyebrow}</div>
+                <div className="gf-project-headline">{activeModeMeta.title}</div>
+                <div style={{ fontSize: 15, color: C.tt, marginTop: 12, marginBottom: 8 }}>
+                  {greetingLabel}, {greetingName}
                 </div>
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                <div className="gf-project-subline" style={{ marginBottom: 14 }}>
+                  {activeModeMeta.helper}
+                </div>
+                <div className="gf-project-subline" style={{ fontSize: 13 }}>
+                  {spotlightLine}
+                </div>
+              </div>
+
+              <div style={{ display: "grid", gap: 12 }}>
+                <div className="gf-project-sidebar-card" style={{ padding: "18px 18px 16px" }}>
+                  <div className="gf-project-toolbar">
+                    <div>
+                      <div style={{ fontSize: 12, color: C.tt, textTransform: "uppercase", letterSpacing: 1.2, marginBottom: 6 }}>Today</div>
+                      <div style={{ fontSize: 28, fontWeight: 800, letterSpacing: "-0.04em", lineHeight: 1.02 }}>{projectDateLabel}</div>
+                      <div style={{ fontSize: 12, color: C.ts, marginTop: 8 }}>
+                        {projectMode === "inbox" ? `Connected mailbox: ${connectedMailboxText}` : `${scopeDescription} · ${operationalDayLabel}`}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div className="gf-project-overview-grid">
                   {overviewCards.map(card => (
-                    <div key={card.label} style={{ minWidth: 124, borderRadius: 16, border: `1px solid ${C.bd}`, background: C.sf, padding: "12px 14px" }}>
-                      <div style={{ fontSize: 11, color: C.tt, textTransform: "uppercase", letterSpacing: 1 }}>{card.label}</div>
-                      <div style={{ fontSize: 28, fontWeight: 800, color: card.tone, lineHeight: 1.05, marginTop: 6 }}>{card.value}</div>
+                    <div key={card.label} className="gf-project-stat-card">
+                      <div className="gf-project-stat-label">{card.label}</div>
+                      <div className="gf-project-stat-value" style={{ color: card.tone }}>{card.value}</div>
                       <div style={{ fontSize: 11, color: C.ts, marginTop: 4 }}>{card.helper}</div>
                     </div>
                   ))}
                 </div>
               </div>
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end", marginTop: 14 }}>
-                {projectMode === "work" && !isReadOnly && (
-                  <>
-                    <button onClick={() => setShowDiscover(true)} style={{ ...actionBtn(true, "accent"), ...lockStyle(isReadOnly) }}>AI Discover</button>
+            </div>
+
+            <div className="gf-project-sidebar-card" style={{ padding: "16px 18px", marginBottom: 18 }}>
+              <div className="gf-project-mode-banner">
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.8, textTransform: "uppercase", color: C.ac, marginBottom: 6 }}>Actions</div>
+                  <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>
+                    {projectMode === "work" ? "Pipeline execution" : projectMode === "inbox" ? "Inbox handling" : "Reporting cadence"}
+                  </div>
+                  <div style={{ fontSize: 12, color: C.ts, lineHeight: 1.6 }}>
+                    {projectMode === "work"
+                      ? "Keep the core moves high-signal. Add artists, import CSVs, and move the pipeline forward from here."
+                      : projectMode === "inbox"
+                        ? "Handle team-visible comms, ownership, follow-ups, and response decisions from one place."
+                        : "Review funnel movement, timeline output, and health issues without leaving the project."}
+                  </div>
+                </div>
+                <div className="gf-project-toolbar-actions">
+                  {projectMode === "work" && !isReadOnly && (
+                    <>
+                      <button onClick={() => setShowDiscover(true)} style={{ ...actionBtn(true, "accent"), ...lockStyle(isReadOnly) }}>AI Discover</button>
                     <button onClick={() => setShowAddArtist(true)} style={{ ...actionBtn(true, "good"), ...lockStyle(isReadOnly) }}>+ Artist</button>
                     <label style={{ ...actionBtn(false, "neutral"), ...lockStyle(isReadOnly) }}>
                       Import CSV
@@ -5446,6 +5488,7 @@ Requirements:
                 )}
               </div>
             </div>
+          </div>
         {isReadOnly && (
           <div style={{ ...cS, padding: "10px 14px", marginBottom: 12, fontSize: 12, color: C.ts }}>
             Viewer mode is active for this workspace. Editing, importing, and follow-up plan actions are disabled.
