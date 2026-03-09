@@ -5386,6 +5386,7 @@ Requirements:
       { id: "work", label: projectModeMeta.work.nav, icon: "◫", hint: "daily operating view" },
       { id: "inbox", label: projectModeMeta.inbox.nav, icon: "✉", hint: "shared comms" },
       { id: "report", label: projectModeMeta.report.nav, icon: "↗", hint: "funnel + timeline" },
+      { id: "settings", label: "Settings", icon: "⚙", hint: "models + keys + tools", action: () => setShowProjectMenu(true) },
     ];
     const overviewCards = [
       { label: "Artists", value: enriched.length, tone: C.tx, accent: C.ac, helper: "in this project" },
@@ -5429,11 +5430,11 @@ Requirements:
               <div style={{ fontSize: 13, color: C.ts, lineHeight: 1.7, marginBottom: 16 }}>
                 {proj.desc || "Shared outreach workspace for pipeline movement, inbox handling, and reporting."}
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 8, marginBottom: 12 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 8, marginBottom: 12 }}>
                 {sidebarQuickStats.map(({ label, value }) => (
-                  <div key={label} style={{ borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sf, padding: "9px 10px", minWidth: 0 }}>
-                    <div style={{ fontSize: 9, color: C.tt, textTransform: "uppercase", letterSpacing: 0.7, lineHeight: 1.2, overflowWrap: "anywhere" }}>{label}</div>
-                    <div style={{ fontSize: 18, fontWeight: 800, lineHeight: 1.1, marginTop: 3 }}>{value}</div>
+                  <div key={label} style={{ borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sf, padding: "10px 11px", minWidth: 0 }}>
+                    <div style={{ fontSize: 8, color: C.tt, textTransform: "uppercase", letterSpacing: 0.5, lineHeight: 1.15, whiteSpace: "normal", overflowWrap: "anywhere" }}>{label}</div>
+                    <div style={{ fontSize: 17, fontWeight: 800, lineHeight: 1.08, marginTop: 4 }}>{value}</div>
                   </div>
                 ))}
               </div>
@@ -5452,7 +5453,13 @@ Requirements:
               {sidebarModeItems.map(item => (
                 <button
                   key={item.id}
-                  onClick={() => setProjectMode(item.id)}
+                  onClick={() => {
+                    if (item.action) {
+                      item.action();
+                      return;
+                    }
+                    setProjectMode(item.id);
+                  }}
                   className={`gf-project-nav-btn${projectMode === item.id ? " active" : ""}`}
                 >
                   <span className="gf-project-nav-icon">{item.icon}</span>
@@ -5499,7 +5506,7 @@ Requirements:
               </span>
             </div>
             <div style={{ display: "grid", gap: 8 }}>
-              <button onClick={() => setShowProjectMenu(true)} style={{ ...actionBtn(false, "neutral"), width: "100%", justifyContent: "center" }}>Settings</button>
+              <button onClick={() => setShowProjectMenu(true)} style={{ ...actionBtn(false, "neutral"), width: "100%", justifyContent: "center" }}>Open Settings</button>
             </div>
             <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
               <button onClick={signOut} style={{ ...actionBtn(false, "neutral"), flex: 1, justifyContent: "center" }}>Sign out</button>
