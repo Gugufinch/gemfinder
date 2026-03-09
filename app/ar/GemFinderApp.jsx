@@ -63,7 +63,14 @@ const UNASSIGNED_USER_VIEW = "__unassigned__";
 const AI_PROVIDERS = [
   { id: "anthropic", label: "Anthropic" },
   { id: "openai", label: "OpenAI" },
+  { id: "google", label: "Google Gemini" },
 ];
+
+const AI_PROVIDER_LABELS = {
+  anthropic: "Anthropic",
+  openai: "OpenAI",
+  google: "Google Gemini",
+};
 
 const AI_MODEL_OPTIONS = {
   anthropic: [
@@ -75,6 +82,11 @@ const AI_MODEL_OPTIONS = {
     { id: "gpt-4.1-mini", label: "GPT-4.1 mini (fast)" },
     { id: "gpt-4.1", label: "GPT-4.1 (balanced)" },
     { id: "gpt-5", label: "GPT-5 (deep)" },
+  ],
+  google: [
+    { id: "gemini-2.5-flash-lite", label: "Gemini 2.5 Flash-Lite (fast)" },
+    { id: "gemini-2.5-flash", label: "Gemini 2.5 Flash (balanced)" },
+    { id: "gemini-2.5-pro", label: "Gemini 2.5 Pro (deep)" },
   ],
 };
 
@@ -92,6 +104,13 @@ const DEFAULT_AI_MODELS = {
     discovery: "gpt-4.1",
     reply: "gpt-4.1-mini",
     followup: "gpt-4.1",
+  },
+  google: {
+    intel: "gemini-2.5-flash",
+    drafts: "gemini-2.5-flash",
+    discovery: "gemini-2.5-flash",
+    reply: "gemini-2.5-flash-lite",
+    followup: "gemini-2.5-flash",
   },
 };
 
@@ -671,6 +690,10 @@ function normalizeProject(p) {
       ...DEFAULT_AI_MODELS.openai,
       ...(p.settings?.aiModelsByProvider?.openai || {}),
     },
+    google: {
+      ...DEFAULT_AI_MODELS.google,
+      ...(p.settings?.aiModelsByProvider?.google || {}),
+    },
   };
   return {
     ...p,
@@ -715,6 +738,7 @@ function normalizeProject(p) {
 const AI_KEY_STORAGE = {
   anthropic: "gemfinder-anthropic-key",
   openai: "gemfinder-openai-key",
+  google: "gemfinder-google-key",
 };
 
 function getStoredAiKey(provider = "anthropic") {
@@ -724,6 +748,19 @@ function getStoredAiKey(provider = "anthropic") {
     if (local) return local.trim();
   } catch {}
   return "";
+}
+
+function providerLabel(provider = "anthropic") {
+  return AI_PROVIDER_LABELS[provider] || provider;
+}
+
+function detectProviderFromKey(value) {
+  const key = String(value || "").trim();
+  if (!key) return null;
+  if (key.startsWith("sk-ant-")) return "anthropic";
+  if (key.startsWith("AIza")) return "google";
+  if (key.startsWith("sk-proj-") || key.startsWith("sk-")) return "openai";
+  return null;
 }
 
 function parseOpenAIResponseText(payload) {
@@ -769,15 +806,29 @@ function parseOpenAIResponseText(payload) {
   return parts.join("\n").trim();
 }
 
+function parseGoogleResponseText(payload) {
+  const parts = [];
+  (payload?.candidates || []).forEach(candidate => {
+    (candidate?.content?.parts || []).forEach(part => {
+      if (typeof part?.text === "string" && part.text.trim()) parts.push(part.text.trim());
+    });
+  });
+  return parts.join("\n").trim();
+}
+
 // ═══ AI CALL HELPER ═══
 async function aiCall(prompt, maxTokens = 1200, provider = "anthropic", apiKey = "", model = "") {
   const key = (apiKey || getStoredAiKey(provider)).trim();
-  const providerLabel = provider === "openai" ? "OpenAI" : "Anthropic";
+  const providerLabelText = providerLabel(provider);
   if (!key) {
-    return { ok: false, text: `Missing ${providerLabel} API key. Click 'AI Key' and save a key for ${providerLabel}.` };
+    return { ok: false, text: `Missing ${providerLabelText} API key. Click 'AI Key' and save a key for ${providerLabelText}.` };
   }
-  const safeModel = model || (provider === "openai" ? DEFAULT_AI_MODELS.openai.intel : DEFAULT_AI_MODELS.anthropic.intel);
-  const proxyEndpoint = provider === "openai" ? "/api/ai/openai" : "/api/ai/anthropic";
+  const safeModel = model || DEFAULT_AI_MODELS[provider]?.intel || DEFAULT_AI_MODELS.anthropic.intel;
+  const proxyEndpoint = provider === "openai"
+    ? "/api/ai/openai"
+    : provider === "google"
+      ? "/api/ai/google"
+      : "/api/ai/anthropic";
   try {
     const proxy = await fetch(proxyEndpoint, {
       method: "POST",
@@ -796,7 +847,7 @@ async function aiCall(prompt, maxTokens = 1200, provider = "anthropic", apiKey =
     // Proxy may be unavailable if only the frontend is running.
     if (![404, 405, 502].includes(proxy.status)) {
       const raw = await proxy.text();
-      let msg = `${providerLabel} API error ${proxy.status}`;
+      let msg = `${providerLabelText} API error ${proxy.status}`;
       try {
         const parsed = JSON.parse(raw);
         msg = parsed?.error || parsed?.error?.message || msg;
@@ -808,25 +859,37 @@ async function aiCall(prompt, maxTokens = 1200, provider = "anthropic", apiKey =
   try {
     const r = provider === "openai"
       ? await fetch("https://api.openai.com/v1/responses", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${key}`,
-        },
-        body: JSON.stringify({ model: safeModel, input: prompt, max_output_tokens: maxTokens }),
-      })
-      : await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": key,
-          "anthropic-version": "2023-06-01",
-        },
-        body: JSON.stringify({ model: safeModel, max_tokens: maxTokens, messages: [{ role: "user", content: prompt }] }),
-      });
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${key}`,
+          },
+          body: JSON.stringify({ model: safeModel, input: prompt, max_output_tokens: maxTokens }),
+        })
+      : provider === "google"
+        ? await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(safeModel)}:generateContent`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-goog-api-key": key,
+            },
+            body: JSON.stringify({
+              contents: [{ role: "user", parts: [{ text: prompt }] }],
+              generationConfig: { maxOutputTokens: maxTokens },
+            }),
+          })
+        : await fetch("https://api.anthropic.com/v1/messages", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-api-key": key,
+              "anthropic-version": "2023-06-01",
+            },
+            body: JSON.stringify({ model: safeModel, max_tokens: maxTokens, messages: [{ role: "user", content: prompt }] }),
+          });
     if (!r.ok) {
       const raw = await r.text();
-      let msg = `${providerLabel} API error ${r.status}`;
+      let msg = `${providerLabelText} API error ${r.status}`;
       try {
         const parsed = JSON.parse(raw);
         msg = parsed?.error?.message || parsed?.error || msg;
@@ -836,13 +899,15 @@ async function aiCall(prompt, maxTokens = 1200, provider = "anthropic", apiKey =
     const d = await r.json();
     const t = provider === "openai"
       ? parseOpenAIResponseText(d)
-      : (d.content?.map(i => i.type === "text" ? i.text : "").filter(Boolean).join("\n") || "");
+      : provider === "google"
+        ? parseGoogleResponseText(d)
+        : (d.content?.map(i => i.type === "text" ? i.text : "").filter(Boolean).join("\n") || "");
     if (!t) {
-      return { ok: false, text: `${providerLabel} returned an empty response. Try GPT-4.1 or Sonnet.` };
+      return { ok: false, text: `${providerLabelText} returned an empty response. Try a different model.` };
     }
     return { ok: true, text: t };
   } catch (e) {
-    return { ok: false, text: `${providerLabel} API error: ${e.message}. If this keeps failing, run both services with \"npm run dev:full\".` };
+    return { ok: false, text: `${providerLabelText} API error: ${e.message}. If this keeps failing, run both services with \"npm run dev:full\".` };
   }
 }
 
@@ -1882,30 +1947,30 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     ::-webkit-scrollbar{width:6px}
     ::-webkit-scrollbar-track{background:transparent}
     ::-webkit-scrollbar-thumb{background:${C.bd};border-radius:3px}
-    .gf-project-shell{display:grid;grid-template-columns:320px minmax(0,1fr);min-height:100vh;background:${C.bg}}
+    .gf-project-shell{display:grid;grid-template-columns:344px minmax(0,1fr);min-height:100vh;background:${C.bg}}
     .gf-project-sidebar{position:sticky;top:0;height:100vh;display:flex;flex-direction:column;background:${C.sf};border-right:1px solid ${C.bd}}
-    .gf-project-sidebar-card{border:1px solid ${C.bd};border-radius:22px;background:${C.sa};box-shadow:${C.sw}}
-    .gf-project-sidebar-section{padding:18px 20px}
+    .gf-project-sidebar-card{border:1px solid ${C.bd};border-radius:24px;background:${C.sa};box-shadow:${C.sw}}
+    .gf-project-sidebar-section{padding:20px 22px}
     .gf-project-main{min-width:0;background:${C.bg}}
-    .gf-project-main-inner{padding:28px 32px 40px}
+    .gf-project-main-inner{padding:30px 36px 42px}
     .gf-project-hero{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(280px,0.95fr);gap:16px;margin-bottom:18px}
-    .gf-project-headline{font-size:42px;font-weight:800;letter-spacing:-0.05em;line-height:0.98;color:${C.tx}}
+    .gf-project-headline{font-size:40px;font-weight:800;letter-spacing:-0.05em;line-height:1.02;color:${C.tx}}
     .gf-project-kicker{font-size:11px;font-weight:700;letter-spacing:2.2px;text-transform:uppercase;color:${C.ac};margin-bottom:10px}
-    .gf-project-subline{font-size:14px;color:${C.ts};line-height:1.65}
+    .gf-project-subline{font-size:14px;color:${C.ts};line-height:1.75}
     .gf-project-sidebar-nav{display:grid;gap:8px}
-    .gf-project-nav-btn{display:flex;align-items:center;gap:12px;width:100%;padding:13px 14px;border-radius:16px;border:1px solid ${C.bd};background:transparent;color:${C.ts};cursor:pointer;font-size:14px;font-weight:700;font-family:${ft};text-align:left}
+    .gf-project-nav-btn{display:flex;align-items:center;gap:12px;width:100%;padding:14px 16px;border-radius:18px;border:1px solid ${C.bd};background:transparent;color:${C.ts};cursor:pointer;font-size:14px;font-weight:700;font-family:${ft};text-align:left}
     .gf-project-nav-btn.active{border-color:${C.ac}50;background:${C.al};color:${C.ac}}
     .gf-project-nav-icon{width:28px;height:28px;border-radius:10px;border:1px solid ${C.bd};display:inline-flex;align-items:center;justify-content:center;background:${C.sa};flex-shrink:0}
     .gf-project-nav-btn.active .gf-project-nav-icon{border-color:${C.ac}34;background:${C.sf}}
-    .gf-project-nav-meta{display:flex;justify-content:space-between;align-items:center;gap:8px;width:100%}
-    .gf-project-nav-hint{font-size:10px;color:${C.tt};font-weight:500}
+    .gf-project-nav-meta{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:10px;width:100%}
+    .gf-project-nav-hint{font-size:11px;color:${C.tt};font-weight:500;line-height:1.3;text-align:right;max-width:92px}
     .gf-project-utility-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
-    .gf-project-utility-card{padding:12px 14px;border:1px solid ${C.bd};border-radius:16px;background:${C.sf}}
+    .gf-project-utility-card{padding:14px 14px;border:1px solid ${C.bd};border-radius:16px;background:${C.sf};min-height:98px;display:grid;align-content:start}
     .gf-project-utility-label{font-size:10px;color:${C.tt};text-transform:uppercase;letter-spacing:1px;margin-bottom:8px}
-    .gf-project-utility-value{font-size:24px;font-weight:800;line-height:1;color:${C.tx}}
+    .gf-project-utility-value{font-size:22px;font-weight:800;line-height:1.12;color:${C.tx};overflow-wrap:anywhere;word-break:break-word}
     .gf-project-toolbar{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap}
     .gf-project-toolbar-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
-    .gf-project-spotlight{border:1px solid ${C.bd};border-radius:22px;background:${dark ? "linear-gradient(135deg, rgba(26,40,67,0.96) 0%, rgba(15,23,42,0.98) 100%)" : "linear-gradient(135deg, #ffffff 0%, #eef5ff 100%)"};padding:20px 22px;box-shadow:${C.sw}}
+    .gf-project-spotlight{border:1px solid ${C.bd};border-radius:22px;background:${dark ? "linear-gradient(135deg, rgba(26,40,67,0.96) 0%, rgba(15,23,42,0.98) 100%)" : "linear-gradient(135deg, #ffffff 0%, #eef5ff 100%)"};padding:22px 24px;box-shadow:${C.sw}}
     .gf-project-overview-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
     .gf-project-stat-card{padding:13px 14px;border:1px solid ${C.bd};border-radius:18px;background:${C.sf}}
     .gf-project-stat-label{font-size:10px;color:${C.tt};text-transform:uppercase;letter-spacing:1.1px;margin-bottom:8px}
@@ -1913,9 +1978,11 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     .gf-project-mode-banner{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap}
     .gf-project-snapshot-row{display:flex;justify-content:space-between;gap:10px;font-size:12px;color:${C.ts}}
     .gf-project-snapshot-row strong{color:${C.tx}}
-    .gf-project-project-card{padding:18px 18px 16px}
-    .gf-project-project-card-title{font-size:30px;font-weight:800;letter-spacing:-0.05em;line-height:0.98;margin-bottom:8px}
+    .gf-project-project-card{padding:20px 20px 18px}
+    .gf-project-project-card-title{font-size:28px;font-weight:800;letter-spacing:-0.05em;line-height:1.04;margin-bottom:10px;overflow-wrap:anywhere}
     .gf-project-divider{border-top:1px solid ${C.bd}}
+    .gf-thread-card-title{font-size:13px;font-weight:700;color:${C.tx};line-height:1.3;margin-bottom:4px;overflow-wrap:anywhere}
+    .gf-thread-card-snippet{font-size:11px;color:${C.tt};line-height:1.5;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
     .gf-detail-shell{display:grid;grid-template-columns:minmax(0,1fr);gap:18px;align-items:start}
     .gf-detail-main{min-width:0}
     .gf-detail-tabs{position:sticky;top:12px;z-index:12;display:flex;gap:8px;flex-wrap:wrap;padding:10px 12px;border:1px solid ${C.bd};border-radius:14px;background:${dark ? "rgba(17,26,43,0.92)" : "rgba(255,255,255,0.92)"};backdrop-filter:blur(12px);margin-bottom:16px}
@@ -1927,7 +1994,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     .gf-rail-kv-label{font-size:10px;letter-spacing:1.2px;text-transform:uppercase;color:${C.tt}}
     .gf-rail-kv-value{font-size:13px;font-weight:700;color:${C.tx};line-height:1.35}
     @media (min-width:1080px){.gf-detail-shell{grid-template-columns:minmax(0,1fr) 300px}}
-    @media (max-width:1160px){.gf-project-shell{grid-template-columns:1fr}.gf-project-sidebar{position:static;height:auto;border-right:none;border-bottom:1px solid ${C.bd}}.gf-project-main-inner{padding:24px 20px 32px}.gf-project-hero{grid-template-columns:1fr}.gf-project-overview-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+    @media (max-width:1160px){.gf-project-shell{grid-template-columns:1fr}.gf-project-sidebar{position:static;height:auto;border-right:none;border-bottom:1px solid ${C.bd}}.gf-project-main-inner{padding:24px 20px 32px}.gf-project-hero{grid-template-columns:1fr}.gf-project-overview-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.gf-project-nav-hint{max-width:none}}
     @media (max-width:860px){.gf-detail-intel-grid{grid-template-columns:1fr}.gf-detail-tabs{top:8px}.gf-detail-sticky-footer{bottom:10px}.gf-project-overview-grid{grid-template-columns:1fr}.gf-project-headline{font-size:34px}}
   `;
   const actionBtn = (active = false, tint = "neutral") => {
@@ -2343,7 +2410,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
 
   const configureAiKey = () => {
     const provider = currentAiProvider;
-    const keyLabel = provider === "openai" ? "OpenAI" : "Anthropic";
+    const keyLabel = providerLabel(provider);
     const storageKey = AI_KEY_STORAGE[provider];
     const existing = getStoredAiKey(provider);
     const val = window.prompt(`Paste ${keyLabel} API key. Leave empty to clear.`, existing || "");
@@ -2351,17 +2418,12 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     const clean = val.trim();
     try {
       if (clean) {
-        const looksAnthropic = clean.startsWith("sk-ant-");
-        const looksOpenAI = clean.startsWith("sk-proj-") || (clean.startsWith("sk-") && !looksAnthropic);
+        const detectedProvider = detectProviderFromKey(clean);
         let targetProvider = provider;
 
-        if (provider === "anthropic" && looksOpenAI) {
-          if (window.confirm("This key looks like OpenAI. Switch AI provider to OpenAI and save it there?")) {
-            targetProvider = "openai";
-          }
-        } else if (provider === "openai" && looksAnthropic) {
-          if (window.confirm("This key looks like Anthropic. Switch AI provider to Anthropic and save it there?")) {
-            targetProvider = "anthropic";
+        if (detectedProvider && detectedProvider !== provider) {
+          if (window.confirm(`This key looks like ${providerLabel(detectedProvider)}. Switch AI provider to ${providerLabel(detectedProvider)} and save it there?`)) {
+            targetProvider = detectedProvider;
           }
         }
 
@@ -2372,7 +2434,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
           saveProject(nextProj);
         }
         setAiKeySet(true);
-        flash(`${targetProvider === "openai" ? "OpenAI" : "Anthropic"} key saved`);
+        flash(`${providerLabel(targetProvider)} key saved`);
       } else {
         window.localStorage.removeItem(storageKey);
         setAiKeySet(false);
@@ -2405,6 +2467,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     const byProvider = {
       anthropic: { ...DEFAULT_AI_MODELS.anthropic, ...(proj.settings?.aiModelsByProvider?.anthropic || {}) },
       openai: { ...DEFAULT_AI_MODELS.openai, ...(proj.settings?.aiModelsByProvider?.openai || {}) },
+      google: { ...DEFAULT_AI_MODELS.google, ...(proj.settings?.aiModelsByProvider?.google || {}) },
     };
     byProvider[currentAiProvider] = { ...byProvider[currentAiProvider], [task]: modelId };
     const nextProj = { ...proj, settings: { ...(proj.settings || {}), aiModelsByProvider: byProvider } };
@@ -2418,7 +2481,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     const nextProj = { ...proj, settings: { ...(proj.settings || {}), aiProvider: providerId } };
     await saveProject(nextProj);
     setAiKeySet(!!getStoredAiKey(providerId));
-    flash(`AI provider: ${providerId === "openai" ? "OpenAI" : "Anthropic"}`);
+    flash(`AI provider: ${providerLabel(providerId)}`);
   };
 
   const saveDraftGuardrails = async patch => {
@@ -2862,6 +2925,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         aiModelsByProvider: {
           anthropic: { ...DEFAULT_AI_MODELS.anthropic },
           openai: { ...DEFAULT_AI_MODELS.openai },
+          google: { ...DEFAULT_AI_MODELS.google },
         },
         draftGuardrails: { ...DEFAULT_DRAFT_GUARDRAILS },
         savedTemplates: [],
@@ -4504,7 +4568,7 @@ Requirements:
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 10 }}>
               <div>
                 <div style={{ fontSize: 14, fontWeight: 700 }}>🧠 AI Intel</div>
-                <div style={{ fontSize: 11, color: C.tt }}>Model: {modelLabel(taskModel("intel"))} · {currentAiProvider === "openai" ? "OpenAI" : "Anthropic"}</div>
+                <div style={{ fontSize: 11, color: C.tt }}>Model: {modelLabel(taskModel("intel"))} · {providerLabel(currentAiProvider)}</div>
               </div>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                 {intel?.text && (
@@ -4544,7 +4608,7 @@ Requirements:
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
               <div>
                 <div style={{ fontSize: 14, fontWeight: 700 }}>✉ Outreach Drafts</div>
-                <div style={{ fontSize: 11, color: C.tt }}>Model: {modelLabel(taskModel("drafts"))} · {currentAiProvider === "openai" ? "OpenAI" : "Anthropic"}</div>
+                <div style={{ fontSize: 11, color: C.tt }}>Model: {modelLabel(taskModel("drafts"))} · {providerLabel(currentAiProvider)}</div>
               </div>
               <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
                 <select value={draftPlatform} disabled={isReadOnly} onChange={e => changeDraftPlatform(a, e.target.value)} style={{ ...iS, padding: "5px 10px", fontSize: 11, ...lockStyle(isReadOnly) }}>
@@ -4811,9 +4875,9 @@ Requirements:
                               fontFamily: ft,
                             }}
                           >
-                            <div style={{ fontSize: 12, fontWeight: 700, color: C.tx, marginBottom: 4 }}>{thread.subject || "No subject"}</div>
+                            <div className="gf-thread-card-title">{thread.subject || "No subject"}</div>
                             <div style={{ fontSize: 11, color: C.ts, marginBottom: 4 }}>{thread.senderGmailEmail}</div>
-                            <div style={{ fontSize: 11, color: C.tt, lineHeight: 1.5 }}>{thread.snippet || "No preview yet."}</div>
+                            <div className="gf-thread-card-snippet">{thread.snippet || "No preview yet."}</div>
                             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
                               <span style={{ fontSize: 10, color: C.tt }}>{rD(thread.lastMessageAt)}</span>
                               {threadIsActionable(thread) && <span style={{ ...mkP(true, C.rd, C.rb), cursor: "default", fontSize: 10, padding: "1px 8px" }}>Needs reply</span>}
@@ -4860,7 +4924,7 @@ Requirements:
                               disabled={threadWorkflowSaving || isReadOnly}
                               style={{ padding: "6px 10px", borderRadius: 9, border: `1px solid ${C.rbd}`, background: C.rb, color: C.rd, cursor: threadWorkflowSaving || isReadOnly ? "not-allowed" : "pointer", fontSize: 11, fontFamily: ft, ...lockStyle(threadWorkflowSaving || isReadOnly) }}
                             >
-                              Delete Sync
+                              Delete Thread
                             </button>
                           </div>
                         </div>
@@ -5362,7 +5426,7 @@ Requirements:
             <div className="gf-project-sidebar-card gf-project-project-card">
               <div style={{ fontSize: 11, color: C.tt, textTransform: "uppercase", letterSpacing: 1.2, marginBottom: 8 }}>Current project</div>
               <div className="gf-project-project-card-title">{proj.name}</div>
-              <div style={{ fontSize: 12, color: C.ts, lineHeight: 1.55, marginBottom: 14 }}>
+              <div style={{ fontSize: 13, color: C.ts, lineHeight: 1.7, marginBottom: 16 }}>
                 {proj.desc || "Shared outreach workspace for pipeline movement, inbox handling, and reporting."}
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 8, marginBottom: 12 }}>
@@ -5419,7 +5483,7 @@ Requirements:
               {sidebarUtilityCards.map(card => (
                 <div key={card.label} className="gf-project-utility-card">
                   <div className="gf-project-utility-label">{card.label}</div>
-                  <div className="gf-project-utility-value" style={{ color: card.tone || C.tx, fontSize: card.label === "Mailbox" ? 16 : 24, lineHeight: 1.15 }}>
+                  <div className="gf-project-utility-value" style={{ color: card.tone || C.tx, fontSize: card.label === "Mailbox" ? 18 : 22 }}>
                     {card.value}
                   </div>
                 </div>
@@ -5960,7 +6024,7 @@ Requirements:
                             {thread.lastMessageDirection === "inbound" ? "Inbound" : thread.lastMessageDirection === "outbound" ? "Outbound" : "None"}
                           </span>
                         </div>
-                        <div style={{ fontSize: 11, color: C.tt, lineHeight: 1.5, marginBottom: 6 }}>{thread.snippet || "No preview yet."}</div>
+                        <div className="gf-thread-card-snippet" style={{ marginBottom: 6 }}>{thread.snippet || "No preview yet."}</div>
                         <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 6 }}>
                           <span style={{ ...mkP(true, thread.artist ? sc(thread.artist.stage, C) : C.tt, thread.artist ? sb(thread.artist.stage, C) : C.sa), cursor: "default", fontSize: 10, padding: "2px 8px" }}>
                             {thread.artist ? SM[thread.artist.stage]?.label : "No artist"}
@@ -5989,15 +6053,24 @@ Requirements:
                   <div style={{ border: `1px solid ${C.bd}`, borderRadius: 14, background: C.sf, overflow: "hidden" }}>
                     <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.bd}`, background: C.sa }}>
                       <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
-                        <div>
-                          <div style={{ fontSize: 15, fontWeight: 800 }}>{selectedProjectThread.subject || "No subject"}</div>
-                          <div style={{ fontSize: 11, color: C.tt, marginTop: 3 }}>
-                            {selectedProjectThread.artistName} · {selectedProjectThread.mailboxLabel} · last activity {rD(selectedProjectThread.lastMessageAt)}
+                          <div>
+                            <div style={{ fontSize: 15, fontWeight: 800, lineHeight: 1.25, overflowWrap: "anywhere" }}>{selectedProjectThread.subject || "No subject"}</div>
+                            <div style={{ fontSize: 11, color: C.tt, marginTop: 3 }}>
+                              {selectedProjectThread.artistName} · {selectedProjectThread.mailboxLabel} · last activity {rD(selectedProjectThread.lastMessageAt)}
+                            </div>
                           </div>
+                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                          {selectedProjectThread.artist && (
+                            <button onClick={() => openA(selectedProjectThread.artist)} style={actionBtn(false, "accent")}>Open Artist</button>
+                          )}
+                          <button
+                            onClick={() => deleteInboxThreads(selectedProjectThread.sourceThreadKeys || [selectedProjectThread.primaryThreadKey || selectedProjectThread.threadKey], `the synced conversation for ${selectedProjectThread.artistName}`)}
+                            disabled={threadWorkflowSaving || isReadOnly}
+                            style={Object.assign({}, actionBtn(false, "danger"), lockStyle(threadWorkflowSaving || isReadOnly))}
+                          >
+                            Delete Thread
+                          </button>
                         </div>
-                        {selectedProjectThread.artist && (
-                          <button onClick={() => openA(selectedProjectThread.artist)} style={actionBtn(false, "accent")}>Open Artist</button>
-                        )}
                       </div>
                       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
                         <span style={{ ...mkP(true, selectedProjectThread.artist ? sc(selectedProjectThread.artist.stage, C) : C.tt, selectedProjectThread.artist ? sb(selectedProjectThread.artist.stage, C) : C.sa), cursor: "default" }}>
@@ -6072,13 +6145,6 @@ Requirements:
                             style={{ padding: "6px 10px", borderRadius: 9, border: `1px solid ${C.bd}`, background: C.sf, color: C.ts, cursor: threadWorkflowSaving || isReadOnly || selectedProjectThread.status === "closed" ? "not-allowed" : "pointer", fontSize: 11, fontFamily: ft, ...lockStyle(threadWorkflowSaving || isReadOnly || selectedProjectThread.status === "closed") }}
                           >
                             Mark Done
-                          </button>
-                          <button
-                            onClick={() => deleteInboxThreads(selectedProjectThread.sourceThreadKeys || [selectedProjectThread.primaryThreadKey || selectedProjectThread.threadKey], `the synced conversation for ${selectedProjectThread.artistName}`)}
-                            disabled={threadWorkflowSaving || isReadOnly}
-                            style={{ padding: "6px 10px", borderRadius: 9, border: `1px solid ${C.rbd}`, background: C.rb, color: C.rd, cursor: threadWorkflowSaving || isReadOnly ? "not-allowed" : "pointer", fontSize: 11, fontFamily: ft, ...lockStyle(threadWorkflowSaving || isReadOnly) }}
-                          >
-                            Delete Sync
                           </button>
                         </div>
                       </div>
@@ -6212,7 +6278,7 @@ Requirements:
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
                 <div>
                   <div style={{ fontSize: 18, fontWeight: 700 }}>🔍 AI Artist Discovery</div>
-                  <div style={{ fontSize: 11, color: C.tt }}>Model: {modelLabel(taskModel("discovery"))} · {currentAiProvider === "openai" ? "OpenAI" : "Anthropic"}</div>
+                  <div style={{ fontSize: 11, color: C.tt }}>Model: {modelLabel(taskModel("discovery"))} · {providerLabel(currentAiProvider)}</div>
                 </div>
                 <button onClick={() => setShowDiscover(false)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: C.ts }}>✕</button>
               </div>
@@ -6286,7 +6352,7 @@ Requirements:
                       </select>
                     </label>
                     <button disabled={!isAdmin} onClick={configureAiKey} style={{ ...actionBtn(true, aiKeySet ? "good" : "danger"), ...lockStyle(!isAdmin) }}>
-                      {currentAiProvider === "openai" ? "OpenAI Key" : "Anthropic Key"} {aiKeySet ? "Set" : "Missing"}
+                      {providerLabel(currentAiProvider)} Key {aiKeySet ? "Set" : "Missing"}
                     </button>
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                       {[["intel", "Intel"], ["drafts", "Drafts"], ["discovery", "Discovery"], ["reply", "Reply"], ["followup", "Follow-up"]].map(([task, label]) => (
