@@ -54,7 +54,30 @@ export async function POST(req: NextRequest) {
         tokenExpiresAt: refreshed.tokenExpiresAt || '',
         lastError: '',
       });
-      const threadIds = await gmailSearchThreadIds(refreshed.accessToken, parsed.data.artistEmail, 12);
+      const trackedInbox = await listArtistInbox(parsed.data.projectId, parsed.data.artistName);
+      const anchoredThreadIds = Array.from(
+        new Set(
+          (trackedInbox.messages || [])
+            .filter((message) =>
+              message.senderUserId === connection.userId &&
+              message.direction === 'outbound' &&
+              (message.actorUserId || message.actorEmail),
+            )
+            .map((message) => String(message.externalThreadId || '').trim())
+            .filter(Boolean),
+        ),
+      );
+      if (anchoredThreadIds.length) {
+        const staleThreadKeys = (trackedInbox.threads || [])
+          .filter((thread) => thread.senderUserId === connection.userId && !anchoredThreadIds.includes(String(thread.externalThreadId || '').trim()))
+          .map((thread) => thread.threadKey);
+        if (staleThreadKeys.length) {
+          await deleteGmailThreads(staleThreadKeys);
+        }
+      }
+      const threadIds = anchoredThreadIds.length
+        ? anchoredThreadIds
+        : await gmailSearchThreadIds(refreshed.accessToken, parsed.data.artistEmail, 12);
       for (const threadId of threadIds) {
         const gmailThread = await fetchGmailThread(refreshed.accessToken, threadId);
         const records = threadToStoreRecords({

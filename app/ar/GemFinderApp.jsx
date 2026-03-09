@@ -64,12 +64,14 @@ const AI_PROVIDERS = [
   { id: "anthropic", label: "Anthropic" },
   { id: "openai", label: "OpenAI" },
   { id: "google", label: "Google Gemini" },
+  { id: "deepseek", label: "DeepSeek" },
 ];
 
 const AI_PROVIDER_LABELS = {
   anthropic: "Anthropic",
   openai: "OpenAI",
   google: "Google Gemini",
+  deepseek: "DeepSeek",
 };
 
 const AI_MODEL_OPTIONS = {
@@ -87,6 +89,10 @@ const AI_MODEL_OPTIONS = {
     { id: "gemini-2.5-flash-lite", label: "Gemini 2.5 Flash-Lite (fast)" },
     { id: "gemini-2.5-flash", label: "Gemini 2.5 Flash (balanced)" },
     { id: "gemini-2.5-pro", label: "Gemini 2.5 Pro (deep)" },
+  ],
+  deepseek: [
+    { id: "deepseek-chat", label: "DeepSeek Chat (balanced)" },
+    { id: "deepseek-reasoner", label: "DeepSeek Reasoner (deep)" },
   ],
 };
 
@@ -111,6 +117,13 @@ const DEFAULT_AI_MODELS = {
     discovery: "gemini-2.5-flash",
     reply: "gemini-2.5-flash-lite",
     followup: "gemini-2.5-flash",
+  },
+  deepseek: {
+    intel: "deepseek-chat",
+    drafts: "deepseek-chat",
+    discovery: "deepseek-chat",
+    reply: "deepseek-chat",
+    followup: "deepseek-reasoner",
   },
 };
 
@@ -166,6 +179,47 @@ const DK = {
   pr: "#59d7d7", pb: "#123335", pbd: "#2e6468",
   sw: "0 4px 12px rgba(0,0,0,0.32)", sm: "0 14px 32px rgba(0,0,0,0.45)", cb: "#101b2f",
 };
+
+const ACCENT_PRESETS = {
+  blue: {
+    label: "Blue",
+    light: { ac: "#2563eb", al: "#eaf1ff", am: "#4f7ff3", at: "#1e40af" },
+    dark: { ac: "#5b8bff", al: "#1c2f55", am: "#759cff", at: "#b3ccff" },
+  },
+  emerald: {
+    label: "Emerald",
+    light: { ac: "#059669", al: "#e9fbf3", am: "#10b981", at: "#047857" },
+    dark: { ac: "#34d399", al: "#11382d", am: "#6ee7b7", at: "#c6f7e2" },
+  },
+  teal: {
+    label: "Teal",
+    light: { ac: "#0f766e", al: "#e7fbf8", am: "#14b8a6", at: "#115e59" },
+    dark: { ac: "#2dd4bf", al: "#123633", am: "#5eead4", at: "#baf7ef" },
+  },
+  amber: {
+    label: "Amber",
+    light: { ac: "#d97706", al: "#fff4e6", am: "#f59e0b", at: "#92400e" },
+    dark: { ac: "#ffc063", al: "#3b2a0f", am: "#ffd48f", at: "#ffe4ba" },
+  },
+  rose: {
+    label: "Rose",
+    light: { ac: "#e11d48", al: "#fff0f4", am: "#fb7185", at: "#be123c" },
+    dark: { ac: "#fb7185", al: "#3f1722", am: "#fda4af", at: "#ffd4dc" },
+  },
+  violet: {
+    label: "Violet",
+    light: { ac: "#7c3aed", al: "#f3edff", am: "#8b5cf6", at: "#5b21b6" },
+    dark: { ac: "#a78bfa", al: "#27163f", am: "#c4b5fd", at: "#e5ddff" },
+  },
+};
+
+function applyAccentTheme(baseTheme, accentId = "blue", darkMode = false) {
+  const preset = ACCENT_PRESETS[accentId] || ACCENT_PRESETS.blue;
+  return {
+    ...baseTheme,
+    ...(darkMode ? preset.dark : preset.light),
+  };
+}
 
 const AB_VARIANTS = {
   dm: [
@@ -694,6 +748,10 @@ function normalizeProject(p) {
       ...DEFAULT_AI_MODELS.google,
       ...(p.settings?.aiModelsByProvider?.google || {}),
     },
+    deepseek: {
+      ...DEFAULT_AI_MODELS.deepseek,
+      ...(p.settings?.aiModelsByProvider?.deepseek || {}),
+    },
   };
   return {
     ...p,
@@ -726,11 +784,15 @@ function normalizeProject(p) {
       aiProvider: "anthropic",
       draftGuardrails: { ...DEFAULT_DRAFT_GUARDRAILS },
       savedTemplates: [],
+      appearance: { accent: "blue" },
       ...(p.settings || {}),
       publicCsvToken: p.settings?.publicCsvToken || "",
       aiModelsByProvider,
       draftGuardrails: { ...DEFAULT_DRAFT_GUARDRAILS, ...(p.settings?.draftGuardrails || {}) },
       savedTemplates: sanitizeSavedTemplates(p.settings?.savedTemplates || []),
+      appearance: {
+        accent: p.settings?.appearance?.accent && ACCENT_PRESETS[p.settings.appearance.accent] ? p.settings.appearance.accent : "blue",
+      },
     },
   };
 }
@@ -739,6 +801,7 @@ const AI_KEY_STORAGE = {
   anthropic: "gemfinder-anthropic-key",
   openai: "gemfinder-openai-key",
   google: "gemfinder-google-key",
+  deepseek: "gemfinder-deepseek-key",
 };
 
 function getStoredAiKey(provider = "anthropic") {
@@ -759,7 +822,7 @@ function detectProviderFromKey(value) {
   if (!key) return null;
   if (key.startsWith("sk-ant-")) return "anthropic";
   if (key.startsWith("AIza")) return "google";
-  if (key.startsWith("sk-proj-") || key.startsWith("sk-")) return "openai";
+  if (key.startsWith("sk-proj-")) return "openai";
   return null;
 }
 
@@ -828,6 +891,8 @@ async function aiCall(prompt, maxTokens = 1200, provider = "anthropic", apiKey =
     ? "/api/ai/openai"
     : provider === "google"
       ? "/api/ai/google"
+      : provider === "deepseek"
+        ? "/api/ai/deepseek"
       : "/api/ai/anthropic";
   try {
     const proxy = await fetch(proxyEndpoint, {
@@ -1915,7 +1980,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     setGmailBanner({ kind, message, details });
   }, []);
 
-  const C = dark ? DK : LT;
+  const currentAccent = proj?.settings?.appearance?.accent || "blue";
+  const C = applyAccentTheme(dark ? DK : LT, currentAccent, dark);
   const gmailBannerTone = gmailBanner?.kind === "error"
     ? { border: C.rbd, bg: C.rb, fg: C.rd }
     : gmailBanner?.kind === "success"
@@ -2106,7 +2172,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         setShowFunnel(!!initialLayout.showFunnel);
         setShowAB(!!initialLayout.showAB);
         setShowFilters(!!initialLayout.showFilters);
-        setAiKeySet(!!getStoredAiKey("anthropic") || !!getStoredAiKey("openai"));
+        setAiKeySet(AI_PROVIDERS.some(provider => !!getStoredAiKey(provider.id)));
 
         if (authUserId) {
           const shared = await apiGetProjects();
@@ -2468,6 +2534,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       anthropic: { ...DEFAULT_AI_MODELS.anthropic, ...(proj.settings?.aiModelsByProvider?.anthropic || {}) },
       openai: { ...DEFAULT_AI_MODELS.openai, ...(proj.settings?.aiModelsByProvider?.openai || {}) },
       google: { ...DEFAULT_AI_MODELS.google, ...(proj.settings?.aiModelsByProvider?.google || {}) },
+      deepseek: { ...DEFAULT_AI_MODELS.deepseek, ...(proj.settings?.aiModelsByProvider?.deepseek || {}) },
     };
     byProvider[currentAiProvider] = { ...byProvider[currentAiProvider], [task]: modelId };
     const nextProj = { ...proj, settings: { ...(proj.settings || {}), aiModelsByProvider: byProvider } };
@@ -2482,6 +2549,23 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     await saveProject(nextProj);
     setAiKeySet(!!getStoredAiKey(providerId));
     flash(`AI provider: ${providerLabel(providerId)}`);
+  };
+
+  const saveAppearanceAccent = async accentId => {
+    if (!requireAdmin()) return;
+    if (!proj || !ACCENT_PRESETS[accentId]) return;
+    const nextProj = {
+      ...proj,
+      settings: {
+        ...(proj.settings || {}),
+        appearance: {
+          ...(proj.settings?.appearance || {}),
+          accent: accentId,
+        },
+      },
+    };
+    await saveProject(nextProj);
+    flash(`Accent: ${ACCENT_PRESETS[accentId].label}`);
   };
 
   const saveDraftGuardrails = async patch => {
@@ -2850,22 +2934,23 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     return loadProjectInbox(proj.id, thread.threadKey, sourceKeys);
   };
 
-  const syncArtistInbox = async (artist, senderUserId = "") => {
+  const syncArtistInbox = async (artist, senderUserId = "", opts = {}) => {
+    const { silent = false, background = false } = opts;
     if (!requireEditor()) return { ok: false, error: "Editor role required" };
     if (!proj?.id || !artist?.e) {
-      flash("This artist does not have an email to sync", "err");
+      if (!silent) flash("This artist does not have an email to sync", "err");
       return { ok: false, error: "Missing artist email" };
     }
-    setSyncingInbox(true);
+    if (!background) setSyncingInbox(true);
     const result = await apiSyncArtistInbox({
       projectId: proj.id,
       artistName: artist.n,
       artistEmail: artist.e,
       ...(senderUserId ? { senderUserId } : {}),
     });
-    setSyncingInbox(false);
+    if (!background) setSyncingInbox(false);
     if (!result.ok) {
-      flash(result.error || "Inbox sync failed", "err");
+      if (!silent) flash(result.error || "Inbox sync failed", "err");
       return result;
     }
     setArtistInbox({
@@ -2885,10 +2970,12 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       await loadProjectInbox(proj.id);
     }
     await refreshGmailStatus();
-    if (result.errors?.length) {
-      flash(result.errors[0], "err");
-    } else {
-      flash(result.syncedUsers?.length ? `Synced ${result.syncedUsers.length} Gmail inbox${result.syncedUsers.length === 1 ? "" : "es"}` : "Inbox synced");
+    if (!silent) {
+      if (result.errors?.length) {
+        flash(result.errors[0], "err");
+      } else {
+        flash(result.syncedUsers?.length ? `Synced ${result.syncedUsers.length} Gmail inbox${result.syncedUsers.length === 1 ? "" : "es"}` : "Inbox synced");
+      }
     }
     return result;
   };
@@ -2926,10 +3013,12 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
           anthropic: { ...DEFAULT_AI_MODELS.anthropic },
           openai: { ...DEFAULT_AI_MODELS.openai },
           google: { ...DEFAULT_AI_MODELS.google },
+          deepseek: { ...DEFAULT_AI_MODELS.deepseek },
         },
         draftGuardrails: { ...DEFAULT_DRAFT_GUARDRAILS },
         savedTemplates: [],
         publicCsvToken: "",
+        appearance: { accent: "blue" },
       },
       created: new Date().toISOString(),
     };
@@ -4114,6 +4203,38 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   useEffect(() => {
     setProjectThreadNoteDraft(selectedProjectThread?.internalNote || "");
   }, [selectedProjectThread?.threadKey, selectedProjectThread?.internalNote]);
+  useEffect(() => {
+    if (!gmailConnected) return undefined;
+    if (syncingInbox) return undefined;
+    let pollArtist = null;
+    let pollSenderUserId = "";
+    if (screen === "detail" && detailTab === "inbox" && selA?.e && activeArtistInboxThread?.senderUserId) {
+      pollArtist = selA;
+      pollSenderUserId = activeArtistInboxThread.senderUserId;
+    } else if (projectMode === "inbox" && selectedProjectThread?.artist?.e && selectedProjectThread?.senderUserId) {
+      pollArtist = selectedProjectThread.artist;
+      pollSenderUserId = selectedProjectThread.senderUserId;
+    }
+    if (!pollArtist || !pollSenderUserId) return undefined;
+    const timer = setInterval(() => {
+      syncArtistInbox(pollArtist, pollSenderUserId, { silent: true, background: true }).catch(() => null);
+    }, 75000);
+    return () => clearInterval(timer);
+  }, [
+    gmailConnected,
+    syncingInbox,
+    screen,
+    detailTab,
+    selA?.n,
+    selA?.e,
+    activeArtistInboxThread?.threadKey,
+    activeArtistInboxThread?.senderUserId,
+    projectMode,
+    selectedProjectThread?.threadKey,
+    selectedProjectThread?.senderUserId,
+    selectedProjectThread?.artist?.n,
+    selectedProjectThread?.artist?.e,
+  ]);
   const handleKanbanDrop = async (stageId, droppedName = "") => {
     if (!canEdit) {
       flash("Viewer role is read-only", "err");
@@ -5490,7 +5611,7 @@ Requirements:
               {sidebarUtilityCards.map(card => (
                 <div key={card.label} className="gf-project-utility-card">
                   <div className="gf-project-utility-label">{card.label}</div>
-                  <div className="gf-project-utility-value" style={{ color: card.tone || C.tx, fontSize: card.label === "Mailbox" ? 15 : 22, lineHeight: card.label === "Mailbox" ? 1.28 : 1.12, wordBreak: card.label === "Mailbox" ? "break-all" : "break-word" }}>
+                  <div className="gf-project-utility-value" style={{ color: card.tone || C.tx, fontSize: card.label === "Mailbox" ? 13 : 22, lineHeight: card.label === "Mailbox" ? 1.3 : 1.12, overflowWrap: "anywhere", wordBreak: card.label === "Mailbox" ? "normal" : "break-word" }}>
                     {card.value}
                   </div>
                 </div>
@@ -6354,8 +6475,9 @@ Requirements:
                     <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 4 }}>
                       <span>Provider</span>
                       <select value={currentAiProvider} disabled={!isAdmin} onChange={e => saveAiProvider(e.target.value)} style={{ ...iS, ...lockStyle(!isAdmin) }}>
-                        <option value="anthropic">Anthropic</option>
-                        <option value="openai">OpenAI</option>
+                        {AI_PROVIDERS.map(provider => (
+                          <option key={provider.id} value={provider.id}>{provider.label}</option>
+                        ))}
                       </select>
                     </label>
                     <button disabled={!isAdmin} onClick={configureAiKey} style={{ ...actionBtn(true, aiKeySet ? "good" : "danger"), ...lockStyle(!isAdmin) }}>
@@ -6371,6 +6493,43 @@ Requirements:
                         </label>
                       ))}
                     </div>
+                  </div>
+                </div>
+
+                <div style={{ ...cS, boxShadow: "none", padding: "14px 16px", background: C.sa }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>Appearance</div>
+                  <div style={{ fontSize: 11, color: C.tt, marginBottom: 10 }}>Accent color for this project workspace.</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 8 }}>
+                    {Object.entries(ACCENT_PRESETS).map(([accentId, preset]) => {
+                      const active = currentAccent === accentId;
+                      const swatch = dark ? preset.dark.ac : preset.light.ac;
+                      return (
+                        <button
+                          key={accentId}
+                          disabled={!isAdmin}
+                          onClick={() => saveAppearanceAccent(accentId)}
+                          style={{
+                            padding: "10px 12px",
+                            borderRadius: 12,
+                            border: `1.5px solid ${active ? swatch : C.bd}`,
+                            background: active ? (dark ? preset.dark.al : preset.light.al) : C.sf,
+                            color: active ? swatch : C.ts,
+                            cursor: isAdmin ? "pointer" : "not-allowed",
+                            fontSize: 11,
+                            fontWeight: 700,
+                            fontFamily: ft,
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 8,
+                            justifyContent: "center",
+                            ...lockStyle(!isAdmin),
+                          }}
+                        >
+                          <span style={{ width: 10, height: 10, borderRadius: 999, background: swatch, display: "inline-block" }} />
+                          {preset.label}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
 
