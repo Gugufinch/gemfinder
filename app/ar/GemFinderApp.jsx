@@ -1958,12 +1958,12 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     .gf-project-kicker{font-size:11px;font-weight:700;letter-spacing:2.2px;text-transform:uppercase;color:${C.ac};margin-bottom:10px}
     .gf-project-subline{font-size:14px;color:${C.ts};line-height:1.75}
     .gf-project-sidebar-nav{display:grid;gap:8px}
-    .gf-project-nav-btn{display:flex;align-items:center;gap:12px;width:100%;padding:14px 16px;border-radius:18px;border:1px solid ${C.bd};background:transparent;color:${C.ts};cursor:pointer;font-size:14px;font-weight:700;font-family:${ft};text-align:left}
+    .gf-project-nav-btn{display:flex;align-items:flex-start;gap:12px;width:100%;padding:14px 16px;border-radius:18px;border:1px solid ${C.bd};background:transparent;color:${C.ts};cursor:pointer;font-size:14px;font-weight:700;font-family:${ft};text-align:left}
     .gf-project-nav-btn.active{border-color:${C.ac}50;background:${C.al};color:${C.ac}}
     .gf-project-nav-icon{width:28px;height:28px;border-radius:10px;border:1px solid ${C.bd};display:inline-flex;align-items:center;justify-content:center;background:${C.sa};flex-shrink:0}
     .gf-project-nav-btn.active .gf-project-nav-icon{border-color:${C.ac}34;background:${C.sf}}
-    .gf-project-nav-meta{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:10px;width:100%}
-    .gf-project-nav-hint{font-size:11px;color:${C.tt};font-weight:500;line-height:1.3;text-align:right;max-width:92px}
+    .gf-project-nav-meta{display:grid;gap:3px;width:100%;min-width:0}
+    .gf-project-nav-hint{font-size:11px;color:${C.tt};font-weight:500;line-height:1.35;text-align:left;max-width:none}
     .gf-project-utility-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
     .gf-project-utility-card{padding:14px 14px;border:1px solid ${C.bd};border-radius:16px;background:${C.sf};min-height:98px;display:grid;align-content:start}
     .gf-project-utility-label{font-size:10px;color:${C.tt};text-transform:uppercase;letter-spacing:1px;margin-bottom:8px}
@@ -5431,9 +5431,9 @@ Requirements:
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 8, marginBottom: 12 }}>
                 {sidebarQuickStats.map(({ label, value }) => (
-                  <div key={label} style={{ borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sf, padding: "8px 10px" }}>
-                    <div style={{ fontSize: 10, color: C.tt, textTransform: "uppercase", letterSpacing: 1 }}>{label}</div>
-                    <div style={{ fontSize: 20, fontWeight: 800, lineHeight: 1.1 }}>{value}</div>
+                  <div key={label} style={{ borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sf, padding: "9px 10px", minWidth: 0 }}>
+                    <div style={{ fontSize: 9, color: C.tt, textTransform: "uppercase", letterSpacing: 0.7, lineHeight: 1.2, overflowWrap: "anywhere" }}>{label}</div>
+                    <div style={{ fontSize: 18, fontWeight: 800, lineHeight: 1.1, marginTop: 3 }}>{value}</div>
                   </div>
                 ))}
               </div>
@@ -5483,7 +5483,7 @@ Requirements:
               {sidebarUtilityCards.map(card => (
                 <div key={card.label} className="gf-project-utility-card">
                   <div className="gf-project-utility-label">{card.label}</div>
-                  <div className="gf-project-utility-value" style={{ color: card.tone || C.tx, fontSize: card.label === "Mailbox" ? 18 : 22 }}>
+                  <div className="gf-project-utility-value" style={{ color: card.tone || C.tx, fontSize: card.label === "Mailbox" ? 15 : 22, lineHeight: card.label === "Mailbox" ? 1.28 : 1.12, wordBreak: card.label === "Mailbox" ? "break-all" : "break-word" }}>
                     {card.value}
                   </div>
                 </div>
@@ -5499,7 +5499,7 @@ Requirements:
               </span>
             </div>
             <div style={{ display: "grid", gap: 8 }}>
-              <button onClick={() => setShowProjectMenu(true)} style={{ ...actionBtn(false, "neutral"), width: "100%", justifyContent: "center" }}>Project Tools</button>
+              <button onClick={() => setShowProjectMenu(true)} style={{ ...actionBtn(false, "neutral"), width: "100%", justifyContent: "center" }}>Settings</button>
             </div>
             <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
               <button onClick={signOut} style={{ ...actionBtn(false, "neutral"), flex: 1, justifyContent: "center" }}>Sign out</button>
