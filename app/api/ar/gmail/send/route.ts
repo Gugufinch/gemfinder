@@ -74,12 +74,16 @@ export async function POST(req: NextRequest) {
     const records = threadToStoreRecords({
       projectId: parsed.data.projectId,
       artistName: parsed.data.artistName,
+      artistEmail: parsed.data.artistEmail,
       senderUserId: sender.userId,
       senderGmailEmail: sender.gmailEmail,
       actorUserId: actor.userId,
       actorEmail: actor.email,
       thread: gmailThread,
     });
+    if (!records) {
+      throw new Error('Could not mirror the sent Gmail thread into GEMFINDER');
+    }
     await upsertArtistInbox(records.thread, records.messages);
     await updateGmailConnectionMetadata(sender.userId, {
       lastSyncAt: new Date().toISOString(),

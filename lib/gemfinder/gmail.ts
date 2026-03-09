@@ -189,6 +189,23 @@ function lastMessageAt(thread: GmailThread): string {
   return last ? sentAtForMessage(last) : new Date().toISOString();
 }
 
+function relevantPartySet(message: GmailMessage): string[] {
+  const from = parseFromHeader(getHeader(message, 'From')).email.toLowerCase();
+  const toEmails = parseAddressList(getHeader(message, 'To'));
+  const ccEmails = parseAddressList(getHeader(message, 'Cc'));
+  return [...new Set([from, ...toEmails, ...ccEmails].filter(Boolean))];
+}
+
+function isStrictMailboxArtistMessage(message: GmailMessage, artistEmail: string, senderGmailEmail: string): boolean {
+  const artist = String(artistEmail || '').trim().toLowerCase();
+  const mailbox = String(senderGmailEmail || '').trim().toLowerCase();
+  if (!artist || !mailbox) return false;
+  const parties = relevantPartySet(message);
+  if (!parties.length) return false;
+  if (!parties.includes(artist) || !parties.includes(mailbox)) return false;
+  return parties.every((item) => item === artist || item === mailbox);
+}
+
 function computeExpiry(expiresIn?: number): string {
   const clean = Number(expiresIn || 0);
   if (!Number.isFinite(clean) || clean <= 0) return '';
@@ -390,13 +407,21 @@ export async function fetchGmailThread(accessToken: string, externalThreadId: st
 export function threadToStoreRecords(input: {
   projectId: string;
   artistName: string;
+  artistEmail: string;
   senderUserId: string;
   senderGmailEmail: string;
   actorUserId?: string;
   actorEmail?: string;
   thread: GmailThread;
-}): { thread: GmailThreadRecord; messages: GmailMessageRecord[] } {
-  const { projectId, artistName, senderUserId, senderGmailEmail, actorUserId = '', actorEmail = '', thread } = input;
+}): { thread: GmailThreadRecord; messages: GmailMessageRecord[] } | null {
+  const { projectId, artistName, artistEmail, senderUserId, senderGmailEmail, actorUserId = '', actorEmail = '', thread } = input;
+  const filteredThread: GmailThread = {
+    ...thread,
+    messages: (thread.messages || []).filter((message) =>
+      isStrictMailboxArtistMessage(message, artistEmail, senderGmailEmail),
+    ),
+  };
+  if (!(filteredThread.messages || []).length) return null;
   const externalThreadId = String(thread.id || '');
   const threadKey = buildThreadKey(projectId, senderUserId, externalThreadId);
   const threadRecord: GmailThreadRecord = {
@@ -408,11 +433,11 @@ export function threadToStoreRecords(input: {
     externalThreadId,
     senderUserId,
     senderGmailEmail: senderGmailEmail.toLowerCase(),
-    subject: subjectForThread(thread),
-    participants: participantsForThread(thread),
+    subject: subjectForThread(filteredThread),
+    participants: participantsForThread(filteredThread),
     counterpartyEmail: '',
-    snippet: latestSnippet(thread),
-    lastMessageAt: lastMessageAt(thread),
+    snippet: latestSnippet(filteredThread),
+    lastMessageAt: lastMessageAt(filteredThread),
     lastInboundAt: '',
     lastOutboundAt: '',
     lastMessageDirection: 'none',
@@ -426,7 +451,7 @@ export function threadToStoreRecords(input: {
     updatedAt: new Date().toISOString(),
   };
 
-  const messages = (thread.messages || []).map((message) => {
+  const messages = (filteredThread.messages || []).map((message) => {
     const from = parseFromHeader(getHeader(message, 'From'));
     const toEmails = parseAddressList(getHeader(message, 'To'));
     const ccEmails = parseAddressList(getHeader(message, 'Cc'));
@@ -467,7 +492,7 @@ export function threadToStoreRecords(input: {
   const lastOutbound = outboundMessages[outboundMessages.length - 1] || null;
   const counterpartyEmail =
     lastInbound?.senderEmail ||
-    participantsForThread(thread).find((item) => item !== senderGmailEmail.toLowerCase()) ||
+    participantsForThread(filteredThread).find((item) => item !== senderGmailEmail.toLowerCase()) ||
     '';
 
   threadRecord.counterpartyEmail = String(counterpartyEmail || '').trim().toLowerCase();

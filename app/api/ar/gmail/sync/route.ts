@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { getAuthUserById } from '@/lib/gemfinder/auth-store';
 import { fetchGmailThread, gmailSearchThreadIds, refreshGoogleAccessToken, threadToStoreRecords } from '@/lib/gemfinder/gmail';
 import {
+  buildThreadKey,
+  deleteGmailThreads,
   getPrivateGmailConnectionByUserId,
   listArtistInbox,
   listWorkspaceGmailConnections,
@@ -58,10 +60,15 @@ export async function POST(req: NextRequest) {
         const records = threadToStoreRecords({
           projectId: parsed.data.projectId,
           artistName: parsed.data.artistName,
+          artistEmail: parsed.data.artistEmail,
           senderUserId: connection.userId,
           senderGmailEmail: connection.gmailEmail,
           thread: gmailThread,
         });
+        if (!records) {
+          await deleteGmailThreads([buildThreadKey(parsed.data.projectId, connection.userId, String(gmailThread.id || threadId))]);
+          continue;
+        }
         await upsertArtistInbox(records.thread, records.messages);
       }
       await updateGmailConnectionMetadata(connection.userId, {

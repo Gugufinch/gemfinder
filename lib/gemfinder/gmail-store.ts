@@ -835,3 +835,30 @@ export async function updateGmailThreadWorkflow(
   );
   return res.rows[0] ? mapDbThread(res.rows[0]) : null;
 }
+
+export async function deleteGmailThreads(threadKeys: string[]): Promise<number> {
+  const keys = Array.from(new Set((threadKeys || []).map((item) => String(item || '').trim()).filter(Boolean)));
+  if (!keys.length) return 0;
+
+  if (!hasDatabase()) {
+    const local = await readLocalStore();
+    const keySet = new Set(keys);
+    const nextThreads = local.threads.filter((item) => !keySet.has(item.threadKey));
+    const nextMessages = local.messages.filter((item) => !keySet.has(item.threadKey));
+    const deletedCount = local.threads.length - nextThreads.length;
+    if (deletedCount > 0) {
+      await writeLocalStore({
+        ...local,
+        threads: nextThreads,
+        messages: nextMessages,
+      });
+    }
+    return deletedCount;
+  }
+
+  await ensureSchema();
+  const db = getPool();
+  await db.query('delete from gemfinder_gmail_messages where thread_key = any($1::text[])', [keys]);
+  const res = await db.query('delete from gemfinder_gmail_threads where thread_key = any($1::text[])', [keys]);
+  return Number(res.rowCount || 0);
+}

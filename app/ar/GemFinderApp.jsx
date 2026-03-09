@@ -1550,6 +1550,21 @@ async function apiUpdateGmailThread(payload) {
   }
 }
 
+async function apiDeleteGmailThreads(threadKeys) {
+  try {
+    const res = await fetch("/api/ar/gmail/thread", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ threadKeys }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return { ok: false, error: data.error || "Could not delete inbox thread" };
+    return { ok: true, deleted: Number(data.deleted || 0) };
+  } catch {
+    return { ok: false, error: "Network error deleting inbox thread" };
+  }
+}
+
 function parseCSV(text) {
   const lines = text.split(/\r?\n/).filter(l => l.trim());
   if (lines.length < 2) return [];
@@ -3533,6 +3548,38 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     return results[0]?.thread || null;
   };
 
+  const deleteInboxThreads = async (threadKey, label = "this synced inbox thread") => {
+    if (!requireEditor()) return false;
+    const threadKeys = Array.isArray(threadKey) ? Array.from(new Set(threadKey.filter(Boolean))) : [threadKey].filter(Boolean);
+    if (!threadKeys.length) return false;
+    const ok = typeof window === "undefined"
+      ? true
+      : window.confirm(`Delete ${label} from GEMFINDER inbox?\n\nThis only removes the synced copy here. It will not delete the email from Gmail.`);
+    if (!ok) return false;
+    setThreadWorkflowSaving(true);
+    const result = await apiDeleteGmailThreads(threadKeys);
+    setThreadWorkflowSaving(false);
+    if (!result.ok) {
+      flash(result.error || "Could not delete inbox thread", "err");
+      return false;
+    }
+    const keySet = new Set(threadKeys);
+    setProjectInbox(prev => ({
+      ...prev,
+      threads: (prev.threads || []).filter(item => !keySet.has(item.threadKey)),
+      messages: (prev.messages || []).filter(item => !keySet.has(item.threadKey)),
+    }));
+    setArtistInbox(prev => ({
+      ...prev,
+      threads: (prev.threads || []).filter(item => !keySet.has(item.threadKey)),
+      messages: (prev.messages || []).filter(item => !keySet.has(item.threadKey)),
+    }));
+    if (selectedThreadKey && keySet.has(selectedThreadKey)) setSelectedThreadKey("");
+    if (selectedProjectThreadKey && keySet.has(selectedProjectThreadKey)) setSelectedProjectThreadKey("");
+    flash(`Removed ${result.deleted || threadKeys.length} synced inbox ${threadKeys.length === 1 ? "thread" : "threads"}. Gmail mailbox unchanged.`);
+    return true;
+  };
+
   const enrollSeq = async (artist, sequenceId) => {
     if (!requireEditor()) return;
     if (!proj) return;
@@ -4808,6 +4855,13 @@ Requirements:
                             >
                               Mark Done
                             </button>
+                            <button
+                              onClick={() => deleteInboxThreads(selectedThread.threadKey, `the synced thread for ${a.n}`)}
+                              disabled={threadWorkflowSaving || isReadOnly}
+                              style={{ padding: "6px 10px", borderRadius: 9, border: `1px solid ${C.rbd}`, background: C.rb, color: C.rd, cursor: threadWorkflowSaving || isReadOnly ? "not-allowed" : "pointer", fontSize: 11, fontFamily: ft, ...lockStyle(threadWorkflowSaving || isReadOnly) }}
+                            >
+                              Delete Sync
+                            </button>
                           </div>
                         </div>
                         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
@@ -6018,6 +6072,13 @@ Requirements:
                             style={{ padding: "6px 10px", borderRadius: 9, border: `1px solid ${C.bd}`, background: C.sf, color: C.ts, cursor: threadWorkflowSaving || isReadOnly || selectedProjectThread.status === "closed" ? "not-allowed" : "pointer", fontSize: 11, fontFamily: ft, ...lockStyle(threadWorkflowSaving || isReadOnly || selectedProjectThread.status === "closed") }}
                           >
                             Mark Done
+                          </button>
+                          <button
+                            onClick={() => deleteInboxThreads(selectedProjectThread.sourceThreadKeys || [selectedProjectThread.primaryThreadKey || selectedProjectThread.threadKey], `the synced conversation for ${selectedProjectThread.artistName}`)}
+                            disabled={threadWorkflowSaving || isReadOnly}
+                            style={{ padding: "6px 10px", borderRadius: 9, border: `1px solid ${C.rbd}`, background: C.rb, color: C.rd, cursor: threadWorkflowSaving || isReadOnly ? "not-allowed" : "pointer", fontSize: 11, fontFamily: ft, ...lockStyle(threadWorkflowSaving || isReadOnly) }}
+                          >
+                            Delete Sync
                           </button>
                         </div>
                       </div>
