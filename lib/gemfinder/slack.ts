@@ -11,11 +11,18 @@ const STAGE_LABELS: Record<string, string> = {
   dead: 'Dead'
 };
 
+type ProjectArtist = {
+  n?: string;
+  e?: string;
+  soc?: string;
+};
+
 type WorkspaceProject = {
   id?: string;
   name?: string;
   pipeline?: Record<string, { stage?: string } | undefined>;
   assignments?: Record<string, string | undefined>;
+  artists?: ProjectArtist[];
 };
 
 type StageTransition = {
@@ -25,6 +32,8 @@ type StageTransition = {
   previousStage: string;
   nextStage: string;
   owner: string;
+  profileUrl: string;
+  spotifyUrl: string;
 };
 
 function asProjects(value: unknown): WorkspaceProject[] {
@@ -33,6 +42,25 @@ function asProjects(value: unknown): WorkspaceProject[] {
 
 function stageLabel(stageId: string): string {
   return STAGE_LABELS[stageId] || stageId || 'Unknown';
+}
+
+function appBaseUrl(): string {
+  return String(process.env.APP_URL || process.env.NEXT_PUBLIC_APP_URL || '').trim().replace(/\/+$/, '');
+}
+
+function spotifySearchUrl(artistName: string): string {
+  return `https://open.spotify.com/search/${encodeURIComponent(String(artistName || '').trim())}`;
+}
+
+function artistProfileUrl(projectId: string, artistName: string): string {
+  const base = appBaseUrl();
+  if (!base) return '';
+  const params = new URLSearchParams({
+    project: projectId,
+    artist: artistName,
+    tab: 'overview',
+  });
+  return `${base}/ar?${params.toString()}`;
 }
 
 function extractArtistTransitions(previousProjects: unknown[], nextProjects: unknown[]): StageTransition[] {
@@ -52,13 +80,16 @@ function extractArtistTransitions(previousProjects: unknown[], nextProjects: unk
       const previousStage = String(prevProject?.pipeline?.[artistName]?.stage || '');
       if (!previousStage || previousStage === nextStage) continue;
       if (!NOTIFY_STAGE_IDS.has(nextStage)) continue;
+      const artistRecord = (nextProject?.artists || []).find((artist) => String(artist?.n || '') === artistName);
       transitions.push({
         projectId,
         projectName: String(nextProject?.name || 'Untitled Project'),
         artistName,
         previousStage,
         nextStage,
-        owner: String(nextProject?.assignments?.[artistName] || 'Unassigned')
+        owner: String(nextProject?.assignments?.[artistName] || 'Unassigned'),
+        profileUrl: artistProfileUrl(projectId, artistRecord?.n || artistName),
+        spotifyUrl: spotifySearchUrl(artistRecord?.n || artistName),
       });
     }
   }
@@ -69,6 +100,27 @@ function extractArtistTransitions(previousProjects: unknown[], nextProjects: unk
 function buildSlackPayload(transition: StageTransition, actorEmail: string) {
   const actorLabel = actorEmail || 'Unknown user';
   const text = `GEMFINDER: ${transition.artistName} moved to ${stageLabel(transition.nextStage)} in ${transition.projectName}`;
+  const accessoryButtons = [];
+  if (transition.profileUrl) {
+    accessoryButtons.push({
+      type: 'button',
+      text: {
+        type: 'plain_text',
+        text: 'Open artist',
+      },
+      url: transition.profileUrl,
+    });
+  }
+  if ((transition.nextStage === 'engaged' || transition.nextStage === 'won') && transition.spotifyUrl) {
+    accessoryButtons.push({
+      type: 'button',
+      text: {
+        type: 'plain_text',
+        text: 'Spotify',
+      },
+      url: transition.spotifyUrl,
+    });
+  }
   return {
     text,
     blocks: [
@@ -97,6 +149,22 @@ function buildSlackPayload(transition: StageTransition, actorEmail: string) {
           {
             type: 'mrkdwn',
             text: `*Stage change*\n${stageLabel(transition.previousStage)} -> ${stageLabel(transition.nextStage)}`
+          }
+        ]
+      },
+      ...(accessoryButtons.length
+        ? [{
+            type: 'actions',
+            elements: accessoryButtons,
+          }]
+        : [])
+      ,
+      {
+        type: 'context',
+        elements: [
+          {
+            type: 'mrkdwn',
+            text: transition.profileUrl ? `<${transition.profileUrl}|Open ${transition.artistName} in GemFinder>` : 'GemFinder artist link unavailable',
           }
         ]
       }

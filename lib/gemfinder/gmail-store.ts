@@ -862,3 +862,50 @@ export async function deleteGmailThreads(threadKeys: string[]): Promise<number> 
   const res = await db.query('delete from gemfinder_gmail_threads where thread_key = any($1::text[])', [keys]);
   return Number(res.rowCount || 0);
 }
+
+export async function relabelGmailArtist(projectId: string, previousArtistName: string, nextArtistName: string): Promise<void> {
+  const prevName = String(previousArtistName || '').trim();
+  const nextName = String(nextArtistName || '').trim();
+  if (!projectId || !prevName || !nextName || prevName === nextName) return;
+
+  const nextKey = nextName
+    .toLowerCase()
+    .replace(/\(.*?\)/g, ' ')
+    .replace(/\b(ft|feat|featuring)\b\.?/g, ' ')
+    .replace(/[^a-z0-9]/g, '')
+    .trim();
+
+  if (!hasDatabase()) {
+    const local = await readLocalStore();
+    const nextThreads = local.threads.map((item) =>
+      item.projectId === projectId && item.artistName === prevName
+        ? normalizeThread({ ...item, artistName: nextName, artistKey: nextKey, updatedAt: new Date().toISOString() }) || item
+        : item,
+    );
+    const nextMessages = local.messages.map((item) =>
+      item.projectId === projectId && item.artistName === prevName
+        ? normalizeMessage({ ...item, artistName: nextName, syncedAt: new Date().toISOString() }) || item
+        : item,
+    );
+    await writeLocalStore({ ...local, threads: nextThreads, messages: nextMessages });
+    return;
+  }
+
+  await ensureSchema();
+  const db = getPool();
+  await db.query(
+    `update gemfinder_gmail_threads
+        set artist_name = $3,
+            artist_key = $4,
+            updated_at = now()
+      where project_id = $1 and artist_name = $2`,
+    [projectId, prevName, nextName, nextKey],
+  );
+  await db.query(
+    `update gemfinder_gmail_messages
+        set artist_name = $3,
+            synced_at = now()
+      where project_id = $1 and artist_name = $2`,
+    [projectId, prevName, nextName],
+  );
+}

@@ -24,6 +24,7 @@ const ENGAGED_STAGE_IDS = ["engaged", "won", "live"];
 const WON_STAGE_IDS = ["won", "live"];
 const CLOSED_STAGE_IDS = ["won", "live", "dead"];
 const OPEN_STAGE_IDS = STAGES.map(s => s.id).filter(id => !CLOSED_STAGE_IDS.includes(id));
+const DETAIL_TAB_IDS = new Set(["overview", "outreach", "inbox", "activity"]);
 
 const SEQUENCES = [
   {
@@ -1695,6 +1696,21 @@ async function apiDeleteGmailThreads(threadKeys) {
   }
 }
 
+async function apiRelabelArtistInbox(payload) {
+  try {
+    const res = await fetch("/api/ar/gmail/relabel-artist", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return { ok: false, error: data.error || "Could not relabel artist inbox" };
+    return { ok: true };
+  } catch {
+    return { ok: false, error: "Network error relabeling artist inbox" };
+  }
+}
+
 function parseCSV(text) {
   const lines = text.split(/\r?\n/).filter(l => l.trim());
   if (lines.length < 2) return [];
@@ -1773,6 +1789,37 @@ function omitKey(obj, key) {
   return next;
 }
 
+function renameObjectKey(obj, fromKey, toKey) {
+  if (!obj || !fromKey || !toKey || fromKey === toKey) return { ...(obj || {}) };
+  const next = { ...(obj || {}) };
+  if (Object.prototype.hasOwnProperty.call(next, fromKey)) {
+    next[toKey] = next[fromKey];
+    delete next[fromKey];
+  }
+  return next;
+}
+
+function artistProfilePath(projectId, artistName, tab = "overview") {
+  const params = new URLSearchParams({
+    project: String(projectId || ""),
+    artist: String(artistName || ""),
+    tab: String(tab || "overview"),
+  });
+  return `/ar?${params.toString()}`;
+}
+
+function updateArtistProfileUrl(projectId = "", artistName = "", tab = "") {
+  if (typeof window === "undefined") return;
+  const url = new URL(window.location.href);
+  if (projectId) url.searchParams.set("project", String(projectId));
+  else url.searchParams.delete("project");
+  if (artistName) url.searchParams.set("artist", String(artistName));
+  else url.searchParams.delete("artist");
+  if (tab) url.searchParams.set("tab", String(tab));
+  else url.searchParams.delete("tab");
+  window.history.replaceState({}, "", `${url.pathname}${url.search || ""}${url.hash || ""}`);
+}
+
 function exportPipeline(proj, enriched) {
   const rows = [["Artist", "Owner", "Genre", "Bucket", "Listeners", "Hit Track", "Email", "Social", "Stage", "Priority", "Spotify", "Notes", "Follow-Up", "Follow-Up Plan", "Next Step", "Sends Logged"]];
   enriched.forEach(a => {
@@ -1820,6 +1867,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const fr = useRef(null);
   const rosterRef = useRef(null);
   const workSurfaceRef = useRef(null);
+  const handledArtistLinkRef = useRef("");
 
   const [search, setSearch] = useState("");
   const [gf, setGf] = useState("All");
@@ -1849,6 +1897,16 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     location: "",
     note: "",
   });
+  const [artistEditForm, setArtistEditForm] = useState({
+    name: "",
+    genre: "",
+    listeners: "",
+    hitTrack: "",
+    social: "",
+    email: "",
+    location: "",
+  });
+  const [artistEditSaving, setArtistEditSaving] = useState(false);
 
   const [batch, setBatch] = useState(false);
   const [bSel, setBSel] = useState(new Set());
@@ -2054,6 +2112,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     .gf-detail-tabs{position:sticky;top:12px;z-index:12;display:flex;gap:8px;flex-wrap:wrap;padding:10px 12px;border:1px solid ${C.bd};border-radius:14px;background:${dark ? "rgba(17,26,43,0.92)" : "rgba(255,255,255,0.92)"};backdrop-filter:blur(12px);margin-bottom:16px}
     .gf-detail-rail{display:grid;gap:14px}
     .gf-detail-rail-sticky{position:sticky;top:12px;display:grid;gap:14px}
+    .gf-detail-profile-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
     .gf-detail-intel-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
     .gf-detail-sticky-footer{position:sticky;bottom:16px;z-index:10;margin-top:12px;padding:12px;border:1px solid ${C.bd};border-radius:14px;background:${dark ? "rgba(11,18,32,0.96)" : "rgba(255,255,255,0.96)"};box-shadow:${C.sm};backdrop-filter:blur(12px)}
     .gf-rail-kv{display:grid;gap:4px}
@@ -2061,7 +2120,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     .gf-rail-kv-value{font-size:13px;font-weight:700;color:${C.tx};line-height:1.35}
     @media (min-width:1080px){.gf-detail-shell{grid-template-columns:minmax(0,1fr) 300px}}
     @media (max-width:1160px){.gf-project-shell{grid-template-columns:1fr}.gf-project-sidebar{position:static;height:auto;border-right:none;border-bottom:1px solid ${C.bd}}.gf-project-main-inner{padding:24px 20px 32px}.gf-project-hero{grid-template-columns:1fr}.gf-project-overview-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.gf-project-nav-hint{max-width:none}}
-    @media (max-width:860px){.gf-detail-intel-grid{grid-template-columns:1fr}.gf-detail-tabs{top:8px}.gf-detail-sticky-footer{bottom:10px}.gf-project-overview-grid{grid-template-columns:1fr}.gf-project-headline{font-size:34px}}
+    @media (max-width:860px){.gf-detail-profile-grid{grid-template-columns:1fr}.gf-detail-intel-grid{grid-template-columns:1fr}.gf-detail-tabs{top:8px}.gf-detail-sticky-footer{bottom:10px}.gf-project-overview-grid{grid-template-columns:1fr}.gf-project-headline{font-size:34px}}
   `;
   const actionBtn = (active = false, tint = "neutral") => {
     const tone = {
@@ -2135,6 +2194,15 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     email: "",
     location: "",
     note: "",
+  });
+  const seedArtistEditForm = artist => setArtistEditForm({
+    name: artist?.n || "",
+    genre: artist?.g || "",
+    listeners: artist?.l || "",
+    hitTrack: artist?.h || "",
+    social: artist?.soc ? `@${artist.soc}` : (artist?.ig || ""),
+    email: artist?.e || "",
+    location: artist?.loc || "",
   });
 
   useEffect(() => {
@@ -2285,6 +2353,56 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     url.searchParams.delete("gmail_error_code");
     window.history.replaceState({}, "", `${url.pathname}${url.search || ""}${url.hash || ""}`);
   }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || loading) return;
+    const url = new URL(window.location.href);
+    const projectId = String(url.searchParams.get("project") || "").trim();
+    const artistName = String(url.searchParams.get("artist") || "").trim();
+    const tab = String(url.searchParams.get("tab") || "overview").trim();
+    if (!projectId) return;
+
+    const linkKey = `${projectId}|${artistName || "_project"}|${tab}`;
+    if (handledArtistLinkRef.current === linkKey) return;
+
+    if (apId !== projectId) {
+      setApId(projectId);
+      setScreen("project");
+      return;
+    }
+    if (!proj || proj.id !== projectId) return;
+
+    if (!artistName) {
+      handledArtistLinkRef.current = linkKey;
+      setScreen("project");
+      return;
+    }
+
+    const targetArtist = (proj.artists || []).find(item =>
+      item.n === artistName || canonicalArtistName(item.n) === canonicalArtistName(artistName)
+    );
+    handledArtistLinkRef.current = linkKey;
+    if (!targetArtist) return;
+
+    primeArtistContext(targetArtist);
+    setScreen("detail");
+    setDetailTab(DETAIL_TAB_IDS.has(tab) ? tab : "overview");
+  }, [loading, apId, proj?.id, projects.length]);
+
+  useEffect(() => {
+    if (loading) return;
+    if (screen === "detail" && proj?.id && selA?.n) {
+      updateArtistProfileUrl(proj.id, selA.n, DETAIL_TAB_IDS.has(detailTab) ? detailTab : "overview");
+      return;
+    }
+    if (screen === "project" && proj?.id) {
+      updateArtistProfileUrl(proj.id, "", "");
+      return;
+    }
+    if (screen === "hub") {
+      updateArtistProfileUrl("", "", "");
+    }
+  }, [loading, screen, proj?.id, selA?.n, detailTab]);
 
   const persist = useCallback(async (np, la, dk, vm, lb, wu) => {
     const nextProjects = np || projects;
@@ -3047,7 +3165,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     nw.forEach(a => { if (a.s && !nl[a.n]) nl[a.n] = { stage: "sent", date: new Date().toISOString() }; });
     const nextProj = { ...proj, artists: mg, pipeline: nl };
     await saveProject(nextProj);
-    flash(`+${nw.length} artists (${p.length - nw.length} dupes skipped)`);
+    flash(`Merged ${nw.length} new artists · ${p.length - nw.length} duplicates skipped`);
     e.target.value = "";
   };
 
@@ -3127,6 +3245,84 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     resetArtistForm();
     setShowAddArtist(false);
     flash(alreadyOnPlatform ? `Added ${name} · already found in internal roster` : `Added ${name}`);
+  };
+
+  const saveArtistProfileEdits = async artist => {
+    if (!requireEditor()) return;
+    if (!proj || !artist) return;
+    const previousName = String(artist.n || "");
+    const nextName = artistEditForm.name.trim();
+    if (!nextName) {
+      flash("Artist name is required", "err");
+      return;
+    }
+    const renamed = nextName !== previousName;
+    const nextCanon = canonicalArtistName(nextName);
+    const hasCollision = proj.artists.some(item => item.n !== previousName && canonicalArtistName(item.n) === nextCanon);
+    if (hasCollision) {
+      flash(`${nextName} already exists in this project`, "err");
+      return;
+    }
+
+    const socialHandle = normalizeSocialHandle(artistEditForm.social);
+    const nextArtist = {
+      ...artist,
+      n: nextName,
+      g: artistEditForm.genre.trim(),
+      l: artistEditForm.listeners.trim(),
+      h: artistEditForm.hitTrack.trim(),
+      ig: socialHandle ? `@${socialHandle}` : "",
+      soc: socialHandle,
+      e: artistEditForm.email.trim(),
+      loc: artistEditForm.location.trim(),
+    };
+
+    setArtistEditSaving(true);
+    try {
+      const nextArtists = proj.artists.map(item => item.n === previousName ? nextArtist : item);
+      let nextProj = {
+        ...proj,
+        artists: nextArtists,
+        pipeline: renamed ? renameObjectKey(proj.pipeline, previousName, nextName) : { ...(proj.pipeline || {}) },
+        notes: renamed ? renameObjectKey(proj.notes, previousName, nextName) : { ...(proj.notes || {}) },
+        followUps: renamed ? renameObjectKey(proj.followUps, previousName, nextName) : { ...(proj.followUps || {}) },
+        assignments: renamed ? renameObjectKey(proj.assignments, previousName, nextName) : { ...(proj.assignments || {}) },
+        replyIntel: renamed ? renameObjectKey(proj.replyIntel, previousName, nextName) : { ...(proj.replyIntel || {}) },
+        sequenceState: renamed ? renameObjectKey(proj.sequenceState, previousName, nextName) : { ...(proj.sequenceState || {}) },
+        activityLog: renamed ? renameObjectKey(proj.activityLog, previousName, nextName) : { ...(proj.activityLog || {}) },
+        sendLog: renamed
+          ? (proj.sendLog || []).map(item => item.artist === previousName ? { ...item, artist: nextName } : item)
+          : [...(proj.sendLog || [])],
+      };
+
+      let activityLog = nextProj.activityLog || {};
+      if (renamed) {
+        activityLog = logAction({ ...nextProj, activityLog }, nextName, `Artist renamed from ${previousName}`);
+      }
+      activityLog = logAction({ ...nextProj, activityLog }, nextName, "Artist profile updated");
+      nextProj = { ...nextProj, activityLog };
+
+      await saveProject(nextProj);
+
+      if (renamed) {
+        try {
+          await apiRelabelArtistInbox({
+            projectId: proj.id,
+            previousArtistName: previousName,
+            nextArtistName: nextName,
+          });
+        } catch (error) {
+          console.error("[gemfinder] artist inbox relabel failed", error);
+          flash("Artist saved, but inbox labels could not be updated yet", "err");
+        }
+      }
+
+      setSelA(nextArtist);
+      seedArtistEditForm(nextArtist);
+      flash(renamed ? `Updated ${previousName} → ${nextName}` : `Updated ${nextName}`);
+    } finally {
+      setArtistEditSaving(false);
+    }
   };
 
   const copyProjectCsvLink = async () => {
@@ -3858,6 +4054,11 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     if (!selA) return null;
     return enriched.find(a => a.n === selA.n) || selA;
   }, [enriched, selA]);
+
+  useEffect(() => {
+    if (!activeArtist) return;
+    seedArtistEditForm(activeArtist);
+  }, [activeArtist?.n, activeArtist?.g, activeArtist?.l, activeArtist?.h, activeArtist?.soc, activeArtist?.ig, activeArtist?.e, activeArtist?.loc]);
 
   const gBuckets = useMemo(() => {
     const c = {};
@@ -4682,6 +4883,64 @@ Requirements:
                   ))}
                 </div>
               </div>
+            )}
+          </div>}
+
+          {detailTab === "overview" && <div style={{ ...cS, padding: "20px 24px", marginBottom: 16 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 700 }}>Artist profile</div>
+                <div style={{ fontSize: 11, color: C.tt }}>Update the working profile here without losing notes, ownership, or pipeline history.</div>
+              </div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <button
+                  disabled={artistEditSaving}
+                  onClick={() => seedArtistEditForm(a)}
+                  style={{ padding: "6px 12px", borderRadius: 10, border: `1px solid ${C.bd}`, background: "transparent", color: C.ts, cursor: artistEditSaving ? "wait" : "pointer", fontSize: 11, fontWeight: 600, fontFamily: ft }}
+                >
+                  Reset
+                </button>
+                <button
+                  disabled={artistEditSaving || isReadOnly}
+                  onClick={() => saveArtistProfileEdits(a)}
+                  style={{ padding: "6px 16px", borderRadius: 10, border: `1.5px solid ${C.ac}`, background: artistEditSaving ? C.sa : C.al, color: C.ac, cursor: artistEditSaving ? "wait" : isReadOnly ? "not-allowed" : "pointer", fontSize: 12, fontWeight: 700, fontFamily: ft, ...lockStyle(artistEditSaving || isReadOnly) }}
+                >
+                  {artistEditSaving ? "Saving..." : "Save changes"}
+                </button>
+              </div>
+            </div>
+            <div className="gf-detail-profile-grid" style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 12 }}>
+              <div>
+                <div style={{ fontSize: 11, color: C.tt, marginBottom: 6 }}>Artist name</div>
+                <input value={artistEditForm.name} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, name: e.target.value }))} style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
+              </div>
+              <div>
+                <div style={{ fontSize: 11, color: C.tt, marginBottom: 6 }}>Genre / vibe</div>
+                <input value={artistEditForm.genre} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, genre: e.target.value }))} style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
+              </div>
+              <div>
+                <div style={{ fontSize: 11, color: C.tt, marginBottom: 6 }}>Monthly listeners</div>
+                <input value={artistEditForm.listeners} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, listeners: e.target.value }))} style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
+              </div>
+              <div>
+                <div style={{ fontSize: 11, color: C.tt, marginBottom: 6 }}>Hit track</div>
+                <input value={artistEditForm.hitTrack} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, hitTrack: e.target.value }))} style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
+              </div>
+              <div>
+                <div style={{ fontSize: 11, color: C.tt, marginBottom: 6 }}>Social handle</div>
+                <input value={artistEditForm.social} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, social: e.target.value }))} style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
+              </div>
+              <div>
+                <div style={{ fontSize: 11, color: C.tt, marginBottom: 6 }}>Email</div>
+                <input value={artistEditForm.email} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, email: e.target.value }))} style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
+              </div>
+              <div style={{ gridColumn: "1 / -1" }}>
+                <div style={{ fontSize: 11, color: C.tt, marginBottom: 6 }}>Location</div>
+                <input value={artistEditForm.location} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, location: e.target.value }))} style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
+              </div>
+            </div>
+            {artistEditForm.name.trim() && proj?.artists?.some(item => item.n !== a.n && canonicalArtistName(item.n) === canonicalArtistName(artistEditForm.name)) && (
+              <div style={{ marginTop: 10, fontSize: 12, color: C.rd }}>Another artist in this project already uses that name.</div>
             )}
           </div>}
 
@@ -5698,7 +5957,7 @@ Requirements:
                       <button onClick={() => setShowDiscover(true)} style={{ ...actionBtn(true, "accent"), ...lockStyle(isReadOnly) }}>AI Discover</button>
                     <button onClick={() => setShowAddArtist(true)} style={{ ...actionBtn(true, "good"), ...lockStyle(isReadOnly) }}>+ Artist</button>
                     <label style={{ ...actionBtn(false, "neutral"), ...lockStyle(isReadOnly) }}>
-                      Import CSV
+                      Import + Merge CSV
                       <input type="file" accept=".csv" ref={fr} onChange={importCSV} disabled={isReadOnly} />
                     </label>
                   </>
