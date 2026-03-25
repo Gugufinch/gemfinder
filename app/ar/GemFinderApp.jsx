@@ -17,6 +17,20 @@ const STAGES = [
   { id: "dead", label: "Dead", icon: "✕", description: "Closed out or not moving forward." },
 ];
 const SM = Object.fromEntries(STAGES.map(s => [s.id, s]));
+const PROJECT_TYPES = [
+  { id: "ar", label: "A&R" },
+  { id: "marketing", label: "Marketing" },
+];
+const MARKETING_STATUSES = [
+  { id: "interested", label: "Interested", icon: "◆", description: "They replied about the opportunity." },
+  { id: "creating", label: "Creating", icon: "✦", description: "They accepted and are making the content." },
+  { id: "reviewing", label: "Reviewing", icon: "◌", description: "The content is in review with the team." },
+  { id: "revising", label: "Revising", icon: "↺", description: "Changes are being made after review." },
+  { id: "complete", label: "Complete", icon: "✓", description: "The deliverable is complete." },
+  { id: "rejected", label: "Rejected", icon: "✕", description: "The artist passed on the opportunity." },
+];
+const MM = Object.fromEntries(MARKETING_STATUSES.map(s => [s.id, s]));
+const VALID_MARKETING_STATUS_IDS = new Set(MARKETING_STATUSES.map(s => s.id));
 const VALID_STAGE_IDS = new Set(STAGES.map(s => s.id));
 const CONTACTED_STAGE_IDS = ["sent", "replied", "engaged", "won", "live"];
 const REPLIED_STAGE_IDS = ["replied", "engaged", "won", "live"];
@@ -25,6 +39,25 @@ const WON_STAGE_IDS = ["won", "live"];
 const CLOSED_STAGE_IDS = ["won", "live", "dead"];
 const OPEN_STAGE_IDS = STAGES.map(s => s.id).filter(id => !CLOSED_STAGE_IDS.includes(id));
 const DETAIL_TAB_IDS = new Set(["overview", "outreach", "inbox", "activity"]);
+const MARKETING_TRAFFIC_TYPES = ["Paid", "Organic"];
+const MARKETING_CHANNELS = ["Instagram", "TikTok", "YouTube", "Meta", "X", "Email", "Other"];
+
+function emptyMarketingForm() {
+  return {
+    id: "",
+    title: "",
+    campaign: "",
+    trafficType: "Organic",
+    channel: "Instagram",
+    status: "interested",
+    owner: "",
+    dueDate: "",
+    briefUrl: "",
+    contentUrl: "",
+    notes: "",
+    rejectedReason: "",
+  };
+}
 
 const SEQUENCES = [
   {
@@ -271,6 +304,32 @@ function normalizeStageId(stage) {
   if (VALID_STAGE_IDS.has(stage)) return stage;
   return "prospect";
 }
+function normalizeProjectType(type) {
+  return String(type || "").toLowerCase() === "marketing" ? "marketing" : "ar";
+}
+function normalizeMarketingStatus(status) {
+  const normalized = String(status || "").toLowerCase();
+  return VALID_MARKETING_STATUS_IDS.has(normalized) ? normalized : "interested";
+}
+function normalizeMarketingItem(item, teamUsers = DEFAULT_TEAM_USERS) {
+  const normalizedStatus = normalizeMarketingStatus(item?.status);
+  return {
+    id: String(item?.id || `mkt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`),
+    title: String(item?.title || "").trim(),
+    campaign: String(item?.campaign || "").trim(),
+    trafficType: MARKETING_TRAFFIC_TYPES.includes(String(item?.trafficType || "")) ? String(item.trafficType) : "Organic",
+    channel: MARKETING_CHANNELS.includes(String(item?.channel || "")) ? String(item.channel) : "Instagram",
+    status: normalizedStatus,
+    owner: teamUsers.includes(String(item?.owner || "")) ? String(item.owner) : String(item?.owner || ""),
+    dueDate: String(item?.dueDate || ""),
+    briefUrl: String(item?.briefUrl || "").trim(),
+    contentUrl: String(item?.contentUrl || "").trim(),
+    notes: String(item?.notes || "").trim(),
+    rejectedReason: normalizedStatus === "rejected" ? String(item?.rejectedReason || "").trim() : "",
+    createdAt: String(item?.createdAt || new Date().toISOString()),
+    updatedAt: String(item?.updatedAt || item?.createdAt || new Date().toISOString()),
+  };
+}
 function normalizeStageFilterId(filterId) {
   if (filterId === "contacted") return "contacted";
   if (VALID_STAGE_IDS.has(filterId)) return filterId;
@@ -295,6 +354,91 @@ function matchesStageFilter(stage, filterId) {
   if (filterId === "all") return true;
   if (filterId === "contacted") return isContactedStage(stage);
   return stage === filterId;
+}
+function matchesMarketingStatusFilter(status, filterId) {
+  if (filterId === "all") return true;
+  if (filterId === "active") return status !== "complete" && status !== "rejected";
+  return status === filterId;
+}
+function marketingStatusTone(status, C) {
+  switch (status) {
+    case "interested":
+      return { fg: C.ac, bg: C.al, border: `${C.ac}33` };
+    case "creating":
+      return { fg: C.pr, bg: C.pb, border: `${C.pr}33` };
+    case "reviewing":
+      return { fg: C.ab, bg: C.abb, border: `${C.ab}33` };
+    case "revising":
+      return { fg: C.rd, bg: C.rb, border: `${C.rd}33` };
+    case "complete":
+      return { fg: C.gn, bg: C.gb, border: `${C.gn}33` };
+    case "rejected":
+      return { fg: C.rd, bg: C.rb, border: `${C.rd}33` };
+    default:
+      return { fg: C.ts, bg: C.sa, border: `${C.bd}` };
+  }
+}
+
+function summarizeMarketingItems(items = [], today = todayISO()) {
+  const summary = {
+    items: items.length,
+    interested: 0,
+    creating: 0,
+    reviewing: 0,
+    revising: 0,
+    complete: 0,
+    rejected: 0,
+    active: 0,
+    overdue: 0,
+    dueSoon: 0,
+    campaigns: 0,
+  };
+  const campaigns = new Set();
+  items.forEach(item => {
+    const normalized = normalizeMarketingItem(item);
+    summary[normalized.status] = (summary[normalized.status] || 0) + 1;
+    if (normalized.status !== "complete" && normalized.status !== "rejected") summary.active += 1;
+    if (normalized.campaign) campaigns.add(normalized.campaign);
+    if (normalized.dueDate && normalized.status !== "complete" && normalized.status !== "rejected") {
+      if (normalized.dueDate < today) summary.overdue += 1;
+      if (normalized.dueDate >= today && normalized.dueDate <= addDaysISO(today, 7)) summary.dueSoon += 1;
+    }
+  });
+  summary.campaigns = campaigns.size;
+  return summary;
+}
+
+function summarizeProjectForHub(project, today = todayISO()) {
+  const type = normalizeProjectType(project?.type);
+  if (type === "marketing") {
+    const mk = summarizeMarketingItems(project?.marketingItems || [], today);
+    return {
+      type,
+      title: "Marketing",
+      cards: [
+        ["Items", mk.items, "neutral"],
+        ["Interested", mk.interested, "accent"],
+        ["In Progress", mk.creating + mk.reviewing + mk.revising, "good"],
+        ["Complete", mk.complete, "live"],
+      ],
+      badges: [
+        `${mk.campaigns} campaigns`,
+        `${mk.overdue} overdue`,
+      ],
+    };
+  }
+  const pipeline = project?.pipeline || {};
+  return {
+    type,
+    title: "A&R",
+    cards: [
+      ["Artists", project?.artists?.length || 0, "neutral"],
+      ["Contacted", Object.values(pipeline).filter(v => isContactedStage(v?.stage)).length, "accent"],
+      ["Replied", Object.values(pipeline).filter(v => isRepliedStage(v?.stage)).length, "good"],
+      ["Live", Object.values(pipeline).filter(v => v?.stage === "live").length, "live"],
+    ],
+    badges: [],
+  };
 }
 function normalizeActorKey(value) {
   return String(value || "").toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -735,6 +879,8 @@ function creditABOutcome(project, artistName, nextStage, prevStage) {
 
 function normalizeProject(p) {
   const legacyModels = p.settings?.aiModels || {};
+  const projectType = normalizeProjectType(p.type);
+  const teamUsers = Array.isArray(p.teamUsers) && p.teamUsers.length ? p.teamUsers : [...DEFAULT_TEAM_USERS];
   const aiModelsByProvider = {
     anthropic: {
       ...DEFAULT_AI_MODELS.anthropic,
@@ -756,6 +902,7 @@ function normalizeProject(p) {
   };
   return {
     ...p,
+    type: projectType,
     artists: p.artists || [],
     pipeline: Object.fromEntries(
       Object.entries(p.pipeline || {}).map(([artistName, state]) => [
@@ -771,8 +918,9 @@ function normalizeProject(p) {
     abStats: p.abStats || {},
     abCredits: p.abCredits || {},
     archivedArtists: Array.isArray(p.archivedArtists) ? p.archivedArtists : [],
-    teamUsers: Array.isArray(p.teamUsers) && p.teamUsers.length ? p.teamUsers : [...DEFAULT_TEAM_USERS],
+    teamUsers,
     assignments: p.assignments || {},
+    marketingItems: Array.isArray(p.marketingItems) ? p.marketingItems.map(item => normalizeMarketingItem(item, teamUsers)) : [],
     replyIntel: p.replyIntel || {},
     internalRoster: {
       names: Array.isArray(p.internalRoster?.names) ? p.internalRoster.names : [],
@@ -1856,6 +2004,48 @@ function exportPipeline(proj, enriched) {
   URL.revokeObjectURL(url);
 }
 
+function exportMarketingItems(proj) {
+  const rows = [[
+    "Title",
+    "Campaign",
+    "Traffic Type",
+    "Channel",
+    "Status",
+    "Rejected Reason",
+    "Owner",
+    "Due Date",
+    "Brief URL",
+    "Content URL",
+    "Notes",
+    "Updated",
+  ]];
+  (proj?.marketingItems || []).forEach(item => {
+    const normalized = normalizeMarketingItem(item, proj?.teamUsers || DEFAULT_TEAM_USERS);
+    rows.push([
+      normalized.title,
+      normalized.campaign,
+      normalized.trafficType,
+      normalized.channel,
+      MM[normalized.status]?.label || normalized.status,
+      normalized.rejectedReason,
+      normalized.owner,
+      normalized.dueDate,
+      normalized.briefUrl,
+      normalized.contentUrl,
+      normalized.notes.replace(/,/g, ";"),
+      normalized.updatedAt,
+    ]);
+  });
+  const csv = rows.map(r => r.map(c => `"${String(c || "").replace(/"/g, '""')}"`).join(",")).join("\n");
+  const blob = new Blob([csv], { type: "text/csv" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `${proj.name.replace(/\s+/g, "_")}_marketing.csv`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
 export default function App({ authUserId = "", authEmail = "", authRole = "editor" } = {}) {
   const [dark, setDark] = useState(false);
   const [projects, setProjects] = useState([]);
@@ -1886,6 +2076,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [showNew, setShowNew] = useState(false);
   const [npN, setNpN] = useState("");
   const [npD, setNpD] = useState("");
+  const [newProjectType, setNewProjectType] = useState("ar");
   const [showAddArtist, setShowAddArtist] = useState(false);
   const [artistForm, setArtistForm] = useState({
     name: "",
@@ -1907,6 +2098,12 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     location: "",
   });
   const [artistEditSaving, setArtistEditSaving] = useState(false);
+  const [showMarketingItemModal, setShowMarketingItemModal] = useState(false);
+  const [marketingForm, setMarketingForm] = useState(() => emptyMarketingForm());
+  const [marketingStatusFilter, setMarketingStatusFilter] = useState("all");
+  const [marketingCampaignFilter, setMarketingCampaignFilter] = useState("all");
+  const [marketingTrafficFilter, setMarketingTrafficFilter] = useState("all");
+  const [marketingOwnerFilter, setMarketingOwnerFilter] = useState("__view__");
 
   const [batch, setBatch] = useState(false);
   const [bSel, setBSel] = useState(new Set());
@@ -2012,6 +2209,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const isReadOnly = !canEdit;
   const storageKey = authUserId ? `${STORAGE_PREFIX}:${authUserId}` : STORAGE_PREFIX;
   const proj = projects.find(p => p.id === apId);
+  const projectType = proj?.type || "ar";
+  const isMarketingProject = projectType === "marketing";
   const sessionUserName = useMemo(
     () => resolveSessionUserName(authEmail, authUserId, proj?.teamUsers || DEFAULT_TEAM_USERS),
     [authEmail, authUserId, proj?.teamUsers],
@@ -2195,6 +2394,28 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     location: "",
     note: "",
   });
+  const resetMarketingForm = () => setMarketingForm(emptyMarketingForm());
+  const openMarketingItemModal = item => {
+    if (item) {
+      setMarketingForm({
+        id: item.id || "",
+        title: item.title || "",
+        campaign: item.campaign || "",
+        trafficType: item.trafficType || "Organic",
+        channel: item.channel || "Instagram",
+        status: item.status || "interested",
+        owner: item.owner || "",
+        dueDate: item.dueDate || "",
+        briefUrl: item.briefUrl || "",
+        contentUrl: item.contentUrl || "",
+        notes: item.notes || "",
+        rejectedReason: item.rejectedReason || "",
+      });
+    } else {
+      resetMarketingForm();
+    }
+    setShowMarketingItemModal(true);
+  };
   const seedArtistEditForm = artist => setArtistEditForm({
     name: artist?.n || "",
     genre: artist?.g || "",
@@ -2403,6 +2624,13 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       updateArtistProfileUrl("", "", "");
     }
   }, [loading, screen, proj?.id, selA?.n, detailTab]);
+
+  useEffect(() => {
+    if (!proj) return;
+    if (proj.type === "marketing" && projectMode === "inbox") {
+      setProjectMode("work");
+    }
+  }, [proj?.id, proj?.type, projectMode]);
 
   const persist = useCallback(async (np, la, dk, vm, lb, wu) => {
     const nextProjects = np || projects;
@@ -2924,6 +3152,27 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     return updated;
   };
 
+  const saveProjectType = async nextType => {
+    if (!requireEditor()) return;
+    if (!proj) return;
+    const normalized = normalizeProjectType(nextType);
+    if (normalized === proj.type) return;
+    const hasArtists = (proj.artists || []).length > 0;
+    const hasMarketingItems = (proj.marketingItems || []).length > 0;
+    if (normalized === "marketing" && hasArtists) {
+      const ok = window.confirm("Switch this project to Marketing? Existing A&R artists will be preserved in the project data, but the marketing workflow will become the active workspace.");
+      if (!ok) return;
+    }
+    if (normalized === "ar" && hasMarketingItems) {
+      const ok = window.confirm("Switch this project to A&R? Existing marketing items will be preserved in the project data, but the A&R workflow will become the active workspace.");
+      if (!ok) return;
+    }
+    const nextProj = { ...proj, type: normalized };
+    await saveProject(nextProj);
+    if (normalized === "marketing" && projectMode === "inbox") setProjectMode("work");
+    flash(`Project set to ${normalized === "marketing" ? "Marketing" : "A&R"}`);
+  };
+
   const saveSendPrefs = async (provider, autoLog) => {
     if (!requireEditor()) return;
     if (!proj) return;
@@ -3098,11 +3347,13 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     return result;
   };
 
-  const createProj = async (name, desc) => {
+  const createProj = async (name, desc, type = "ar") => {
     if (!requireEditor()) return;
     const id = `p_${Date.now()}`;
+    const projectType = normalizeProjectType(type);
     const np = {
       id,
+      type: projectType,
       name,
       desc,
       artists: [],
@@ -3115,6 +3366,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       abStats: {},
       abCredits: {},
       archivedArtists: [],
+      marketingItems: [],
       teamUsers: [...DEFAULT_TEAM_USERS],
       assignments: {},
       replyIntel: {},
@@ -3147,8 +3399,9 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     setShowNew(false);
     setNpN("");
     setNpD("");
+    setNewProjectType("ar");
     await persist(u, id);
-    flash(`Created "${name}"`);
+    flash(`Created "${name}"${projectType === "marketing" ? " marketing workspace" : ""}`);
   };
 
   const importCSV = async e => {
@@ -3245,6 +3498,90 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     resetArtistForm();
     setShowAddArtist(false);
     flash(alreadyOnPlatform ? `Added ${name} · already found in internal roster` : `Added ${name}`);
+  };
+
+  const saveMarketingItem = async () => {
+    if (!requireEditor()) return;
+    if (!proj) return;
+    const title = marketingForm.title.trim();
+    if (!title) {
+      flash("Content title is required", "err");
+      return;
+    }
+    if (marketingForm.status === "rejected" && !marketingForm.rejectedReason.trim()) {
+      flash("Please add a rejection reason", "err");
+      return;
+    }
+    const itemId = marketingForm.id || `mkt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const nextItem = normalizeMarketingItem({
+      ...marketingForm,
+      id: itemId,
+      title,
+      updatedAt: new Date().toISOString(),
+      createdAt: marketingForm.id
+        ? (proj.marketingItems || []).find(item => item.id === marketingForm.id)?.createdAt || new Date().toISOString()
+        : new Date().toISOString(),
+    }, proj.teamUsers || DEFAULT_TEAM_USERS);
+    const exists = (proj.marketingItems || []).some(item => item.id === itemId);
+    const nextProj = {
+      ...proj,
+      marketingItems: exists
+        ? (proj.marketingItems || []).map(item => item.id === itemId ? nextItem : item)
+        : [nextItem, ...(proj.marketingItems || [])],
+    };
+    await saveProject(nextProj);
+    setShowMarketingItemModal(false);
+    resetMarketingForm();
+    flash(exists ? `Updated ${title}` : `Added ${title}`);
+  };
+
+  const deleteMarketingItem = async itemId => {
+    if (!requireEditor()) return;
+    if (!proj) return;
+    const target = (proj.marketingItems || []).find(item => item.id === itemId);
+    if (!target) return;
+    if (!window.confirm(`Delete "${target.title}" from this marketing project?`)) return;
+    const nextProj = {
+      ...proj,
+      marketingItems: (proj.marketingItems || []).filter(item => item.id !== itemId),
+    };
+    await saveProject(nextProj);
+    if (marketingForm.id === itemId) {
+      setShowMarketingItemModal(false);
+      resetMarketingForm();
+    }
+    flash(`${target.title} deleted`);
+  };
+
+  const setMarketingItemStatus = async (itemId, status) => {
+    if (!requireEditor()) return;
+    if (!proj) return;
+    const normalized = normalizeMarketingStatus(status);
+    const nextProj = {
+      ...proj,
+      marketingItems: (proj.marketingItems || []).map(item =>
+        item.id === itemId
+          ? { ...item, status: normalized, updatedAt: new Date().toISOString() }
+          : item
+      ),
+    };
+    await saveProject(nextProj);
+    flash(`Status → ${MM[normalized]?.label}`);
+  };
+
+  const assignMarketingItemOwner = async (itemId, owner) => {
+    if (!requireEditor()) return;
+    if (!proj) return;
+    const nextProj = {
+      ...proj,
+      marketingItems: (proj.marketingItems || []).map(item =>
+        item.id === itemId
+          ? { ...item, owner, updatedAt: new Date().toISOString() }
+          : item
+      ),
+    };
+    await saveProject(nextProj);
+    flash(owner ? `Assigned to ${owner}` : "Owner cleared");
   };
 
   const saveArtistProfileEdits = async artist => {
@@ -4050,6 +4387,81 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     }));
   }, [proj]);
 
+  const marketingItems = useMemo(() => {
+    if (!proj) return [];
+    return (proj.marketingItems || []).map(item => normalizeMarketingItem(item, proj.teamUsers || DEFAULT_TEAM_USERS));
+  }, [proj]);
+
+  const marketingCampaigns = useMemo(() => {
+    const counts = {};
+    marketingItems.forEach(item => {
+      const key = item.campaign || "No campaign";
+      counts[key] = (counts[key] || 0) + 1;
+    });
+    return Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  }, [marketingItems]);
+
+  const marketingStatusCounts = useMemo(() => {
+    const counts = {};
+    MARKETING_STATUSES.forEach(status => { counts[status.id] = 0; });
+    marketingItems.forEach(item => {
+      counts[item.status] = (counts[item.status] || 0) + 1;
+    });
+    return counts;
+  }, [marketingItems]);
+
+  const filteredMarketingItems = useMemo(() => {
+    let list = marketingItems;
+    if (search.trim()) {
+      const q = search.trim().toLowerCase();
+      list = list.filter(item =>
+        `${item.title} ${item.campaign} ${item.channel} ${item.owner} ${item.notes} ${item.rejectedReason || ""}`.toLowerCase().includes(q)
+      );
+    }
+    if (marketingStatusFilter !== "all") {
+      list = list.filter(item => matchesMarketingStatusFilter(item.status, marketingStatusFilter));
+    }
+    if (marketingCampaignFilter !== "all") {
+      list = list.filter(item => (item.campaign || "No campaign") === marketingCampaignFilter);
+    }
+    if (marketingTrafficFilter !== "all") {
+      list = list.filter(item => item.trafficType === marketingTrafficFilter);
+    }
+    if (effectiveMarketingOwnerFilter !== "all") {
+      if (!effectiveMarketingOwnerFilter) list = list.filter(item => !item.owner);
+      else list = list.filter(item => item.owner === effectiveMarketingOwnerFilter);
+    }
+    return [...list].sort((a, b) => {
+      const aDue = a.dueDate || "9999-12-31";
+      const bDue = b.dueDate || "9999-12-31";
+      if (aDue !== bDue) return aDue.localeCompare(bDue);
+      return String(b.updatedAt || "").localeCompare(String(a.updatedAt || ""));
+    });
+  }, [marketingItems, search, marketingStatusFilter, marketingCampaignFilter, marketingTrafficFilter, effectiveMarketingOwnerFilter]);
+
+  const marketingQueue = useMemo(() => {
+    const today = todayISO();
+    return filteredMarketingItems
+      .filter(item => item.status !== "complete" && item.status !== "rejected")
+      .map(item => ({
+        ...item,
+        priorityLabel: item.dueDate
+          ? item.dueDate < today
+            ? `Overdue since ${sD(item.dueDate)}`
+            : item.dueDate === today
+              ? "Due today"
+              : `Due ${sD(item.dueDate)}`
+          : `${MM[item.status]?.label || "In motion"} · no due date`,
+      }))
+      .sort((a, b) => {
+        const aDue = a.dueDate || "9999-12-31";
+        const bDue = b.dueDate || "9999-12-31";
+        if (aDue !== bDue) return aDue.localeCompare(bDue);
+        return String(b.updatedAt || "").localeCompare(String(a.updatedAt || ""));
+      })
+      .slice(0, 6);
+  }, [filteredMarketingItems]);
+
   const activeArtist = useMemo(() => {
     if (!selA) return null;
     return enriched.find(a => a.n === selA.n) || selA;
@@ -4074,6 +4486,15 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     }
     return ownerFilter;
   }, [ownerFilter, workspaceUser]);
+
+  const effectiveMarketingOwnerFilter = useMemo(() => {
+    if (marketingOwnerFilter === "__view__") {
+      if (workspaceUser === ALL_USER_VIEW) return "all";
+      if (workspaceUser === UNASSIGNED_USER_VIEW) return "";
+      return workspaceUser;
+    }
+    return marketingOwnerFilter;
+  }, [marketingOwnerFilter, workspaceUser]);
 
   const stageBase = useMemo(() => {
     let l = enriched;
@@ -4242,14 +4663,21 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const workspaceOverview = useMemo(() => {
     return projects.reduce((acc, project) => {
       acc.projects += 1;
-      acc.artists += project.artists?.length || 0;
-      Object.values(project.pipeline || {}).forEach(state => {
-        if (isContactedStage(state?.stage)) acc.contacted += 1;
-        if (state?.stage === "live") acc.live += 1;
-      });
-      acc.due += Object.values(project.sequenceState || {}).filter(ss => ss?.status === "active" && ss.nextDue && ss.nextDue <= operationalTodayISOFor(clockNow)).length;
+      if (normalizeProjectType(project.type) === "marketing") {
+        const mk = summarizeMarketingItems(project.marketingItems || [], operationalTodayISOFor(clockNow));
+        acc.marketingItems += mk.items;
+        acc.marketingComplete += mk.complete;
+        acc.due += mk.overdue + mk.dueSoon;
+      } else {
+        acc.artists += project.artists?.length || 0;
+        Object.values(project.pipeline || {}).forEach(state => {
+          if (isContactedStage(state?.stage)) acc.contacted += 1;
+          if (state?.stage === "live") acc.live += 1;
+        });
+        acc.due += Object.values(project.sequenceState || {}).filter(ss => ss?.status === "active" && ss.nextDue && ss.nextDue <= operationalTodayISOFor(clockNow)).length;
+      }
       return acc;
-    }, { projects: 0, artists: 0, contacted: 0, live: 0, due: 0 });
+    }, { projects: 0, artists: 0, marketingItems: 0, contacted: 0, live: 0, marketingComplete: 0, due: 0 });
   }, [projects, clockNow]);
   const inboxMailboxOptions = useMemo(() => {
     const source = (projectInbox.connections?.length ? projectInbox.connections : gmailStatus.connections) || [];
@@ -4472,8 +4900,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
             <img src="/gemfinder-logo.png" alt="GEMFINDER logo" style={{ width: 44, height: 44, objectFit: "contain", marginTop: 2 }} />
             <div>
               <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 5, color: C.ac, textTransform: "uppercase", marginBottom: 4 }}>GEMFINDER</div>
-            <div style={{ fontSize: 26, fontWeight: 800, letterSpacing: "-0.03em" }}>AI-Powered A&R</div>
-            <div style={{ fontSize: 13, color: C.ts, marginTop: 3 }}>Team outreach, follow-up tracking, and AI-assisted drafting.</div>
+              <div style={{ fontSize: 26, fontWeight: 800, letterSpacing: "-0.03em" }}>Artist + Campaign Ops</div>
+            <div style={{ fontSize: 13, color: C.ts, marginTop: 3 }}>Shared A&R and marketing workspaces, team coordination, and AI-assisted drafting.</div>
             {loading && <div style={{ fontSize: 11, color: C.tt, marginTop: 8 }}>Loading saved workspace...</div>}
             </div>
           </div>
@@ -4508,14 +4936,16 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
               <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 3, textTransform: "uppercase", color: C.ac, marginBottom: 8 }}>Workspace</div>
               <div style={{ fontSize: 30, fontWeight: 800, letterSpacing: "-0.04em", marginBottom: 8 }}>Project Home</div>
               <div style={{ fontSize: 13, lineHeight: 1.6, color: C.ts, maxWidth: 520 }}>
-                Shared outreach projects, live pipeline counts, and team mailbox visibility in one place. Open a project to work the list or review reporting.
+                Shared workspaces for artist outreach, paid and organic campaigns, live pipeline counts, and team visibility in one place.
               </div>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 14 }}>
                 <span style={{ ...mkP(true, C.ac, C.al) }}>{workspaceOverview.projects} projects</span>
                 <span style={{ ...mkP(true, C.ts, C.sa) }}>{workspaceOverview.artists} artists</span>
+                <span style={{ ...mkP(true, C.pr, C.pb) }}>{workspaceOverview.marketingItems} content items</span>
                 <span style={{ ...mkP(true, C.bu, C.bb) }}>{workspaceOverview.contacted} contacted</span>
                 <span style={{ ...mkP(true, C.lv, C.lvb) }}>{workspaceOverview.live} live</span>
-                <span style={{ ...mkP(true, C.ab, C.abb) }}>{workspaceOverview.due} follow-ups due</span>
+                <span style={{ ...mkP(true, C.gn, C.gb) }}>{workspaceOverview.marketingComplete} complete</span>
+                <span style={{ ...mkP(true, C.ab, C.abb) }}>{workspaceOverview.due} due items</span>
                 {gmailStatus.available && <span style={{ ...mkP(true, gmailStatus.connections?.length ? C.gn : C.tt, gmailStatus.connections?.length ? C.gb : C.sa) }}>{gmailStatus.connections?.length || 0} connected mailboxes</span>}
               </div>
             </div>
@@ -4525,7 +4955,9 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                 ["Projects", workspaceOverview.projects, C.ac, C.al],
                 ["Artists", workspaceOverview.artists, C.tx, C.sa],
                 ["Contacted", workspaceOverview.contacted, C.bu, C.bb],
+                ["Content", workspaceOverview.marketingItems, C.pr, C.pb],
                 ["Live", workspaceOverview.live, C.lv, C.lvb],
+                ["Complete", workspaceOverview.marketingComplete, C.gn, C.gb],
               ].map(([label, value, tone, bg]) => (
                 <div key={label} style={{ borderRadius: 14, border: `1px solid ${C.bd}`, background: bg, padding: "14px 16px" }}>
                   <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 1.2, color: C.tt, marginBottom: 8 }}>{label}</div>
@@ -4546,14 +4978,13 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(300px,1fr))", gap: 16 }}>
           {projects.map((p, i) => {
-            const ac = p.artists?.length || 0;
-            const pl = p.pipeline || {};
-            const sent = Object.values(pl).filter(v => isContactedStage(v.stage)).length;
-            const replied = Object.values(pl).filter(v => isRepliedStage(v.stage)).length;
-            const live = Object.values(pl).filter(v => v.stage === "live").length;
-            const seqDue = Object.values(p.sequenceState || {}).filter(ss => ss?.status === "active" && ss.nextDue && ss.nextDue <= todayISO()).length;
+            const projectTypeLabel = normalizeProjectType(p.type) === "marketing" ? "Marketing" : "A&R";
+            const summary = summarizeProjectForHub(p, todayISO());
+            const seqDue = normalizeProjectType(p.type) === "marketing"
+              ? summarizeMarketingItems(p.marketingItems || [], todayISO()).overdue + summarizeMarketingItems(p.marketingItems || [], todayISO()).dueSoon
+              : Object.values(p.sequenceState || {}).filter(ss => ss?.status === "active" && ss.nextDue && ss.nextDue <= todayISO()).length;
             return (
-              <div key={p.id} onClick={() => { setApId(p.id); setScreen("project"); setSearch(""); setGf("All"); setSf("all"); setPf("all"); setOwnerFilter("__view__"); persist(projects, p.id); }}
+              <div key={p.id} onClick={() => { setApId(p.id); setScreen("project"); setSearch(""); setGf("All"); setSf("all"); setPf("all"); setOwnerFilter("__view__"); setMarketingStatusFilter("all"); setMarketingCampaignFilter("all"); setMarketingTrafficFilter("all"); setMarketingOwnerFilter("__view__"); persist(projects, p.id); }}
                 style={{ ...cS, padding: "22px 24px", cursor: "pointer", transition: "all 0.2s", animation: `fu 0.3s ease ${i * 0.06}s both`, background: dark ? "linear-gradient(180deg, #111a2b 0%, #0f1729 100%)" : "linear-gradient(180deg, #ffffff 0%, #f8fbff 100%)" }}
                 onMouseEnter={e => { e.currentTarget.style.borderColor = C.ac; e.currentTarget.style.boxShadow = C.sm; }}
                 onMouseLeave={e => { e.currentTarget.style.borderColor = C.bd; e.currentTarget.style.boxShadow = C.sw; }}>
@@ -4562,15 +4993,13 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                     <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 4 }}>{p.name}</div>
                     {p.desc && <div style={{ fontSize: 12, color: C.ts, lineHeight: 1.5 }}>{p.desc}</div>}
                   </div>
-                  {seqDue > 0 && <span style={{ ...mkP(true, C.ab, C.abb), cursor: "default" }}>{seqDue} due</span>}
+                  <div style={{ display: "grid", gap: 6, justifyItems: "end" }}>
+                    <span style={{ ...mkP(true, projectTypeLabel === "Marketing" ? C.pr : C.ac, projectTypeLabel === "Marketing" ? C.pb : C.al), cursor: "default" }}>{projectTypeLabel}</span>
+                    {seqDue > 0 && <span style={{ ...mkP(true, C.ab, C.abb), cursor: "default" }}>{seqDue} due</span>}
+                  </div>
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10, marginBottom: 12 }}>
-                  {[
-                    ["Artists", ac, C.tx, C.sa],
-                    ["Contacted", sent, C.bu, C.bb],
-                    ["Replied", replied, C.gn, C.gb],
-                    ["Live", live, C.lv, C.lvb],
-                  ].map(([label, value, tone, bg]) => (
+                  {summary.map(([label, value, tone, bg]) => (
                     <div key={label} style={{ borderRadius: 12, border: `1px solid ${C.bd}`, background: bg, padding: "10px 12px" }}>
                       <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 1, color: C.tt, marginBottom: 6 }}>{label}</div>
                       <div style={{ fontSize: 20, fontWeight: 800, color: tone, lineHeight: 1 }}>{value}</div>
@@ -4610,10 +5039,16 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
             <div style={{ background: C.sf, borderRadius: 18, padding: "28px 32px", width: 420, boxShadow: "0 25px 70px rgba(0,0,0,0.2)" }}>
               <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 16, color: C.tx }}>New Project</div>
               <input placeholder="Project name" value={npN} onChange={e => setNpN(e.target.value)} autoFocus style={{ ...iS, width: "100%", marginBottom: 10 }} />
-              <input placeholder="Description (optional)" value={npD} onChange={e => setNpD(e.target.value)} style={{ ...iS, width: "100%", marginBottom: 18, fontSize: 12 }} />
+              <input placeholder="Description (optional)" value={npD} onChange={e => setNpD(e.target.value)} style={{ ...iS, width: "100%", marginBottom: 10, fontSize: 12 }} />
+              <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 4, marginBottom: 18 }}>
+                <span>Project type</span>
+                <select value={newProjectType} onChange={e => setNewProjectType(e.target.value)} style={{ ...iS, width: "100%" }}>
+                  {PROJECT_TYPES.map(type => <option key={type.id} value={type.id}>{type.label}</option>)}
+                </select>
+              </label>
               <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
                 <button onClick={() => setShowNew(false)} style={{ padding: "8px 18px", borderRadius: 10, border: `1px solid ${C.bd}`, background: "transparent", cursor: "pointer", fontSize: 13, fontFamily: ft, color: C.ts }}>Cancel</button>
-                <button onClick={() => { if (npN.trim()) createProj(npN.trim(), npD.trim()); }} style={{ padding: "8px 24px", borderRadius: 10, border: "none", background: C.ac, color: "#fff", cursor: "pointer", fontSize: 13, fontWeight: 600, fontFamily: ft, opacity: npN.trim() ? 1 : 0.4 }}>Create</button>
+                <button onClick={() => { if (npN.trim()) createProj(npN.trim(), npD.trim(), newProjectType); }} style={{ padding: "8px 24px", borderRadius: 10, border: "none", background: C.ac, color: "#fff", cursor: "pointer", fontSize: 13, fontWeight: 600, fontFamily: ft, opacity: npN.trim() ? 1 : 0.4 }}>Create</button>
               </div>
             </div>
           </div>
@@ -5726,6 +6161,7 @@ Requirements:
     const greetingHour = clockNow.getHours();
     const greetingLabel = greetingHour < 12 ? "Good morning" : greetingHour < 18 ? "Good afternoon" : "Good evening";
     const greetingName = (currentActor || "Team").split("@")[0];
+    const marketingSummary = summarizeMarketingItems(marketingItems, operationalTodayISOFor(clockNow));
     const projectDateLabel = clockNow.toLocaleString("en-US", {
       weekday: "short",
       month: "short",
@@ -5733,7 +6169,20 @@ Requirements:
       hour: "numeric",
       minute: "2-digit",
     });
-    const projectModeMeta = {
+    const projectModeMeta = isMarketingProject ? {
+      work: {
+        nav: "Content Board",
+        eyebrow: "Marketing",
+        title: proj.name,
+        helper: `${operationalDayLabel} · updated ${queueUpdatedLabel} · resets 6:00 AM`,
+      },
+      report: {
+        nav: "Reports",
+        eyebrow: "Performance",
+        title: "Campaign reporting",
+        helper: "Status mix, due work, and campaign visibility for paid and organic content.",
+      },
+    } : {
       work: {
         nav: "Pipeline",
         eyebrow: "Pipeline",
@@ -5757,29 +6206,51 @@ Requirements:
     const connectedMailboxText = gmailConnected
       ? (gmailConnectionMeta?.provider_email || "Connected")
       : "Not connected";
-    const spotlightLine = projectMode === "work"
-      ? `${queue.length} priority actions in scope. ${dueSeqCount} follow-ups due by 6:00 AM.`
-      : projectMode === "inbox"
-        ? `${projectInboxActionableCount} inbox threads still need attention. Sync from artist inboxes to pull the latest replies.`
-        : `${reportActivityStats.actions} logged actions in range. ${reportScopedArtists.length} artists in the current reporting scope.`;
-    const sidebarModeItems = [
+    const spotlightLine = isMarketingProject
+      ? projectMode === "work"
+        ? `${marketingQueue.length} priority items in scope. ${marketingSummary.overdue} overdue and ${marketingSummary.dueSoon} due soon.`
+        : `${marketingSummary.items} content items across ${marketingSummary.campaigns} campaign${marketingSummary.campaigns === 1 ? "" : "s"}.`
+      : projectMode === "work"
+        ? `${queue.length} priority actions in scope. ${dueSeqCount} follow-ups due by 6:00 AM.`
+        : projectMode === "inbox"
+          ? `${projectInboxActionableCount} inbox threads still need attention. Sync from artist inboxes to pull the latest replies.`
+          : `${reportActivityStats.actions} logged actions in range. ${reportScopedArtists.length} artists in the current reporting scope.`;
+    const sidebarModeItems = isMarketingProject ? [
+      { id: "work", label: projectModeMeta.work.nav, icon: "◫", hint: "content pipeline" },
+      { id: "report", label: projectModeMeta.report.nav, icon: "↗", hint: "status + campaign view" },
+      { id: "settings", label: "Settings", icon: "⚙", hint: "models + links + tools", action: () => setShowProjectMenu(true) },
+    ] : [
       { id: "work", label: projectModeMeta.work.nav, icon: "◫", hint: "daily operating view" },
       { id: "inbox", label: projectModeMeta.inbox.nav, icon: "✉", hint: "shared comms" },
       { id: "report", label: projectModeMeta.report.nav, icon: "↗", hint: "funnel + timeline" },
       { id: "settings", label: "Settings", icon: "⚙", hint: "models + keys + tools", action: () => setShowProjectMenu(true) },
     ];
-    const overviewCards = [
+    const overviewCards = isMarketingProject ? [
+      { label: "Items", value: marketingSummary.items, tone: C.tx, accent: C.ac, helper: "in this project" },
+      { label: "Interested", value: marketingSummary.interested, tone: C.bu, accent: C.bu, helper: "replied about the opp" },
+      { label: "In Progress", value: marketingSummary.creating + marketingSummary.reviewing + marketingSummary.revising, tone: C.pr, accent: C.pr, helper: "creating, reviewing, revising" },
+      { label: "Complete", value: marketingSummary.complete, tone: C.gn, accent: C.gn, helper: operationalDayLabel },
+    ] : [
       { label: "Artists", value: enriched.length, tone: C.tx, accent: C.ac, helper: "in this project" },
       { label: "Contacted", value: contactedCount, tone: C.bu, accent: C.bu, helper: "sent or beyond" },
       { label: "Live", value: stCounts.live || 0, tone: C.lv, accent: C.lv, helper: "fully set up" },
       { label: "Due Today", value: dueSeqCount, tone: C.ab, accent: C.ab, helper: operationalDayLabel },
     ];
-    const sidebarQuickStats = [
+    const sidebarQuickStats = isMarketingProject ? [
+      { label: "Items", value: marketingSummary.items },
+      { label: "Interested", value: marketingSummary.interested },
+      { label: "Complete", value: marketingSummary.complete },
+    ] : [
       { label: "Artists", value: enriched.length },
       { label: "Contacted", value: contactedCount },
       { label: "Live", value: stCounts.live || 0 },
     ];
-    const sidebarUtilityCards = [
+    const sidebarUtilityCards = isMarketingProject ? [
+      { label: "Campaigns", value: marketingSummary.campaigns, tone: C.tx },
+      { label: "Due soon", value: marketingSummary.dueSoon, tone: marketingSummary.dueSoon ? C.ab : C.tx },
+      { label: "Scope", value: workspaceUser === ALL_USER_VIEW ? "All" : workspaceUser === UNASSIGNED_USER_VIEW ? "Unassigned" : workspaceUser },
+      { label: "Updated", value: queueUpdatedLabel, tone: C.tx },
+    ] : [
       { label: "Mailbox", value: connectedMailboxText, tone: gmailConnected ? C.gn : C.rd },
       { label: "Follow-ups due", value: dueSeqCount, tone: dueSeqCount ? C.ab : C.tx },
       { label: "Scope", value: workspaceUser === ALL_USER_VIEW ? "All" : workspaceUser === UNASSIGNED_USER_VIEW ? "Unassigned" : workspaceUser },
@@ -5808,7 +6279,9 @@ Requirements:
               <div style={{ fontSize: 11, color: C.tt, textTransform: "uppercase", letterSpacing: 1.2, marginBottom: 8 }}>Current project</div>
               <div className="gf-project-project-card-title">{proj.name}</div>
               <div style={{ fontSize: 13, color: C.ts, lineHeight: 1.7, marginBottom: 16 }}>
-                {proj.desc || "Shared outreach workspace for pipeline movement, inbox handling, and reporting."}
+                {proj.desc || (isMarketingProject
+                  ? "Shared content workspace for briefs, campaigns, review cycles, and delivery tracking."
+                  : "Shared outreach workspace for pipeline movement, inbox handling, and reporting.")}
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 8, marginBottom: 12 }}>
                 {sidebarQuickStats.map(({ label, value }) => (
@@ -5941,27 +6414,37 @@ Requirements:
                 <div>
                   <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.8, textTransform: "uppercase", color: C.ac, marginBottom: 6 }}>Actions</div>
                   <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>
-                    {projectMode === "work" ? "Pipeline execution" : projectMode === "inbox" ? "Inbox handling" : "Reporting cadence"}
+                    {isMarketingProject
+                      ? (projectMode === "work" ? "Content workflow" : "Campaign reporting")
+                      : (projectMode === "work" ? "Pipeline execution" : projectMode === "inbox" ? "Inbox handling" : "Reporting cadence")}
                   </div>
                   <div style={{ fontSize: 12, color: C.ts, lineHeight: 1.6 }}>
-                    {projectMode === "work"
-                      ? "Keep the core moves high-signal. Add artists, import CSVs, and move the pipeline forward from here."
-                      : projectMode === "inbox"
-                        ? "Handle team-visible comms, ownership, follow-ups, and response decisions from one place."
-                        : "Review funnel movement, timeline output, and health issues without leaving the project."}
+                    {isMarketingProject
+                      ? (projectMode === "work"
+                        ? "Track content from interest to completion, keep briefs organized, and keep asset links attached to the work."
+                        : "Review campaign mix, completion rate, and overdue work without leaving the project.")
+                      : (projectMode === "work"
+                        ? "Keep the core moves high-signal. Add artists, import CSVs, and move the pipeline forward from here."
+                        : projectMode === "inbox"
+                          ? "Handle team-visible comms, ownership, follow-ups, and response decisions from one place."
+                          : "Review funnel movement, timeline output, and health issues without leaving the project.")}
                   </div>
                 </div>
                 <div className="gf-project-toolbar-actions">
-                  {projectMode === "work" && !isReadOnly && (
+                  {projectMode === "work" && !isReadOnly && (isMarketingProject ? (
+                    <>
+                      <button onClick={() => openMarketingItemModal(null)} style={{ ...actionBtn(true, "good"), ...lockStyle(isReadOnly) }}>+ Content Item</button>
+                    </>
+                  ) : (
                     <>
                       <button onClick={() => setShowDiscover(true)} style={{ ...actionBtn(true, "accent"), ...lockStyle(isReadOnly) }}>AI Discover</button>
-                    <button onClick={() => setShowAddArtist(true)} style={{ ...actionBtn(true, "good"), ...lockStyle(isReadOnly) }}>+ Artist</button>
-                    <label style={{ ...actionBtn(false, "neutral"), ...lockStyle(isReadOnly) }}>
-                      Import + Merge CSV
-                      <input type="file" accept=".csv" ref={fr} onChange={importCSV} disabled={isReadOnly} />
-                    </label>
-                  </>
-                )}
+                      <button onClick={() => setShowAddArtist(true)} style={{ ...actionBtn(true, "good"), ...lockStyle(isReadOnly) }}>+ Artist</button>
+                      <label style={{ ...actionBtn(false, "neutral"), ...lockStyle(isReadOnly) }}>
+                        Import + Merge CSV
+                        <input type="file" accept=".csv" ref={fr} onChange={importCSV} disabled={isReadOnly} />
+                      </label>
+                    </>
+                  ))}
                 {projectMode === "report" && (
                   <>
                     {[
@@ -5975,7 +6458,7 @@ Requirements:
                     <input type="date" value={reportEnd} onChange={e => setReportEnd(e.target.value)} style={{ ...iS, padding: "8px 10px", fontSize: 12 }} />
                   </>
                 )}
-                {projectMode === "inbox" && (
+                {!isMarketingProject && projectMode === "inbox" && (
                   <>
                     {!gmailConnected ? (
                       <button onClick={connectGmail} disabled={gmailStatusLoading || isReadOnly} style={{ ...actionBtn(true, "accent"), ...lockStyle(gmailStatusLoading || isReadOnly) }}>
@@ -5991,15 +6474,15 @@ Requirements:
                     </button>
                   </>
                 )}
-              </div>
             </div>
           </div>
+        </div>
         {isReadOnly && (
           <div style={{ ...cS, padding: "10px 14px", marginBottom: 12, fontSize: 12, color: C.ts }}>
             Viewer mode is active for this workspace. Editing, importing, and follow-up plan actions are disabled.
           </div>
         )}
-        {!!proj.internalRoster?.names?.length && (
+        {!isMarketingProject && !!proj.internalRoster?.names?.length && (
           <div style={{ ...cS, padding: "10px 14px", marginBottom: 12, fontSize: 12, color: C.ts, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
             <div>
               Internal roster loaded from <strong style={{ color: C.tx }}>{proj.internalRoster.fileName || "CSV"}</strong>
@@ -6009,7 +6492,7 @@ Requirements:
             {!isReadOnly && <button onClick={clearInternalRoster} style={{ ...actionBtn(false, "danger"), padding: "6px 10px" }}>Clear Check</button>}
           </div>
         )}
-        {projectMode === "report" && (
+        {!isMarketingProject && projectMode === "report" && (
           <div style={{ ...cS, padding: "14px 18px", marginBottom: 12, animation: "si 0.18s ease" }}>
             <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>🚨 Pipeline Health · {reportViewLabel}</div>
             {healthAlerts.length > 0 ? (
@@ -6110,7 +6593,117 @@ Requirements:
           </div>
         )}
 
-        {projectMode === "report" && (
+        {isMarketingProject && projectMode === "report" && (
+          <div style={{ display: "grid", gap: 16, marginBottom: 16 }}>
+            <div style={{ ...cS, padding: "18px 24px", animation: "si 0.2s ease" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: 14, flexWrap: "wrap" }}>
+                <div>
+                  <div style={{ fontSize: 14, fontWeight: 700 }}>Marketing Reporting</div>
+                  <div style={{ fontSize: 11, color: C.tt }}>
+                    Current view is {workspaceUser === ALL_USER_VIEW ? "the whole team" : scopeDescription.toLowerCase()} across paid and organic content.
+                  </div>
+                </div>
+                <div style={{ fontSize: 11, color: C.tt }}>
+                  {reportStart} to {reportEnd}
+                </div>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 10 }}>
+                {[
+                  ["Items", marketingSummary.items, "all", "All tracked content items"],
+                  ["Interested", marketingSummary.interested, "interested", "Creators who replied about the opp"],
+                  ["In Progress", marketingSummary.creating + marketingSummary.reviewing + marketingSummary.revising, "__active__", "Creating, reviewing, and revising"],
+                  ["Complete", marketingSummary.complete, "complete", "Finished deliverables"],
+                  ["Overdue", marketingSummary.overdue, "__overdue__", "Past due date"],
+                  ["Campaigns", marketingSummary.campaigns, "__campaigns__", "Distinct campaign buckets"],
+                ].map(([label, value, filterId, helper]) => (
+                  <button
+                    key={label}
+                    onClick={() => {
+                      setProjectMode("work");
+                      setShowFilters(true);
+                      if (filterId === "__active__") setMarketingStatusFilter("active");
+                      else if (filterId === "__overdue__") setMarketingStatusFilter("all");
+                      else if (filterId !== "__campaigns__") setMarketingStatusFilter(filterId);
+                      if (filterId === "__campaigns__") setMarketingCampaignFilter("all");
+                    }}
+                    style={{ textAlign: "left", padding: "12px 14px", borderRadius: 12, border: `1px solid ${C.bd}`, background: C.sa, cursor: "pointer", fontFamily: ft }}
+                  >
+                    <div style={{ fontSize: 10, color: C.tt, textTransform: "uppercase", letterSpacing: 1 }}>{label}</div>
+                    <div style={{ fontSize: 24, fontWeight: 800, color: C.tx, marginTop: 4 }}>{value}</div>
+                    <div style={{ fontSize: 11, color: C.ts, marginTop: 4 }}>{helper}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ ...cS, padding: "18px 24px", animation: "si 0.2s ease" }}>
+              <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>Status Mix</div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(140px,1fr))", gap: 10 }}>
+                {MARKETING_STATUSES.map(status => (
+                  <button
+                    key={status.id}
+                    onClick={() => { setProjectMode("work"); setShowFilters(true); setMarketingStatusFilter(status.id); }}
+                    style={{ textAlign: "left", padding: "12px 14px", borderRadius: 12, border: `1px solid ${C.bd}`, background: C.sa, cursor: "pointer", fontFamily: ft }}
+                  >
+                    <div style={{ fontSize: 11, fontWeight: 700, color: marketingStatusTone(status.id, C).tone, marginBottom: 6 }}>
+                      {status.icon} {status.label}
+                    </div>
+                    <div style={{ fontSize: 24, fontWeight: 800, color: C.tx }}>{marketingStatusCounts[status.id] || 0}</div>
+                    <div style={{ fontSize: 10, color: C.tt, marginTop: 4 }}>{status.description}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "minmax(260px, 1.1fr) minmax(320px, 1.4fr)", gap: 16 }}>
+              <div style={{ ...cS, padding: "18px 20px" }}>
+                <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>Campaign Breakdown</div>
+                {marketingCampaigns.length ? (
+                  <div style={{ display: "grid", gap: 8 }}>
+                    {marketingCampaigns.map(([campaign, count]) => (
+                      <button
+                        key={campaign}
+                        onClick={() => { setProjectMode("work"); setShowFilters(true); setMarketingCampaignFilter(campaign); }}
+                        style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, padding: "10px 12px", borderRadius: 10, border: `1px solid ${C.bd}`, background: C.sa, cursor: "pointer", fontFamily: ft }}
+                      >
+                        <span style={{ fontSize: 12, color: C.tx, fontWeight: 600 }}>{campaign}</span>
+                        <span style={{ ...mkP(true, C.ac, C.al), cursor: "pointer" }}>{count}</span>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 12, color: C.tt }}>No campaigns grouped yet.</div>
+                )}
+              </div>
+
+              <div style={{ ...cS, padding: "18px 20px" }}>
+                <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>Priority Work</div>
+                {marketingQueue.length ? (
+                  <div style={{ display: "grid", gap: 8 }}>
+                    {marketingQueue.map(item => (
+                      <button
+                        key={item.id}
+                        onClick={() => openMarketingItemModal(item)}
+                        style={{ display: "grid", gap: 4, textAlign: "left", padding: "10px 12px", borderRadius: 10, border: `1px solid ${C.bd}`, background: C.sa, cursor: "pointer", fontFamily: ft }}
+                      >
+                        <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
+                          <span style={{ fontSize: 13, fontWeight: 700, color: C.tx }}>{item.title}</span>
+                          <span style={{ ...mkP(true, marketingStatusTone(item.status, C).tone, marketingStatusTone(item.status, C).bg), cursor: "pointer" }}>{MM[item.status]?.label}</span>
+                        </div>
+                        <div style={{ fontSize: 11, color: C.ts }}>{item.campaign || "No campaign"} · {item.trafficType} · {item.channel}</div>
+                        <div style={{ fontSize: 11, color: item.dueDate && item.dueDate < operationalTodayISOFor(clockNow) ? C.rd : C.tt }}>{item.priorityLabel}</div>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 12, color: C.tt }}>No active marketing items in the current scope.</div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {!isMarketingProject && projectMode === "report" && (
           <div style={{ ...cS, padding: "18px 24px", marginBottom: 16, animation: "si 0.2s ease" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: 14, flexWrap: "wrap" }}>
               <div>
@@ -6204,7 +6797,217 @@ Requirements:
           </div>
         )}
 
-        {projectMode === "work" && (
+        {isMarketingProject && projectMode === "work" && (
+          <div ref={workSurfaceRef}>
+            <div style={{ ...cS, padding: "12px 14px", marginBottom: 12 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: showQueue ? 10 : 0, flexWrap: "wrap" }}>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 700 }}>Today Queue</div>
+                  <div style={{ fontSize: 11, color: C.tt }}>
+                    {operationalDayLabel} · top content items for the current scope · resets at 6:00 AM
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  <button onClick={() => workspaceUser === currentActor ? changeWorkspaceUser(ALL_USER_VIEW) : changeWorkspaceUser(currentActor)} style={actionBtn(false, "neutral")}>
+                    {workspaceUser === currentActor ? "Team Queue" : `My Queue (${currentActor})`}
+                  </button>
+                  <button onClick={() => setShowQueue(!showQueue)} style={actionBtn(false, "neutral")}>
+                    {showQueue ? "Minimize" : "Expand"}
+                  </button>
+                  <button onClick={() => setProjectMode("report")} style={actionBtn(false, "neutral")}>Open Reports</button>
+                </div>
+              </div>
+              {showQueue && (
+                marketingQueue.length ? (
+                  <div style={{ display: "grid", gap: 6 }}>
+                    {marketingQueue.map(item => (
+                      <div key={item.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", borderRadius: 10, border: `1px solid ${C.bd}`, background: C.sa }}>
+                        <button onClick={() => openMarketingItemModal(item)} style={{ display: "flex", alignItems: "center", gap: 10, flex: 1, minWidth: 0, background: "none", border: "none", cursor: "pointer", fontFamily: ft, textAlign: "left", padding: 0 }}>
+                          <span style={{ fontSize: 14 }}>{MM[item.status]?.icon || "•"}</span>
+                          <span style={{ fontWeight: 700, minWidth: 120, color: C.tx }}>{item.title}</span>
+                          <span style={{ color: C.ts, flex: 1, fontSize: 12 }}>{item.priorityLabel}</span>
+                          <span style={{ ...mkP(true, marketingStatusTone(item.status, C).tone, marketingStatusTone(item.status, C).bg), fontSize: 10, padding: "2px 8px", cursor: "pointer" }}>{MM[item.status]?.label}</span>
+                        </button>
+                        {!item.owner && !isReadOnly && (
+                          <button onClick={() => assignMarketingItemOwner(item.id, currentActor)} style={{ ...actionBtn(true, "good"), padding: "6px 10px", fontSize: 11 }}>
+                            Assign to Me
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 12, color: C.ts }}>No queued content items for this scope right now. Last refreshed {queueUpdatedLabel}.</div>
+                )
+              )}
+            </div>
+
+            <div style={{ ...cS, padding: "12px 14px", marginBottom: 14 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" }}>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 700 }}>Status Board</div>
+                  <div style={{ fontSize: 11, color: C.tt }}>Quick filter by campaign stage.</div>
+                </div>
+                {marketingStatusFilter !== "all" && <button onClick={() => setMarketingStatusFilter("all")} style={actionBtn(false, "neutral")}>Clear Status Filter</button>}
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(140px,1fr))", gap: 8 }}>
+                {MARKETING_STATUSES.map(status => {
+                  const tone = marketingStatusTone(status.id, C);
+                  return (
+                    <button key={status.id} onClick={() => setMarketingStatusFilter(marketingStatusFilter === status.id ? "all" : status.id)} style={{ textAlign: "left", padding: "10px 12px", borderRadius: 12, border: `1px solid ${marketingStatusFilter === status.id ? tone.tone : C.bd}`, background: marketingStatusFilter === status.id ? tone.bg : C.sf, cursor: "pointer", fontFamily: ft }}>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: marketingStatusFilter === status.id ? tone.tone : C.ts, marginBottom: 6 }}>{status.icon} {status.label}</div>
+                      <div style={{ fontSize: 24, fontWeight: 800, color: marketingStatusFilter === status.id ? tone.tone : C.tx, lineHeight: 1 }}>{marketingStatusCounts[status.id] || 0}</div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10, alignItems: "center" }}>
+              <input placeholder="Search content..." value={search} onChange={e => setSearch(e.target.value)} style={{ ...iS, width: 220 }} />
+              <div style={{ display: "flex", gap: 2, background: C.sa, borderRadius: 10, padding: 3, border: `1px solid ${C.bd}` }}>
+                {[ ["list", "☰"], ["kanban", "▦"], ["table", "▤"] ].map(([v, ic]) => (
+                  <button key={v} title={`${v[0].toUpperCase()}${v.slice(1)} view`} onClick={() => setView(v)} style={{ padding: "5px 12px", borderRadius: 8, border: "none", background: viewMode === v ? C.ac : "transparent", color: viewMode === v ? "#fff" : C.ts, cursor: "pointer", fontSize: 13, fontFamily: ft }}>{ic}</button>
+                ))}
+              </div>
+              <button onClick={() => setShowFilters(!showFilters)} style={actionBtn(showFilters, "neutral")}>
+                {showFilters ? "Hide Filters" : "Show Filters"}
+              </button>
+            </div>
+
+            {showFilters && (
+              <div style={{ ...cS, padding: "12px 14px", marginBottom: 14 }}>
+                <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 8 }}>
+                  <button onClick={() => setMarketingStatusFilter("all")} style={mkP(marketingStatusFilter === "all", C.ac, C.al)}>All {marketingItems.length}</button>
+                  <button onClick={() => setMarketingStatusFilter("active")} style={mkP(marketingStatusFilter === "active", C.pr, C.pb)}>In Progress {marketingSummary.creating + marketingSummary.reviewing + marketingSummary.revising}</button>
+                  {MARKETING_STATUSES.map(status => (
+                    <button key={status.id} onClick={() => setMarketingStatusFilter(marketingStatusFilter === status.id ? "all" : status.id)} style={mkP(marketingStatusFilter === status.id, marketingStatusTone(status.id, C).tone, marketingStatusTone(status.id, C).bg)}>
+                      {status.icon} {status.label} {marketingStatusCounts[status.id]}
+                    </button>
+                  ))}
+                </div>
+
+                <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 8 }}>
+                  <button onClick={() => setMarketingCampaignFilter("all")} style={mkP(marketingCampaignFilter === "all", C.ac, C.al)}>All Campaigns</button>
+                  {marketingCampaigns.slice(0, 10).map(([campaign, count]) => (
+                    <button key={campaign} onClick={() => setMarketingCampaignFilter(marketingCampaignFilter === campaign ? "all" : campaign)} style={mkP(marketingCampaignFilter === campaign, C.ac, C.al)}>{campaign} {count}</button>
+                  ))}
+                </div>
+
+                <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                  <button onClick={() => setMarketingTrafficFilter("all")} style={mkP(marketingTrafficFilter === "all", C.ac, C.al)}>All Traffic</button>
+                  {MARKETING_TRAFFIC_TYPES.map(type => (
+                    <button key={type} onClick={() => setMarketingTrafficFilter(marketingTrafficFilter === type ? "all" : type)} style={mkP(marketingTrafficFilter === type, C.ac, C.al)}>{type}</button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div style={{ fontSize: 12, color: C.tt, marginBottom: 12 }}>{filteredMarketingItems.length} item{filteredMarketingItems.length !== 1 ? "s" : ""}</div>
+
+            {viewMode === "list" && (
+              <div style={{ display: "grid", gap: 8 }}>
+                {filteredMarketingItems.map((item, i) => {
+                  const tone = marketingStatusTone(item.status, C);
+                  return (
+                    <div key={item.id} onClick={() => openMarketingItemModal(item)} style={{ ...cS, padding: "14px 18px", cursor: "pointer", display: "flex", alignItems: "center", gap: 14, transition: "all 0.15s", animation: `fu 0.2s ease ${Math.min(i, 15) * 0.02}s both` }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                          <span style={{ fontSize: 14, fontWeight: 700 }}>{item.title}</span>
+                          <span style={{ ...mkP(true, tone.tone, tone.bg), cursor: "pointer" }}>{MM[item.status]?.label}</span>
+                          <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 12, background: C.sa, color: item.owner ? C.ts : C.rd, border: `1px solid ${C.bd}` }}>{item.owner || "Unassigned"}</span>
+                        </div>
+                        <div style={{ fontSize: 11, color: C.ts, marginTop: 3, display: "flex", gap: 10, flexWrap: "wrap" }}>
+                          <span>{item.campaign || "No campaign"}</span>
+                          <span>{item.trafficType}</span>
+                          <span>{item.channel}</span>
+                          {item.dueDate && <span style={{ color: item.dueDate < operationalTodayISOFor(clockNow) ? C.rd : C.ab }}>Due {sD(item.dueDate)}</span>}
+                        </div>
+                        {item.status === "rejected" && item.rejectedReason && (
+                          <div style={{ fontSize: 11, color: C.rd, marginTop: 6, lineHeight: 1.5 }}>
+                            Rejected: {item.rejectedReason}
+                          </div>
+                        )}
+                      </div>
+                      <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                        {item.briefUrl && <a href={item.briefUrl} target="_blank" rel="noopener" onClick={e => e.stopPropagation()} style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Brief</a>}
+                        {item.contentUrl && <a href={item.contentUrl} target="_blank" rel="noopener" onClick={e => e.stopPropagation()} style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Content</a>}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {viewMode === "kanban" && (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12, alignItems: "start", paddingBottom: 20 }}>
+                {MARKETING_STATUSES.map(status => {
+                  const tone = marketingStatusTone(status.id, C);
+                  const col = filteredMarketingItems.filter(item => item.status === status.id);
+                  return (
+                    <div key={status.id} style={{ minWidth: 0 }}>
+                      <div style={{ padding: "10px 12px", borderRadius: 12, border: `1px solid ${tone.tone}`, background: tone.bg, fontSize: 12, fontWeight: 700, color: tone.tone, marginBottom: 8 }}>
+                        {status.icon} {status.label} ({col.length})
+                      </div>
+                      <div style={{ display: "grid", gap: 8 }}>
+                        {col.map(item => (
+                          <button key={item.id} onClick={() => openMarketingItemModal(item)} style={{ ...cS, padding: "12px 14px", textAlign: "left", cursor: "pointer", fontFamily: ft }}>
+                            <div style={{ fontSize: 13, fontWeight: 700, color: C.tx, marginBottom: 4 }}>{item.title}</div>
+                            <div style={{ fontSize: 11, color: C.ts }}>{item.campaign || "No campaign"} · {item.trafficType}</div>
+                            {item.status === "rejected" && item.rejectedReason && (
+                              <div style={{ fontSize: 10, color: C.rd, marginTop: 6, lineHeight: 1.5 }}>Rejected: {item.rejectedReason}</div>
+                            )}
+                            <div style={{ fontSize: 11, color: C.tt, marginTop: 6 }}>{item.owner || "Unassigned"}</div>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {viewMode === "table" && (
+              <div style={{ ...cS, overflow: "hidden", marginBottom: 12 }}>
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                    <thead style={{ background: C.sa }}>
+                      <tr>
+                        {["Title", "Campaign", "Traffic", "Channel", "Owner", "Status", "Rejected Reason", "Due", "Links", "Updated"].map(h => (
+                          <th key={h} style={{ textAlign: "left", padding: "10px 12px", color: C.ts, fontSize: 11, borderBottom: `1px solid ${C.bd}` }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredMarketingItems.map(item => {
+                        const tone = marketingStatusTone(item.status, C);
+                        return (
+                          <tr key={item.id} onClick={() => openMarketingItemModal(item)} style={{ cursor: "pointer" }}>
+                            <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, fontWeight: 700 }}>{item.title}</td>
+                            <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>{item.campaign || "No campaign"}</td>
+                            <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>{item.trafficType}</td>
+                            <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>{item.channel}</td>
+                            <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: item.owner ? C.tx : C.rd }}>{item.owner || "Unassigned"}</td>
+                            <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}` }}><span style={{ ...mkP(true, tone.tone, tone.bg), cursor: "pointer" }}>{MM[item.status]?.label}</span></td>
+                            <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: item.rejectedReason ? C.rd : C.tt }}>{item.rejectedReason || "—"}</td>
+                            <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>{item.dueDate ? sD(item.dueDate) : "—"}</td>
+                            <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>
+                              {item.briefUrl && <a href={item.briefUrl} target="_blank" rel="noopener" onClick={e => e.stopPropagation()} style={{ marginRight: 8 }}>Brief</a>}
+                              {item.contentUrl && <a href={item.contentUrl} target="_blank" rel="noopener" onClick={e => e.stopPropagation()}>Content</a>}
+                            </td>
+                            <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.tt }}>{rD(item.updatedAt)}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {!isMarketingProject && projectMode === "work" && (
           <div style={{ ...cS, padding: "12px 14px", marginBottom: 12 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: showQueue ? 10 : 0, flexWrap: "wrap" }}>
               <div>
@@ -6249,7 +7052,7 @@ Requirements:
           </div>
         )}
 
-        {projectMode === "work" && (
+        {!isMarketingProject && projectMode === "work" && (
           <div style={{ ...cS, padding: "12px 14px", marginBottom: 14 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" }}>
               <div>
@@ -6273,7 +7076,7 @@ Requirements:
           </div>
         )}
 
-        {projectMode === "report" && (
+        {!isMarketingProject && projectMode === "report" && (
           <div style={{ ...cS, padding: "16px 20px", marginBottom: 16, animation: "si 0.2s ease" }}>
             <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>🧪 A/B Performance by Genre</div>
             {abRows.length > 0 ? (
@@ -6310,7 +7113,7 @@ Requirements:
           </div>
         )}
 
-        {projectMode === "report" && (
+        {!isMarketingProject && projectMode === "report" && (
           <div style={{ ...cS, padding: "16px 20px", marginBottom: 16, animation: "si 0.2s ease" }}>
             <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>🎯 Smart Queue - Top Actions · {reportViewLabel}</div>
             {queue.length > 0 ? (
@@ -6330,7 +7133,7 @@ Requirements:
           </div>
         )}
 
-        {projectMode === "inbox" && (
+        {!isMarketingProject && projectMode === "inbox" && (
           <div style={{ display: "grid", gap: 14, marginBottom: 16 }}>
             <div style={{ ...cS, padding: "16px 18px" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
@@ -6712,13 +7515,30 @@ Requirements:
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(260px,1fr))", gap: 14 }}>
                 <div style={{ ...cS, boxShadow: "none", padding: "14px 16px", background: C.sa }}>
                   <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>Project Tools</div>
-                  <div style={{ display: "grid", gap: 8 }}>
-                    <label style={{ ...actionBtn(false, "neutral"), ...lockStyle(isReadOnly), display: "inline-flex", justifyContent: "center" }}>
-                      Internal CSV Check
-                      <input type="file" accept=".csv" ref={rosterRef} onChange={importInternalRoster} disabled={isReadOnly} />
+                  <div style={{ display: "grid", gap: 10 }}>
+                    <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 4 }}>
+                      <span>Project type</span>
+                      <select value={projectType} disabled={!isAdmin} onChange={e => saveProjectType(e.target.value)} style={{ ...iS, ...lockStyle(!isAdmin) }}>
+                        {PROJECT_TYPES.map(type => <option key={type.id} value={type.id}>{type.label}</option>)}
+                      </select>
                     </label>
-                    <button onClick={copyProjectCsvLink} style={actionBtn(false, "neutral")}>Copy CSV Link</button>
-                    <button onClick={() => exportPipeline(proj, enriched)} style={actionBtn(false, "neutral")}>Export Project CSV</button>
+                    <div style={{ fontSize: 11, color: C.tt, lineHeight: 1.5 }}>
+                      {isMarketingProject
+                        ? "Marketing projects use content items, campaign statuses, and brief or content links. A&R data stays untouched."
+                        : "A&R projects keep the artist pipeline, outreach workflow, Gmail inbox, and roster tools."}
+                    </div>
+                    {!isMarketingProject && (
+                      <>
+                        <label style={{ ...actionBtn(false, "neutral"), ...lockStyle(isReadOnly), display: "inline-flex", justifyContent: "center" }}>
+                          Internal CSV Check
+                          <input type="file" accept=".csv" ref={rosterRef} onChange={importInternalRoster} disabled={isReadOnly} />
+                        </label>
+                        <button onClick={copyProjectCsvLink} style={actionBtn(false, "neutral")}>Copy CSV Link</button>
+                      </>
+                    )}
+                    <button onClick={() => isMarketingProject ? exportMarketingItems(proj) : exportPipeline(proj, enriched)} style={actionBtn(false, "neutral")}>
+                      {isMarketingProject ? "Export Content CSV" : "Export Project CSV"}
+                    </button>
                     {isAdmin && (
                       <a href="/ar/admin" style={{ ...actionBtn(false, "neutral"), textDecoration: "none", display: "inline-flex", justifyContent: "center" }}>
                         Open Admin
@@ -6792,7 +7612,7 @@ Requirements:
                   </div>
                 </div>
 
-                <div style={{ ...cS, boxShadow: "none", padding: "14px 16px", background: C.sa }}>
+                {!isMarketingProject && <div style={{ ...cS, boxShadow: "none", padding: "14px 16px", background: C.sa }}>
                   <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>Mailboxes</div>
                   {!gmailStatus.available ? (
                     <div style={{ fontSize: 12, color: C.ts }}>Google OAuth is not configured yet.</div>
@@ -6864,7 +7684,7 @@ Requirements:
                       )}
                     </div>
                   )}
-                </div>
+                </div>}
 
                 <div style={{ ...cS, boxShadow: "none", padding: "14px 16px", background: C.sa, gridColumn: "1 / -1" }}>
                   <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>Team</div>
@@ -6954,7 +7774,7 @@ Requirements:
           </div>
         )}
 
-        {projectMode === "work" && (
+        {!isMarketingProject && projectMode === "work" && (
         <div ref={workSurfaceRef}>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10, alignItems: "center" }}>
           <input placeholder="Search artists..." value={search} onChange={e => setSearch(e.target.value)} style={{ ...iS, width: 220 }} />
@@ -7197,6 +8017,90 @@ Requirements:
                 <button onClick={addManualArtist} style={{ padding: "8px 24px", borderRadius: 10, border: "none", background: C.ac, color: "#fff", cursor: "pointer", fontSize: 13, fontWeight: 600, fontFamily: ft, opacity: artistForm.name.trim() ? 1 : 0.45 }}>
                   Add Artist
                 </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {showMarketingItemModal && (
+          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 120 }} onClick={e => { if (e.target === e.currentTarget) { setShowMarketingItemModal(false); resetMarketingForm(); } }}>
+            <div style={{ background: C.sf, borderRadius: 18, padding: "24px 28px", width: 720, maxWidth: "calc(100vw - 32px)", boxShadow: "0 25px 70px rgba(0,0,0,0.2)", maxHeight: "88vh", overflowY: "auto" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", marginBottom: 12 }}>
+                <div>
+                  <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 6, color: C.tx }}>{marketingForm.id ? "Edit Content Item" : "New Content Item"}</div>
+                  <div style={{ fontSize: 12, color: C.ts }}>Track campaign work with clear status, brief link, content link, notes, and owner.</div>
+                </div>
+                <button onClick={() => { setShowMarketingItemModal(false); resetMarketingForm(); }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: C.ts }}>✕</button>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr", gap: 10 }}>
+                <input value={marketingForm.title} onChange={e => setMarketingForm({ ...marketingForm, title: e.target.value })} placeholder="Content title*" autoFocus style={{ ...iS, width: "100%" }} />
+                <input value={marketingForm.campaign} onChange={e => setMarketingForm({ ...marketingForm, campaign: e.target.value })} placeholder="Campaign name" style={{ ...iS, width: "100%" }} />
+
+                <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 4 }}>
+                  <span>Traffic type</span>
+                  <select value={marketingForm.trafficType} onChange={e => setMarketingForm({ ...marketingForm, trafficType: e.target.value })} style={{ ...iS, width: "100%" }}>
+                    {MARKETING_TRAFFIC_TYPES.map(type => <option key={type} value={type}>{type}</option>)}
+                  </select>
+                </label>
+                <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 4 }}>
+                  <span>Channel</span>
+                  <select value={marketingForm.channel} onChange={e => setMarketingForm({ ...marketingForm, channel: e.target.value })} style={{ ...iS, width: "100%" }}>
+                    {MARKETING_CHANNELS.map(type => <option key={type} value={type}>{type}</option>)}
+                  </select>
+                </label>
+
+                <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 4 }}>
+                  <span>Status</span>
+                  <select value={marketingForm.status} onChange={e => setMarketingForm({ ...marketingForm, status: e.target.value, rejectedReason: e.target.value === "rejected" ? marketingForm.rejectedReason : "" })} style={{ ...iS, width: "100%" }}>
+                    {MARKETING_STATUSES.map(status => <option key={status.id} value={status.id}>{status.label}</option>)}
+                  </select>
+                </label>
+                <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 4 }}>
+                  <span>Owner</span>
+                  <select value={marketingForm.owner} onChange={e => setMarketingForm({ ...marketingForm, owner: e.target.value })} style={{ ...iS, width: "100%" }}>
+                    <option value="">Unassigned</option>
+                    {(proj?.teamUsers || DEFAULT_TEAM_USERS).map(u => <option key={u} value={u}>{u}</option>)}
+                  </select>
+                </label>
+
+                <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 4 }}>
+                  <span>Due date</span>
+                  <input type="date" value={marketingForm.dueDate} onChange={e => setMarketingForm({ ...marketingForm, dueDate: e.target.value })} style={{ ...iS, width: "100%" }} />
+                </label>
+                <div />
+
+                <input value={marketingForm.briefUrl} onChange={e => setMarketingForm({ ...marketingForm, briefUrl: e.target.value })} placeholder="Brief link" style={{ ...iS, width: "100%" }} />
+                <input value={marketingForm.contentUrl} onChange={e => setMarketingForm({ ...marketingForm, contentUrl: e.target.value })} placeholder="Content link" style={{ ...iS, width: "100%" }} />
+
+                {marketingForm.status === "rejected" && (
+                  <textarea
+                    value={marketingForm.rejectedReason}
+                    onChange={e => setMarketingForm({ ...marketingForm, rejectedReason: e.target.value })}
+                    placeholder="Why did the artist reject the opportunity?"
+                    style={{ ...iS, width: "100%", minHeight: 84, resize: "vertical", gridColumn: "1 / span 2" }}
+                  />
+                )}
+
+                <textarea value={marketingForm.notes} onChange={e => setMarketingForm({ ...marketingForm, notes: e.target.value })} placeholder="Notes, revision context, feedback, deliverable details..." style={{ ...iS, width: "100%", minHeight: 110, resize: "vertical", gridColumn: "1 / span 2" }} />
+              </div>
+
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginTop: 18 }}>
+                <div style={{ display: "flex", gap: 8 }}>
+                  {marketingForm.briefUrl && <a href={marketingForm.briefUrl} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Open Brief</a>}
+                  {marketingForm.contentUrl && <a href={marketingForm.contentUrl} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Open Content</a>}
+                </div>
+                <div style={{ display: "flex", gap: 10 }}>
+                  {marketingForm.id && (
+                    <button onClick={() => deleteMarketingItem(marketingForm.id)} style={{ padding: "8px 18px", borderRadius: 10, border: `1px solid ${C.rbd}`, background: C.rb, cursor: "pointer", fontSize: 13, fontFamily: ft, color: C.rd }}>
+                      Delete
+                    </button>
+                  )}
+                  <button onClick={() => { setShowMarketingItemModal(false); resetMarketingForm(); }} style={{ padding: "8px 18px", borderRadius: 10, border: `1px solid ${C.bd}`, background: "transparent", cursor: "pointer", fontSize: 13, fontFamily: ft, color: C.ts }}>Cancel</button>
+                  <button onClick={saveMarketingItem} style={{ padding: "8px 24px", borderRadius: 10, border: "none", background: C.ac, color: "#fff", cursor: "pointer", fontSize: 13, fontWeight: 600, fontFamily: ft, opacity: marketingForm.title.trim() ? 1 : 0.45 }}>
+                    {marketingForm.id ? "Save Changes" : "Add Item"}
+                  </button>
+                </div>
               </div>
             </div>
           </div>

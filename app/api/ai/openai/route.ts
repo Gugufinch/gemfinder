@@ -134,7 +134,7 @@ export async function POST(req: NextRequest) {
   const payload = await req.json().catch(() => null);
   const parsed = requestSchema.safeParse(payload);
   if (!parsed.success) {
-    return NextResponse.json({ error: 'Invalid AI payload', details: parsed.error.issues }, { status: 400 });
+    return NextResponse.json({ error: 'Invalid AI payload', details: parsed.error.flatten() }, { status: 400 });
   }
 
   const { prompt, model, maxTokens, apiKey } = parsed.data;
