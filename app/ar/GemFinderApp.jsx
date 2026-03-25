@@ -4410,6 +4410,15 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     return counts;
   }, [marketingItems]);
 
+  const effectiveMarketingOwnerFilter = useMemo(() => {
+    if (marketingOwnerFilter === "__view__") {
+      if (workspaceUser === ALL_USER_VIEW) return "all";
+      if (workspaceUser === UNASSIGNED_USER_VIEW) return "";
+      return workspaceUser;
+    }
+    return marketingOwnerFilter;
+  }, [marketingOwnerFilter, workspaceUser]);
+
   const filteredMarketingItems = useMemo(() => {
     let list = marketingItems;
     if (search.trim()) {
@@ -4486,15 +4495,6 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     }
     return ownerFilter;
   }, [ownerFilter, workspaceUser]);
-
-  const effectiveMarketingOwnerFilter = useMemo(() => {
-    if (marketingOwnerFilter === "__view__") {
-      if (workspaceUser === ALL_USER_VIEW) return "all";
-      if (workspaceUser === UNASSIGNED_USER_VIEW) return "";
-      return workspaceUser;
-    }
-    return marketingOwnerFilter;
-  }, [marketingOwnerFilter, workspaceUser]);
 
   const stageBase = useMemo(() => {
     let l = enriched;
