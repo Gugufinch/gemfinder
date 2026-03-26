@@ -1654,10 +1654,14 @@ async function apiGetProjects() {
   try {
     const res = await fetch("/api/ar/projects", { cache: "no-store" });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) return { ok: false, error: data.error || "Could not load projects" };
-    return { ok: true, projects: Array.isArray(data.projects) ? data.projects : [] };
+    if (!res.ok) return { ok: false, error: data.error || "Could not load projects", projects: [], snapshots: [] };
+    return {
+      ok: true,
+      projects: Array.isArray(data.projects) ? data.projects : [],
+      snapshots: Array.isArray(data.snapshots) ? data.snapshots : [],
+    };
   } catch {
-    return { ok: false, error: "Network error loading projects" };
+    return { ok: false, error: "Network error loading projects", projects: [], snapshots: [] };
   }
 }
 
@@ -2448,6 +2452,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         const nextWorkspaceUser = d?.workspaceUser || ALL_USER_VIEW;
         const nextLayouts = d?.layoutByUser || {};
         const localProjects = Array.isArray(d?.projects) ? d.projects : [];
+        const lastNonEmptyProjects = Array.isArray(d?.lastNonEmptyProjects) ? d.lastNonEmptyProjects : [];
         if (d?.lastActive) setApId(d.lastActive);
         if (d?.dark) setDark(d.dark);
         if (d?.viewMode) setViewMode(d.viewMode);
@@ -2476,6 +2481,15 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                 setProjects(localProjects.map(normalizeProject));
                 console.error("Project migration failed:", migrated.error);
               }
+            } else if (lastNonEmptyProjects.length) {
+              setProjects(lastNonEmptyProjects.map(normalizeProject));
+              setToast({
+                m: "Shared projects came back empty, so GEMFINDER loaded your last known local snapshot instead.",
+                t: "err",
+              });
+              console.error("Shared project load returned empty; using last known non-empty local snapshot.", {
+                snapshots: shared.snapshots || [],
+              });
             } else {
               setProjects([]);
             }
@@ -2634,20 +2648,37 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
 
   const persist = useCallback(async (np, la, dk, vm, lb, wu) => {
     const nextProjects = np || projects;
+    const previousLocal = await sGet(storageKey);
+    const lastNonEmptyProjects = nextProjects.length
+      ? nextProjects
+      : Array.isArray(previousLocal?.lastNonEmptyProjects) && previousLocal.lastNonEmptyProjects.length
+        ? previousLocal.lastNonEmptyProjects
+        : Array.isArray(previousLocal?.projects) && previousLocal.projects.length
+          ? previousLocal.projects
+          : [];
+
+    if (np !== undefined && authUserId && canEdit) {
+      const result = await apiSaveProjects(nextProjects);
+      if (!result.ok) {
+        console.error("Shared project save failed:", result.error);
+        setToast({
+          m: result.error || "Shared project save failed. Your workspace was not replaced.",
+          t: "err",
+        });
+        return false;
+      }
+    }
+
     await sSet(storageKey, {
       projects: nextProjects,
+      lastNonEmptyProjects,
       lastActive: la !== undefined ? la : apId,
       dark: dk !== undefined ? dk : dark,
       viewMode: vm !== undefined ? vm : viewMode,
       layoutByUser: lb !== undefined ? lb : layoutByUser,
       workspaceUser: wu !== undefined ? wu : workspaceUser,
     });
-    if (np !== undefined && authUserId && canEdit) {
-      const result = await apiSaveProjects(nextProjects);
-      if (!result.ok) {
-        console.error("Shared project save failed:", result.error);
-      }
-    }
+    return true;
   }, [storageKey, projects, apId, dark, viewMode, layoutByUser, workspaceUser, authUserId, canEdit]);
 
   const flash = (m, t = "ok") => { setToast({ m, t }); setTimeout(() => setToast(null), 2500); };

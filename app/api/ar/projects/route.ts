@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getAuthUserById } from '@/lib/gemfinder/auth-store';
-import { listWorkspaceProjects, saveWorkspaceProjects } from '@/lib/gemfinder/project-store';
+import { listWorkspaceProjectSnapshots, listWorkspaceProjects, saveWorkspaceProjects } from '@/lib/gemfinder/project-store';
 import { notifySlackOnStageTransitions } from '@/lib/gemfinder/slack';
 
 const updateSchema = z.object({
@@ -21,7 +21,8 @@ export async function GET(req: NextRequest) {
   }
 
   const projects = await listWorkspaceProjects();
-  return NextResponse.json({ ok: true, projects });
+  const snapshots = actor.role === 'admin' ? await listWorkspaceProjectSnapshots(5) : [];
+  return NextResponse.json({ ok: true, projects, snapshots });
 }
 
 export async function PUT(req: NextRequest) {
@@ -40,7 +41,17 @@ export async function PUT(req: NextRequest) {
   }
 
   const previousProjects = await listWorkspaceProjects();
-  await saveWorkspaceProjects(parsed.data.projects);
+  try {
+    await saveWorkspaceProjects(parsed.data.projects, {
+      allowEmpty: req.headers.get('x-gemfinder-allow-empty') === 'true' && actor.role === 'admin',
+      reason: `api_put:${actor.email}`
+    });
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Project save failed' },
+      { status: 409 }
+    );
+  }
   void notifySlackOnStageTransitions({
     previousProjects,
     nextProjects: parsed.data.projects,
