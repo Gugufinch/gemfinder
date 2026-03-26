@@ -1,4 +1,5 @@
-const NOTIFY_STAGE_IDS = new Set(['engaged', 'won', 'live']);
+const A_R_NOTIFY_STAGE_IDS = new Set(['engaged', 'won', 'live']);
+const MARKETING_NOTIFY_STATUS_IDS = new Set(['interested', 'creating', 'reviewing', 'revising', 'complete', 'rejected']);
 
 const STAGE_LABELS: Record<string, string> = {
   prospect: 'Prospect',
@@ -8,7 +9,17 @@ const STAGE_LABELS: Record<string, string> = {
   engaged: 'Engaged',
   won: 'Won',
   live: 'Live',
-  dead: 'Dead'
+  dead: 'Dead',
+};
+
+const MARKETING_STATUS_LABELS: Record<string, string> = {
+  prospect: 'Prospect',
+  interested: 'Interested',
+  creating: 'Creating',
+  reviewing: 'Reviewing',
+  revising: 'Revising',
+  complete: 'Complete',
+  rejected: 'Rejected',
 };
 
 type ProjectArtist = {
@@ -17,12 +28,29 @@ type ProjectArtist = {
   soc?: string;
 };
 
+type MarketingAssignment = {
+  id?: string;
+  talentName?: string;
+  title?: string;
+  campaign?: string;
+  campaigns?: string[];
+  trafficType?: string;
+  channels?: string[];
+  deliverableType?: string;
+  owner?: string;
+  status?: string;
+  briefUrl?: string;
+  contentUrl?: string;
+};
+
 type WorkspaceProject = {
   id?: string;
   name?: string;
+  type?: string;
   pipeline?: Record<string, { stage?: string } | undefined>;
   assignments?: Record<string, string | undefined>;
   artists?: ProjectArtist[];
+  marketingItems?: MarketingAssignment[];
 };
 
 type StageTransition = {
@@ -36,12 +64,37 @@ type StageTransition = {
   spotifyUrl: string;
 };
 
+type MarketingTransition = {
+  projectId: string;
+  projectName: string;
+  assignmentId: string;
+  talentName: string;
+  title: string;
+  campaignLabel: string;
+  trafficType: string;
+  deliverableType: string;
+  owner: string;
+  previousStatus: string;
+  nextStatus: string;
+  projectUrl: string;
+  briefUrl: string;
+  contentUrl: string;
+};
+
 function asProjects(value: unknown): WorkspaceProject[] {
   return Array.isArray(value) ? (value as WorkspaceProject[]) : [];
 }
 
+function normalizeProjectType(type: unknown): 'ar' | 'marketing' {
+  return String(type || '').toLowerCase() === 'marketing' ? 'marketing' : 'ar';
+}
+
 function stageLabel(stageId: string): string {
   return STAGE_LABELS[stageId] || stageId || 'Unknown';
+}
+
+function marketingStatusLabel(statusId: string): string {
+  return MARKETING_STATUS_LABELS[statusId] || statusId || 'Unknown';
 }
 
 function appBaseUrl(): string {
@@ -63,6 +116,22 @@ function artistProfileUrl(projectId: string, artistName: string): string {
   return `${base}/ar?${params.toString()}`;
 }
 
+function marketingProjectUrl(projectId: string): string {
+  const base = appBaseUrl();
+  if (!base) return '';
+  const params = new URLSearchParams({ project: projectId });
+  return `${base}/ar?${params.toString()}`;
+}
+
+function marketingItemKey(item: MarketingAssignment): string {
+  return String(item?.id || [
+    String(item?.talentName || '').trim().toLowerCase(),
+    String(item?.title || '').trim().toLowerCase(),
+    String(item?.campaign || item?.campaigns?.[0] || '').trim().toLowerCase(),
+    String(item?.deliverableType || '').trim().toLowerCase(),
+  ].join('::'));
+}
+
 function extractArtistTransitions(previousProjects: unknown[], nextProjects: unknown[]): StageTransition[] {
   const previousByProjectId = new Map<string, WorkspaceProject>();
   for (const project of asProjects(previousProjects)) {
@@ -71,6 +140,7 @@ function extractArtistTransitions(previousProjects: unknown[], nextProjects: unk
 
   const transitions: StageTransition[] = [];
   for (const nextProject of asProjects(nextProjects)) {
+    if (normalizeProjectType(nextProject?.type) !== 'ar') continue;
     const projectId = String(nextProject?.id || '');
     if (!projectId) continue;
     const prevProject = previousByProjectId.get(projectId);
@@ -79,7 +149,7 @@ function extractArtistTransitions(previousProjects: unknown[], nextProjects: unk
       const nextStage = String(nextState?.stage || 'prospect');
       const previousStage = String(prevProject?.pipeline?.[artistName]?.stage || '');
       if (!previousStage || previousStage === nextStage) continue;
-      if (!NOTIFY_STAGE_IDS.has(nextStage)) continue;
+      if (!A_R_NOTIFY_STAGE_IDS.has(nextStage)) continue;
       const artistRecord = (nextProject?.artists || []).find((artist) => String(artist?.n || '') === artistName);
       transitions.push({
         projectId,
@@ -97,27 +167,72 @@ function extractArtistTransitions(previousProjects: unknown[], nextProjects: unk
   return transitions;
 }
 
-function buildSlackPayload(transition: StageTransition, actorEmail: string) {
+function extractMarketingTransitions(previousProjects: unknown[], nextProjects: unknown[]): MarketingTransition[] {
+  const previousByProjectId = new Map<string, WorkspaceProject>();
+  for (const project of asProjects(previousProjects)) {
+    if (project?.id) previousByProjectId.set(String(project.id), project);
+  }
+
+  const transitions: MarketingTransition[] = [];
+  for (const nextProject of asProjects(nextProjects)) {
+    if (normalizeProjectType(nextProject?.type) !== 'marketing') continue;
+    const projectId = String(nextProject?.id || '');
+    if (!projectId) continue;
+    const prevProject = previousByProjectId.get(projectId);
+    const prevItems = new Map<string, MarketingAssignment>();
+    (prevProject?.marketingItems || []).forEach((item) => {
+      prevItems.set(marketingItemKey(item), item);
+    });
+
+    (nextProject?.marketingItems || []).forEach((nextItem) => {
+      const itemKey = marketingItemKey(nextItem);
+      const previousItem = prevItems.get(itemKey);
+      const nextStatus = String(nextItem?.status || 'prospect').toLowerCase();
+      const previousStatus = String(previousItem?.status || '').toLowerCase();
+      if (!previousStatus || previousStatus === nextStatus) return;
+      if (!MARKETING_NOTIFY_STATUS_IDS.has(nextStatus)) return;
+
+      const campaigns = Array.isArray(nextItem?.campaigns) && nextItem.campaigns.length
+        ? nextItem.campaigns
+        : [String(nextItem?.campaign || '').trim()].filter(Boolean);
+
+      transitions.push({
+        projectId,
+        projectName: String(nextProject?.name || 'Untitled Project'),
+        assignmentId: String(nextItem?.id || itemKey),
+        talentName: String(nextItem?.talentName || 'Untitled Talent'),
+        title: String(nextItem?.title || '').trim(),
+        campaignLabel: campaigns.length ? campaigns.join(', ') : 'No campaign',
+        trafficType: String(nextItem?.trafficType || 'Organic'),
+        deliverableType: String(nextItem?.deliverableType || 'UGC'),
+        owner: String(nextItem?.owner || 'Unassigned'),
+        previousStatus,
+        nextStatus,
+        projectUrl: marketingProjectUrl(projectId),
+        briefUrl: String(nextItem?.briefUrl || '').trim(),
+        contentUrl: String(nextItem?.contentUrl || '').trim(),
+      });
+    });
+  }
+
+  return transitions;
+}
+
+function buildArSlackPayload(transition: StageTransition, actorEmail: string) {
   const actorLabel = actorEmail || 'Unknown user';
   const text = `GEMFINDER: ${transition.artistName} moved to ${stageLabel(transition.nextStage)} in ${transition.projectName}`;
   const accessoryButtons = [];
   if (transition.profileUrl) {
     accessoryButtons.push({
       type: 'button',
-      text: {
-        type: 'plain_text',
-        text: 'Open artist',
-      },
+      text: { type: 'plain_text', text: 'Open artist' },
       url: transition.profileUrl,
     });
   }
   if ((transition.nextStage === 'engaged' || transition.nextStage === 'won') && transition.spotifyUrl) {
     accessoryButtons.push({
       type: 'button',
-      text: {
-        type: 'plain_text',
-        text: 'Spotify',
-      },
+      text: { type: 'plain_text', text: 'Spotify' },
       url: transition.spotifyUrl,
     });
   }
@@ -128,69 +243,103 @@ function buildSlackPayload(transition: StageTransition, actorEmail: string) {
         type: 'header',
         text: {
           type: 'plain_text',
-          text: `${transition.artistName} -> ${stageLabel(transition.nextStage)}`
-        }
+          text: `${transition.artistName} -> ${stageLabel(transition.nextStage)}`,
+        },
       },
       {
         type: 'section',
         fields: [
-          {
-            type: 'mrkdwn',
-            text: `*Project*\n${transition.projectName}`
-          },
-          {
-            type: 'mrkdwn',
-            text: `*Owner*\n${transition.owner}`
-          },
-          {
-            type: 'mrkdwn',
-            text: `*Changed by*\n${actorLabel}`
-          },
-          {
-            type: 'mrkdwn',
-            text: `*Stage change*\n${stageLabel(transition.previousStage)} -> ${stageLabel(transition.nextStage)}`
-          }
-        ]
+          { type: 'mrkdwn', text: `*Project*\n${transition.projectName}` },
+          { type: 'mrkdwn', text: `*Owner*\n${transition.owner}` },
+          { type: 'mrkdwn', text: `*Changed by*\n${actorLabel}` },
+          { type: 'mrkdwn', text: `*Stage change*\n${stageLabel(transition.previousStage)} -> ${stageLabel(transition.nextStage)}` },
+        ],
       },
-      ...(accessoryButtons.length
-        ? [{
-            type: 'actions',
-            elements: accessoryButtons,
-          }]
-        : [])
-      ,
+      ...(accessoryButtons.length ? [{ type: 'actions', elements: accessoryButtons }] : []),
       {
         type: 'context',
         elements: [
           {
             type: 'mrkdwn',
             text: transition.profileUrl ? `<${transition.profileUrl}|Open ${transition.artistName} in GemFinder>` : 'GemFinder artist link unavailable',
-          }
-        ]
-      }
-    ]
+          },
+        ],
+      },
+    ],
   };
 }
 
-export async function notifySlackOnStageTransitions(input: {
-  previousProjects: unknown[];
-  nextProjects: unknown[];
-  actorEmail: string;
-}): Promise<void> {
-  const webhookUrl = String(process.env.SLACK_WEBHOOK_URL || '').trim();
-  if (!webhookUrl) return;
+function buildMarketingSlackPayload(transition: MarketingTransition, actorEmail: string) {
+  const actorLabel = actorEmail || 'Unknown user';
+  const text = `GEMFINDER MARKETING: ${transition.talentName} moved to ${marketingStatusLabel(transition.nextStatus)} in ${transition.projectName}`;
+  const titleLine = transition.title && transition.title !== transition.talentName ? `${transition.talentName} · ${transition.title}` : transition.talentName;
+  const accessoryButtons = [];
+  if (transition.projectUrl) {
+    accessoryButtons.push({
+      type: 'button',
+      text: { type: 'plain_text', text: 'Open project' },
+      url: transition.projectUrl,
+    });
+  }
+  if (transition.briefUrl) {
+    accessoryButtons.push({
+      type: 'button',
+      text: { type: 'plain_text', text: 'Brief' },
+      url: transition.briefUrl,
+    });
+  }
+  if (transition.contentUrl) {
+    accessoryButtons.push({
+      type: 'button',
+      text: { type: 'plain_text', text: 'Content' },
+      url: transition.contentUrl,
+    });
+  }
+  return {
+    text,
+    blocks: [
+      {
+        type: 'header',
+        text: {
+          type: 'plain_text',
+          text: `${titleLine} -> ${marketingStatusLabel(transition.nextStatus)}`,
+        },
+      },
+      {
+        type: 'section',
+        fields: [
+          { type: 'mrkdwn', text: `*Project*\n${transition.projectName}` },
+          { type: 'mrkdwn', text: `*Campaign*\n${transition.campaignLabel}` },
+          { type: 'mrkdwn', text: `*Traffic / Deliverable*\n${transition.trafficType} · ${transition.deliverableType}` },
+          { type: 'mrkdwn', text: `*Owner*\n${transition.owner}` },
+          { type: 'mrkdwn', text: `*Changed by*\n${actorLabel}` },
+          { type: 'mrkdwn', text: `*Status change*\n${marketingStatusLabel(transition.previousStatus)} -> ${marketingStatusLabel(transition.nextStatus)}` },
+        ],
+      },
+      ...(accessoryButtons.length ? [{ type: 'actions', elements: accessoryButtons }] : []),
+      {
+        type: 'context',
+        elements: [
+          {
+            type: 'mrkdwn',
+            text: transition.projectUrl
+              ? `<${transition.projectUrl}|Open ${transition.projectName} in GemFinder>`
+              : 'GemFinder project link unavailable',
+          },
+        ],
+      },
+    ],
+  };
+}
 
-  const transitions = extractArtistTransitions(input.previousProjects, input.nextProjects);
-  if (!transitions.length) return;
-
+async function postSlackNotifications(webhookUrl: string, payloads: unknown[], context: Array<Record<string, string>>) {
+  if (!webhookUrl || !payloads.length) return;
   const results = await Promise.allSettled(
-    transitions.map((transition) =>
+    payloads.map((payload) =>
       fetch(webhookUrl, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(buildSlackPayload(transition, input.actorEmail))
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
       })
     )
   );
@@ -198,19 +347,50 @@ export async function notifySlackOnStageTransitions(input: {
   results.forEach((result, index) => {
     if (result.status === 'rejected') {
       console.error('[slack-notify] request failed', {
-        projectId: transitions[index]?.projectId,
-        artistName: transitions[index]?.artistName,
-        error: result.reason instanceof Error ? result.reason.message : result.reason
+        ...context[index],
+        error: result.reason instanceof Error ? result.reason.message : result.reason,
       });
       return;
     }
-
     if (!result.value.ok) {
       console.error('[slack-notify] non-200 response', {
-        projectId: transitions[index]?.projectId,
-        artistName: transitions[index]?.artistName,
-        status: result.value.status
+        ...context[index],
+        status: result.value.status,
       });
     }
   });
+}
+
+export async function notifySlackOnProjectTransitions(input: {
+  previousProjects: unknown[];
+  nextProjects: unknown[];
+  actorEmail: string;
+}): Promise<void> {
+  const arWebhookUrl = String(process.env.SLACK_WEBHOOK_URL || '').trim();
+  const marketingWebhookUrl = String(process.env.SLACK_MARKETING_WEBHOOK_URL || '').trim();
+
+  const artistTransitions = extractArtistTransitions(input.previousProjects, input.nextProjects);
+  const marketingTransitions = extractMarketingTransitions(input.previousProjects, input.nextProjects);
+
+  await Promise.all([
+    postSlackNotifications(
+      arWebhookUrl,
+      artistTransitions.map((transition) => buildArSlackPayload(transition, input.actorEmail)),
+      artistTransitions.map((transition) => ({
+        channel: 'ar',
+        projectId: transition.projectId,
+        artistName: transition.artistName,
+      }))
+    ),
+    postSlackNotifications(
+      marketingWebhookUrl,
+      marketingTransitions.map((transition) => buildMarketingSlackPayload(transition, input.actorEmail)),
+      marketingTransitions.map((transition) => ({
+        channel: 'marketing',
+        projectId: transition.projectId,
+        talentName: transition.talentName,
+        assignmentId: transition.assignmentId,
+      }))
+    ),
+  ]);
 }

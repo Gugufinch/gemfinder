@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getAuthUserById } from '@/lib/gemfinder/auth-store';
 import { listWorkspaceProjectSnapshots, listWorkspaceProjects, saveWorkspaceProjects } from '@/lib/gemfinder/project-store';
-import { notifySlackOnStageTransitions } from '@/lib/gemfinder/slack';
+import { notifySlackOnProjectTransitions } from '@/lib/gemfinder/slack';
 
 const updateSchema = z.object({
   projects: z.array(z.unknown())
@@ -52,7 +52,7 @@ export async function PUT(req: NextRequest) {
       { status: 409 }
     );
   }
-  void notifySlackOnStageTransitions({
+  void notifySlackOnProjectTransitions({
     previousProjects,
     nextProjects: parsed.data.projects,
     actorEmail: actor.email
