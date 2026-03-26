@@ -411,6 +411,21 @@ function normalizeMarketingChannels(value) {
 function normalizeMarketingCampaigns(value) {
   return uniqStrings(splitMultiValueField(value).map(item => item.replace(/\s+/g, " ").trim()));
 }
+function parseMarketingBulkTalent(value) {
+  const raw = String(value || "").replace(/\s+/g, " ").trim();
+  if (!raw) return { talentName: "", email: "" };
+  const emailMatch = raw.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+  const email = emailMatch ? emailMatch[0].trim().toLowerCase() : "";
+  let talentName = raw;
+  if (email) {
+    talentName = raw
+      .replace(email, " ")
+      .replace(/\s*(?:—|–|-|<|>|\(|\)|\[|\]|:)\s*/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+  return { talentName: talentName || raw, email };
+}
 function normalizeMarketingCampaignBank(value) {
   return normalizeMarketingCampaigns(Array.isArray(value) ? value : String(value || ""));
 }
@@ -628,11 +643,13 @@ function parseMarketingBulkUpdateText(text, defaultCampaign = "", defaultStatus 
       return key ? String(headerMap[key] || "").trim() : "";
     };
     const positional = index => String(cells[index] || "").trim();
-    const talentName = (get(["name", "talentname", "artistname", "artist"]) || positional(0)).trim();
-    if (!talentName) return null;
+    const parsedTalent = parseMarketingBulkTalent(get(["name", "talentname", "artistname", "artist", "talent"]) || positional(0));
+    if (!parsedTalent.talentName) return null;
+    const parsedEmail = (get(["email", "contactemail", "contact_email", "primaryemail", "primary_email"]) || "").trim().toLowerCase();
     return {
       lineNumber,
-      talentName,
+      talentName: parsedTalent.talentName,
+      email: parsedEmail || parsedTalent.email,
       campaign: (get(["campaign", "campaignname"]) || positional(1) || defaultCampaign || "").trim(),
       status: normalizeMarketingStatus(get(["status", "stage"]) || positional(2) || defaultStatus || "prospect"),
       raw: cells.map(col => String(col || "").trim()).join(" | "),
@@ -5034,6 +5051,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     const existingItems = (proj.marketingItems || []).map(item => normalizeMarketingItem(item, proj.teamUsers || DEFAULT_TEAM_USERS));
     const byName = new Map();
     const byNameCampaign = new Map();
+    const byEmail = new Map();
+    const byEmailCampaign = new Map();
     existingItems.forEach(item => {
       const nameKey = canonicalArtistName(item.talentName);
       if (!nameKey) return;
@@ -5044,18 +5063,33 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       campaigns.forEach(campaign => {
         byNameCampaign.set(`${nameKey}::${canonicalArtistName(campaign)}`, item);
       });
+      splitMultiValueField(item.email || "").forEach(email => {
+        const emailKey = String(email || "").trim().toLowerCase();
+        if (!emailKey || !/@/.test(emailKey)) return;
+        const emailList = byEmail.get(emailKey) || [];
+        emailList.push(item);
+        byEmail.set(emailKey, emailList);
+        campaigns.forEach(campaign => {
+          byEmailCampaign.set(`${emailKey}::${canonicalArtistName(campaign)}`, item);
+        });
+      });
     });
 
     const artistRosterByName = new Map();
+    const artistRosterByEmail = new Map();
     (proj.artists || []).forEach(artist => {
       const key = canonicalArtistName(artist?.n || "");
       if (key) artistRosterByName.set(key, artist);
+      const emailKey = String(artist?.e || "").trim().toLowerCase();
+      if (emailKey && /@/.test(emailKey)) artistRosterByEmail.set(emailKey, artist);
     });
 
     return marketingBulkRows.map(row => {
       const nameKey = canonicalArtistName(row.talentName);
+      const emailKey = String(row.email || "").trim().toLowerCase();
       const campaignKey = canonicalArtistName(row.campaign || "");
-      const exactMatch = byNameCampaign.get(`${nameKey}::${campaignKey}`);
+      const exactMatch = (emailKey && byEmailCampaign.get(`${emailKey}::${campaignKey}`))
+        || byNameCampaign.get(`${nameKey}::${campaignKey}`);
       if (exactMatch) {
         return {
           ...row,
@@ -5066,7 +5100,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         };
       }
 
-      const sameTalent = byName.get(nameKey) || [];
+      const sameTalent = (emailKey && byEmail.get(emailKey)) || byName.get(nameKey) || [];
       if (sameTalent.length) {
         return {
           ...row,
@@ -5077,7 +5111,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         };
       }
 
-      const rosterArtist = artistRosterByName.get(nameKey);
+      const rosterArtist = (emailKey && artistRosterByEmail.get(emailKey)) || artistRosterByName.get(nameKey);
       if (rosterArtist) {
         return {
           ...row,
@@ -5436,6 +5470,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
           ...base,
           id: `mkt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
           talentName: entry.talentName,
+          email: entry.email || base.email || "",
           title: String(base.title || "").trim() && String(base.title || "").trim() !== String(base.talentName || "").trim()
             ? base.title
             : [entry.talentName, normalizedCampaign || base.deliverableType || "UGC"].filter(Boolean).join(" · "),
