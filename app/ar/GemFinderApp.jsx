@@ -52,6 +52,7 @@ function emptyMarketingForm() {
     talentType: "Internal Artist",
     title: "",
     campaign: "",
+    newCampaign: "",
     trafficType: "Organic",
     channels: ["Instagram"],
     deliverableType: "UGC",
@@ -408,6 +409,9 @@ function normalizeMarketingChannels(value) {
 }
 function normalizeMarketingCampaigns(value) {
   return uniqStrings(splitMultiValueField(value).map(item => item.replace(/\s+/g, " ").trim()));
+}
+function normalizeMarketingCampaignBank(value) {
+  return normalizeMarketingCampaigns(Array.isArray(value) ? value : String(value || ""));
 }
 function marketingChannelsLabel(item) {
   const channels = Array.isArray(item?.channels) ? item.channels : [];
@@ -1196,6 +1200,7 @@ function normalizeProject(p) {
       appearance: {
         accent: p.settings?.appearance?.accent && ACCENT_PRESETS[p.settings.appearance.accent] ? p.settings.appearance.accent : "blue",
       },
+      marketingCampaignBank: normalizeMarketingCampaignBank(p.settings?.marketingCampaignBank || []),
     },
   };
 }
@@ -2382,6 +2387,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [artistEditSaving, setArtistEditSaving] = useState(false);
   const [showMarketingItemModal, setShowMarketingItemModal] = useState(false);
   const [marketingForm, setMarketingForm] = useState(() => emptyMarketingForm());
+  const [campaignBankDraft, setCampaignBankDraft] = useState("");
   const [marketingStatusFilter, setMarketingStatusFilter] = useState("all");
   const [marketingCampaignFilter, setMarketingCampaignFilter] = useState("all");
   const [marketingTrafficFilter, setMarketingTrafficFilter] = useState("all");
@@ -2685,6 +2691,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         talentType: item.talentType || "Internal Artist",
         title: item.title || "",
         campaign: item.campaign || (Array.isArray(item.campaigns) ? item.campaigns[0] || "" : ""),
+        newCampaign: "",
         trafficType: item.trafficType || "Organic",
         channels: Array.isArray(item.channels) && item.channels.length ? item.channels : normalizeMarketingChannels(item.channel || ""),
         deliverableType: item.deliverableType || "UGC",
@@ -2746,6 +2753,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         if (d?.lastActive) setApId(d.lastActive);
         if (d?.dark) setDark(d.dark);
         if (d?.viewMode) setViewMode(d.viewMode);
+        if (d?.projectMode) setProjectMode(d.projectMode);
         setWorkspaceUser(nextWorkspaceUser);
         setLayoutByUser(nextLayouts);
         const initialLayout = normalizeLayout(nextLayouts[nextWorkspaceUser] || DEFAULT_LAYOUT);
@@ -2936,7 +2944,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     }
   }, [proj?.id, proj?.type, projectMode]);
 
-  const persist = useCallback(async (np, la, dk, vm, lb, wu) => {
+  const persist = useCallback(async (np, la, dk, vm, lb, wu, pm) => {
     const nextProjects = np || projects;
     const previousLocal = await sGet(storageKey);
     const lastNonEmptyProjects = nextProjects.length
@@ -2967,9 +2975,10 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       viewMode: vm !== undefined ? vm : viewMode,
       layoutByUser: lb !== undefined ? lb : layoutByUser,
       workspaceUser: wu !== undefined ? wu : workspaceUser,
+      projectMode: pm !== undefined ? pm : projectMode,
     });
     return true;
-  }, [storageKey, projects, apId, dark, viewMode, layoutByUser, workspaceUser, authUserId, canEdit]);
+  }, [storageKey, projects, apId, dark, viewMode, layoutByUser, workspaceUser, projectMode, authUserId, canEdit]);
 
   const flash = (m, t = "ok") => { setToast({ m, t }); setTimeout(() => setToast(null), 2500); };
   const togDark = async () => { const nd = !dark; setDark(nd); await persist(undefined, undefined, nd); };
@@ -2993,6 +3002,15 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     flash("Admin role required", "err");
     return false;
   };
+
+  useEffect(() => {
+    if (loading) return;
+    persist(undefined, undefined, undefined, undefined, undefined, undefined, projectMode);
+  }, [loading, projectMode, persist]);
+
+  useEffect(() => {
+    setCampaignBankDraft("");
+  }, [proj?.id]);
 
   useEffect(() => {
     if (!proj) return;
@@ -3195,7 +3213,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const modelLabel = id => aiOptions.find(m => m.id === id)?.label || id;
 
   const saveAiModel = async (task, modelId) => {
-    if (!requireAdmin()) return;
+    if (!requireEditor()) return;
     if (!proj) return;
     const byProvider = {
       anthropic: { ...DEFAULT_AI_MODELS.anthropic, ...(proj.settings?.aiModelsByProvider?.anthropic || {}) },
@@ -3210,7 +3228,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   };
 
   const saveAiProvider = async providerId => {
-    if (!requireAdmin()) return;
+    if (!requireEditor()) return;
     if (!proj) return;
     const nextProj = { ...proj, settings: { ...(proj.settings || {}), aiProvider: providerId } };
     await saveProject(nextProj);
@@ -3219,7 +3237,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   };
 
   const saveAppearanceAccent = async accentId => {
-    if (!requireAdmin()) return;
+    if (!requireEditor()) return;
     if (!proj || !ACCENT_PRESETS[accentId]) return;
     const nextProj = {
       ...proj,
@@ -3736,7 +3754,17 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       const existing = proj.marketingItems || [];
       const existingKeys = new Set(existing.map(item => marketingImportKey(normalizeMarketingItem(item, proj.teamUsers || DEFAULT_TEAM_USERS))));
       const nextItems = parsed.filter(item => !existingKeys.has(marketingImportKey(item)));
-      const nextProj = { ...proj, marketingItems: [...existing, ...nextItems] };
+      const nextProj = {
+        ...proj,
+        marketingItems: [...existing, ...nextItems],
+        settings: {
+          ...(proj.settings || {}),
+          marketingCampaignBank: normalizeMarketingCampaignBank([
+            ...(proj.settings?.marketingCampaignBank || []),
+            ...parsed.flatMap(item => item.campaigns || []),
+          ]),
+        },
+      };
       await saveProject(nextProj);
       flash(`Merged ${nextItems.length} new talent assignments · ${parsed.length - nextItems.length} duplicates skipped`);
     } else {
@@ -3840,7 +3868,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       flash("Talent name is required", "err");
       return;
     }
-    const normalizedCampaigns = normalizeMarketingCampaigns(marketingForm.campaign);
+    const selectedCampaign = marketingForm.newCampaign.trim() || marketingForm.campaign.trim();
+    const normalizedCampaigns = normalizeMarketingCampaigns(selectedCampaign);
     const normalizedChannels = normalizeMarketingChannels(marketingForm.channels);
     const title = marketingForm.title.trim() || [talentName, normalizedCampaigns[0] || marketingForm.deliverableType.trim()].filter(Boolean).join(" · ");
     if (marketingForm.status === "rejected" && !marketingForm.rejectedReason.trim()) {
@@ -3869,6 +3898,13 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       marketingItems: exists
         ? (proj.marketingItems || []).map(item => item.id === itemId ? nextItem : item)
         : [nextItem, ...(proj.marketingItems || [])],
+      settings: {
+        ...(proj.settings || {}),
+        marketingCampaignBank: normalizeMarketingCampaignBank([
+          ...(proj.settings?.marketingCampaignBank || []),
+          ...normalizedCampaigns,
+        ]),
+      },
     };
     await saveProject(nextProj);
     setShowMarketingItemModal(false);
@@ -4733,6 +4769,12 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     return (proj.marketingItems || []).map(item => normalizeMarketingItem(item, proj.teamUsers || DEFAULT_TEAM_USERS));
   }, [proj]);
 
+  const marketingCampaignOptions = useMemo(() => {
+    const fromSettings = Array.isArray(proj?.settings?.marketingCampaignBank) ? proj.settings.marketingCampaignBank : [];
+    const fromItems = marketingItems.flatMap(item => item.campaigns || []);
+    return normalizeMarketingCampaignBank([...fromSettings, ...fromItems]);
+  }, [proj?.settings?.marketingCampaignBank, marketingItems]);
+
   const marketingCampaigns = useMemo(() => {
     const counts = {};
     marketingItems.forEach(item => {
@@ -4761,6 +4803,38 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     }
     return marketingOwnerFilter;
   }, [marketingOwnerFilter, workspaceUser]);
+
+  const saveMarketingCampaignBank = async nextBank => {
+    if (!requireEditor()) return;
+    if (!proj) return;
+    const nextProj = {
+      ...proj,
+      settings: {
+        ...(proj.settings || {}),
+        marketingCampaignBank: normalizeMarketingCampaignBank(nextBank),
+      },
+    };
+    await saveProject(nextProj);
+  };
+
+  const addMarketingCampaignBankEntry = async () => {
+    const nextName = campaignBankDraft.trim();
+    if (!nextName) {
+      flash("Campaign name is required", "err");
+      return;
+    }
+    const nextBank = normalizeMarketingCampaignBank([...(proj?.settings?.marketingCampaignBank || []), nextName]);
+    await saveMarketingCampaignBank(nextBank);
+    setCampaignBankDraft("");
+    flash(`Added "${nextName}" to campaign bank`);
+  };
+
+  const removeMarketingCampaignBankEntry = async (campaignName) => {
+    if (!window.confirm(`Remove "${campaignName}" from the campaign bank? Existing assignments will keep their campaign labels.`)) return;
+    const nextBank = (proj?.settings?.marketingCampaignBank || []).filter(item => item !== campaignName);
+    await saveMarketingCampaignBank(nextBank);
+    flash(`Removed "${campaignName}" from campaign bank`);
+  };
 
   const filteredMarketingItems = useMemo(() => {
     let list = marketingItems;
@@ -7936,6 +8010,45 @@ Requirements:
                   </div>
                 </div>
 
+                {isMarketingProject && (
+                  <div style={{ ...cS, boxShadow: "none", padding: "14px 16px", background: C.sa }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>Campaign Bank</div>
+                    <div style={{ fontSize: 11, color: C.tt, lineHeight: 1.5, marginBottom: 10 }}>
+                      Keep a clean list of campaign names so assignments use consistent dropdown options instead of one-off text.
+                    </div>
+                    <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+                      <input
+                        value={campaignBankDraft}
+                        onChange={e => setCampaignBankDraft(e.target.value)}
+                        placeholder="Add campaign name"
+                        style={{ ...iS, flex: 1 }}
+                      />
+                      <button onClick={addMarketingCampaignBankEntry} disabled={!canEdit} style={{ ...actionBtn(true, "accent"), ...lockStyle(!canEdit) }}>
+                        Add
+                      </button>
+                    </div>
+                    {marketingCampaignOptions.length ? (
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        {marketingCampaignOptions.map(campaign => (
+                          <span key={campaign} style={{ ...mkP(true, C.ac, C.al), cursor: "default", display: "inline-flex", alignItems: "center", gap: 6 }}>
+                            {campaign}
+                            <button
+                              type="button"
+                              disabled={!canEdit}
+                              onClick={() => removeMarketingCampaignBankEntry(campaign)}
+                              style={{ border: "none", background: "transparent", color: C.ac, cursor: canEdit ? "pointer" : "not-allowed", fontSize: 11, padding: 0, lineHeight: 1, ...lockStyle(!canEdit) }}
+                            >
+                              ×
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <div style={{ fontSize: 12, color: C.ts }}>No campaigns saved yet.</div>
+                    )}
+                  </div>
+                )}
+
                 <div style={{ ...cS, boxShadow: "none", padding: "14px 16px", background: C.sa }}>
                   <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>AI Settings</div>
                   <div style={{ display: "grid", gap: 10 }}>
@@ -8438,7 +8551,13 @@ Requirements:
                   </select>
                 </label>
 
-                <input value={marketingForm.campaign} onChange={e => setMarketingForm({ ...marketingForm, campaign: e.target.value })} placeholder="Campaign*" style={{ ...iS, width: "100%" }} />
+                <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 4 }}>
+                  <span>Campaign</span>
+                  <select value={marketingForm.campaign} onChange={e => setMarketingForm({ ...marketingForm, campaign: e.target.value, newCampaign: "" })} style={{ ...iS, width: "100%" }}>
+                    <option value="">Select campaign</option>
+                    {marketingCampaignOptions.map(campaign => <option key={campaign} value={campaign}>{campaign}</option>)}
+                  </select>
+                </label>
                 <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 4 }}>
                   <span>Owner</span>
                   <select value={marketingForm.owner} onChange={e => setMarketingForm({ ...marketingForm, owner: e.target.value })} style={{ ...iS, width: "100%" }}>
@@ -8446,6 +8565,8 @@ Requirements:
                     {(proj?.teamUsers || DEFAULT_TEAM_USERS).map(u => <option key={u} value={u}>{u}</option>)}
                   </select>
                 </label>
+
+                <input value={marketingForm.newCampaign} onChange={e => setMarketingForm({ ...marketingForm, newCampaign: e.target.value })} placeholder="Or create a new campaign" style={{ ...iS, width: "100%" }} />
 
                 <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 4 }}>
                   <span>Traffic type</span>
