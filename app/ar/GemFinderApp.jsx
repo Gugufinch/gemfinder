@@ -49,9 +49,9 @@ function emptyMarketingForm() {
     talentName: "",
     talentType: "Internal Artist",
     title: "",
-    campaign: "",
+    campaigns: [],
     trafficType: "Organic",
-    channel: "Instagram",
+    channels: ["Instagram"],
     deliverableType: "",
     status: "interested",
     owner: "",
@@ -319,6 +319,184 @@ function normalizeMarketingStatus(status) {
   const normalized = String(status || "").toLowerCase();
   return VALID_MARKETING_STATUS_IDS.has(normalized) ? normalized : "interested";
 }
+function parseCSVGrid(text) {
+  const rows = [];
+  let row = [];
+  let value = "";
+  let inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    const next = text[i + 1];
+    if (ch === '"') {
+      if (inQuotes && next === '"') {
+        value += '"';
+        i += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+    if (ch === "," && !inQuotes) {
+      row.push(value);
+      value = "";
+      continue;
+    }
+    if ((ch === "\n" || ch === "\r") && !inQuotes) {
+      if (ch === "\r" && next === "\n") i += 1;
+      row.push(value);
+      rows.push(row);
+      row = [];
+      value = "";
+      continue;
+    }
+    value += ch;
+  }
+  if (value.length || row.length) {
+    row.push(value);
+    rows.push(row);
+  }
+  return rows
+    .map(cols => cols.map(col => String(col || "").trim()))
+    .filter(cols => cols.some(col => col));
+}
+function splitMultiValueField(value) {
+  if (Array.isArray(value)) return value.map(item => String(item || "").trim()).filter(Boolean);
+  const raw = String(value || "").trim();
+  if (!raw) return [];
+  return raw
+    .split(/\s*(?:\n|;|\|)\s*|\s*,\s*/g)
+    .map(item => item.trim())
+    .filter(Boolean);
+}
+function uniqStrings(values = []) {
+  return Array.from(new Set(values.filter(Boolean)));
+}
+function normalizeMarketingChannels(value) {
+  const aliasMap = {
+    instagram: "Instagram",
+    ig: "Instagram",
+    tiktok: "TikTok",
+    tik_tok: "TikTok",
+    youtube: "YouTube",
+    yt: "YouTube",
+    meta: "Meta",
+    facebook: "Meta",
+    fb: "Meta",
+    x: "X",
+    twitter: "X",
+    email: "Email",
+    mail: "Email",
+    other: "Other",
+  };
+  return uniqStrings(
+    splitMultiValueField(value)
+      .map(item => {
+        const normalized = String(item || "").trim();
+        if (!normalized) return "";
+        const key = normalized.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+        return aliasMap[key] || MARKETING_CHANNELS.find(channel => channel.toLowerCase() === normalized.toLowerCase()) || titleCaseWords(normalized);
+      })
+      .filter(channel => MARKETING_CHANNELS.includes(channel))
+  );
+}
+function normalizeMarketingCampaigns(value) {
+  return uniqStrings(splitMultiValueField(value).map(item => item.replace(/\s+/g, " ").trim()));
+}
+function marketingChannelsLabel(item) {
+  const channels = Array.isArray(item?.channels) ? item.channels : [];
+  return channels.length ? channels.join(", ") : "No channels";
+}
+function marketingCampaignsLabel(item) {
+  const campaigns = Array.isArray(item?.campaigns) ? item.campaigns : [];
+  return campaigns.length ? campaigns.join(", ") : "No campaign";
+}
+function marketingShowsDue(item) {
+  return item?.status !== "complete" && item?.status !== "rejected";
+}
+function marketingDueLabel(item, now = new Date()) {
+  if (!item?.dueDate || !marketingShowsDue(item)) return "";
+  const today = operationalTodayISOFor(now);
+  if (item.dueDate < today) return `Due ${sD(item.dueDate)}`;
+  if (item.dueDate === today) return "Due today";
+  return `Due ${sD(item.dueDate)}`;
+}
+function marketingImportKey(item) {
+  const campaigns = (item.campaigns || []).map(canonicalArtistName).sort().join("|");
+  const channels = (item.channels || []).map(channel => channel.toLowerCase()).sort().join("|");
+  return [
+    canonicalArtistName(item.talentName || ""),
+    canonicalArtistName(item.title || ""),
+    campaigns,
+    channels,
+    String(item.deliverableType || "").toLowerCase(),
+    String(item.email || "").toLowerCase(),
+  ].join("::");
+}
+function csvRowValue(row, headers, aliases = []) {
+  for (const alias of aliases) {
+    const match = headers.find(key => key === alias || key.replace(/[^a-z0-9]/g, "") === alias.replace(/[^a-z0-9]/g, ""));
+    if (match && row[match]) return row[match];
+  }
+  return "";
+}
+function parseMarketingCSV(text, teamUsers = DEFAULT_TEAM_USERS) {
+  const rows = parseCSVGrid(text);
+  if (rows.length < 2) return [];
+  const headers = rows[0].map(header => String(header || "").trim().toLowerCase());
+  const records = [];
+  const seen = new Set();
+  const normalizeHeaderRow = cols => {
+    const row = {};
+    headers.forEach((header, idx) => {
+      row[header] = String(cols[idx] || "").trim();
+    });
+    return row;
+  };
+  for (let i = 1; i < rows.length; i++) {
+    const row = normalizeHeaderRow(rows[i]);
+    const talentName = csvRowValue(row, headers, ["talentname", "talent_name", "artistname", "artist_name", "artist", "creatorname", "creator_name", "name"]).trim();
+    if (!talentName) continue;
+    const email = csvRowValue(row, headers, ["contactemail", "contact_email", "primaryemail", "primary_email", "email"]).trim();
+    const instagramValue = csvRowValue(row, headers, ["instagramhandle", "instagram_handle", "instagramurl", "instagram_url", "instagram", "ig"]);
+    const tiktokValue = csvRowValue(row, headers, ["tiktokhandle", "tiktok_handle", "tiktokurl", "tiktok_url", "tiktok"]);
+    const spotifyValue = csvRowValue(row, headers, ["spotifyurl", "spotify_url", "spotifyprofile", "spotify_profile", "spotify"]);
+    const campaigns = normalizeMarketingCampaigns(
+      csvRowValue(row, headers, ["campaigns", "campaign", "campaignname", "campaign_name"])
+    );
+    const channels = normalizeMarketingChannels(
+      csvRowValue(row, headers, ["channels", "channel", "platforms", "platform"])
+    );
+    const trafficValue = csvRowValue(row, headers, ["traffictype", "traffic_type", "traffic", "paidorganic", "paid_organic"]);
+    const statusValue = csvRowValue(row, headers, ["status", "campaignstatus", "campaign_status", "artiststatus", "artist_status"]);
+    const talentTypeValue = csvRowValue(row, headers, ["talenttype", "talent_type", "artisttype", "artist_type", "type"]);
+    const item = normalizeMarketingItem({
+      talentName,
+      talentType: MARKETING_TALENT_TYPES.find(type => type.toLowerCase() === String(talentTypeValue || "").toLowerCase()) || "Internal Artist",
+      title: csvRowValue(row, headers, ["title", "deliverabletitle", "deliverable_title", "contenttitle", "content_title", "deliverable", "assettitle", "asset_title"]).trim(),
+      campaigns,
+      trafficType: MARKETING_TRAFFIC_TYPES.find(type => type.toLowerCase() === String(trafficValue || "").toLowerCase()) || "Organic",
+      channels,
+      deliverableType: csvRowValue(row, headers, ["deliverabletype", "deliverable_type", "contenttype", "content_type", "assettype", "asset_type", "format"]).trim(),
+      status: normalizeMarketingStatus(statusValue),
+      owner: teamUsers.includes(csvRowValue(row, headers, ["owner", "internaluser", "internal_user", "assignee"]).trim())
+        ? csvRowValue(row, headers, ["owner", "internaluser", "internal_user", "assignee"]).trim()
+        : "",
+      dueDate: csvRowValue(row, headers, ["duedate", "due_date", "due", "deadline"]).trim(),
+      email: email.includes("@") ? email : "",
+      instagramHandle: normalizeSocialHandle(instagramValue),
+      tiktokHandle: normalizeSocialHandle(tiktokValue),
+      spotifyUrl: /spotify\.com/i.test(spotifyValue) ? spotifyValue.trim() : "",
+      briefUrl: csvRowValue(row, headers, ["briefurl", "brief_url", "brieflink", "brief_link"]).trim(),
+      contentUrl: csvRowValue(row, headers, ["contenturl", "content_url", "contentlink", "content_link", "asseturl", "asset_url", "posturl", "post_url", "videourl", "video_url", "photourl", "photo_url"]).trim(),
+      notes: csvRowValue(row, headers, ["notes", "note", "description", "briefnotes", "brief_notes"]).trim(),
+    }, teamUsers);
+    const key = marketingImportKey(item);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    records.push(item);
+  }
+  return records;
+}
 function normalizeMarketingItem(item, teamUsers = DEFAULT_TEAM_USERS) {
   const normalizedStatus = normalizeMarketingStatus(item?.status);
   const talentName = String(
@@ -329,16 +507,21 @@ function normalizeMarketingItem(item, teamUsers = DEFAULT_TEAM_USERS) {
     item?.title ||
     ""
   ).trim();
-  const title = String(item?.title || item?.contentTitle || "").trim();
+  const deliverableType = String(item?.deliverableType || "").trim();
+  const channels = normalizeMarketingChannels(item?.channels?.length ? item.channels : item?.channel || "");
+  const campaigns = normalizeMarketingCampaigns(item?.campaigns?.length ? item.campaigns : item?.campaign || "");
+  const title = String(item?.title || item?.contentTitle || "").trim() || [talentName, campaigns[0] || deliverableType].filter(Boolean).join(" · ");
   return {
     id: String(item?.id || `mkt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`),
     talentName,
     talentType: MARKETING_TALENT_TYPES.includes(String(item?.talentType || "")) ? String(item.talentType) : "Internal Artist",
     title,
-    campaign: String(item?.campaign || "").trim(),
+    campaigns,
+    campaign: campaigns[0] || "",
     trafficType: MARKETING_TRAFFIC_TYPES.includes(String(item?.trafficType || "")) ? String(item.trafficType) : "Organic",
-    channel: MARKETING_CHANNELS.includes(String(item?.channel || "")) ? String(item.channel) : "Instagram",
-    deliverableType: String(item?.deliverableType || "").trim(),
+    channels,
+    channel: channels[0] || "",
+    deliverableType,
     status: normalizedStatus,
     owner: teamUsers.includes(String(item?.owner || "")) ? String(item.owner) : String(item?.owner || ""),
     dueDate: String(item?.dueDate || ""),
@@ -430,7 +613,7 @@ function summarizeMarketingItems(items = [], today = todayISO()) {
     const normalized = normalizeMarketingItem(item);
     summary[normalized.status] = (summary[normalized.status] || 0) + 1;
     if (normalized.status !== "complete" && normalized.status !== "rejected") summary.active += 1;
-    if (normalized.campaign) campaigns.add(normalized.campaign);
+    (normalized.campaigns || []).forEach(campaign => campaigns.add(campaign));
     if (normalized.dueDate && normalized.status !== "complete" && normalized.status !== "rejected") {
       if (normalized.dueDate < today) summary.overdue += 1;
       if (normalized.dueDate >= today && normalized.dueDate <= addDaysISO(today, 7)) summary.dueSoon += 1;
@@ -1896,13 +2079,14 @@ async function apiRelabelArtistInbox(payload) {
 }
 
 function parseCSV(text) {
-  const lines = text.split(/\r?\n/).filter(l => l.trim());
-  if (lines.length < 2) return [];
-  const headers = lines[0].split(",").map(h => h.trim());
+  const grid = parseCSVGrid(text);
+  if (grid.length < 2) return [];
+  const lines = grid.map(cols => cols.map(col => String(col || "").trim()));
+  const headers = lines[0];
   const results = [];
   const seen = new Set();
   for (let i = 1; i < lines.length; i++) {
-    const vals = lines[i].split(",").map(v => v.trim());
+    const vals = lines[i];
     const row = {};
     headers.forEach((h, j) => { row[h] = vals[j] || ""; });
     const name = row["Artist"] || "";
@@ -1941,10 +2125,9 @@ function normalizeSocialHandle(value) {
 }
 
 function parseArtistNameCSV(text) {
-  const lines = text.split(/\r?\n/).filter(l => l.trim());
+  const lines = parseCSVGrid(text);
   if (!lines.length) return [];
-  const splitLine = line => line.split(",").map(v => v.trim().replace(/^"|"$/g, ""));
-  const firstRow = splitLine(lines[0]);
+  const firstRow = lines[0];
   const headerCandidates = ["artist", "artist name", "name", "artist_name", "artistname"];
   const headerIndex = firstRow.findIndex(h => headerCandidates.includes(h.toLowerCase()));
   const startIndex = headerIndex >= 0 ? 1 : 0;
@@ -1952,7 +2135,7 @@ function parseArtistNameCSV(text) {
   const seen = new Set();
   const names = [];
   for (let i = startIndex; i < lines.length; i++) {
-    const cols = splitLine(lines[i]);
+    const cols = lines[i];
     const name = cols[nameIndex] || "";
     const canon = canonicalArtistName(name);
     if (!canon || seen.has(canon)) continue;
@@ -2045,9 +2228,9 @@ function exportMarketingItems(proj) {
     "Talent Name",
     "Talent Type",
     "Title",
-    "Campaign",
+    "Campaigns",
     "Traffic Type",
-    "Channel",
+    "Channels",
     "Deliverable Type",
     "Status",
     "Rejected Reason",
@@ -2068,9 +2251,9 @@ function exportMarketingItems(proj) {
       normalized.talentName,
       normalized.talentType,
       normalized.title,
-      normalized.campaign,
+      (normalized.campaigns || []).join(" | "),
       normalized.trafficType,
-      normalized.channel,
+      (normalized.channels || []).join(" | "),
       normalized.deliverableType,
       MM[normalized.status]?.label || normalized.status,
       normalized.rejectedReason,
@@ -2452,9 +2635,9 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         talentName: item.talentName || item.title || "",
         talentType: item.talentType || "Internal Artist",
         title: item.title || "",
-        campaign: item.campaign || "",
+        campaigns: Array.isArray(item.campaigns) ? item.campaigns : normalizeMarketingCampaigns(item.campaign || ""),
         trafficType: item.trafficType || "Organic",
-        channel: item.channel || "Instagram",
+        channels: Array.isArray(item.channels) && item.channels.length ? item.channels : normalizeMarketingChannels(item.channel || ""),
         deliverableType: item.deliverableType || "",
         status: item.status || "interested",
         owner: item.owner || "",
@@ -3493,16 +3676,27 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     const f = e.target.files?.[0];
     if (!f || !proj) return;
     const t = await f.text();
-    const p = parseCSV(t);
-    if (!p.length) { flash("No valid artists", "err"); return; }
-    const ex = new Set(proj.artists.map(a => canonicalArtistName(a.n)));
-    const nw = p.filter(a => !ex.has(canonicalArtistName(a.n)));
-    const mg = [...proj.artists, ...nw];
-    const nl = { ...proj.pipeline };
-    nw.forEach(a => { if (a.s && !nl[a.n]) nl[a.n] = { stage: "sent", date: new Date().toISOString() }; });
-    const nextProj = { ...proj, artists: mg, pipeline: nl };
-    await saveProject(nextProj);
-    flash(`Merged ${nw.length} new artists · ${p.length - nw.length} duplicates skipped`);
+    if (isMarketingProject) {
+      const parsed = parseMarketingCSV(t, proj.teamUsers || DEFAULT_TEAM_USERS);
+      if (!parsed.length) { flash("No valid talent assignments found in CSV", "err"); e.target.value = ""; return; }
+      const existing = proj.marketingItems || [];
+      const existingKeys = new Set(existing.map(item => marketingImportKey(normalizeMarketingItem(item, proj.teamUsers || DEFAULT_TEAM_USERS))));
+      const nextItems = parsed.filter(item => !existingKeys.has(marketingImportKey(item)));
+      const nextProj = { ...proj, marketingItems: [...existing, ...nextItems] };
+      await saveProject(nextProj);
+      flash(`Merged ${nextItems.length} new talent assignments · ${parsed.length - nextItems.length} duplicates skipped`);
+    } else {
+      const p = parseCSV(t);
+      if (!p.length) { flash("No valid artists", "err"); return; }
+      const ex = new Set(proj.artists.map(a => canonicalArtistName(a.n)));
+      const nw = p.filter(a => !ex.has(canonicalArtistName(a.n)));
+      const mg = [...proj.artists, ...nw];
+      const nl = { ...proj.pipeline };
+      nw.forEach(a => { if (a.s && !nl[a.n]) nl[a.n] = { stage: "sent", date: new Date().toISOString() }; });
+      const nextProj = { ...proj, artists: mg, pipeline: nl };
+      await saveProject(nextProj);
+      flash(`Merged ${nw.length} new artists · ${p.length - nw.length} duplicates skipped`);
+    }
     e.target.value = "";
   };
 
@@ -3592,7 +3786,9 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       flash("Talent name is required", "err");
       return;
     }
-    const title = marketingForm.title.trim() || [talentName, marketingForm.campaign.trim() || marketingForm.deliverableType.trim()].filter(Boolean).join(" · ");
+    const normalizedCampaigns = normalizeMarketingCampaigns(marketingForm.campaigns);
+    const normalizedChannels = normalizeMarketingChannels(marketingForm.channels);
+    const title = marketingForm.title.trim() || [talentName, normalizedCampaigns[0] || marketingForm.deliverableType.trim()].filter(Boolean).join(" · ");
     if (marketingForm.status === "rejected" && !marketingForm.rejectedReason.trim()) {
       flash("Please add a rejection reason", "err");
       return;
@@ -3602,6 +3798,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       ...marketingForm,
       id: itemId,
       talentName,
+      campaigns: normalizedCampaigns,
+      channels: normalizedChannels,
       title,
       updatedAt: new Date().toISOString(),
       createdAt: marketingForm.id
@@ -4481,8 +4679,10 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const marketingCampaigns = useMemo(() => {
     const counts = {};
     marketingItems.forEach(item => {
-      const key = item.campaign || "No campaign";
-      counts[key] = (counts[key] || 0) + 1;
+      const buckets = item.campaigns?.length ? item.campaigns : ["No campaign"];
+      buckets.forEach(key => {
+        counts[key] = (counts[key] || 0) + 1;
+      });
     });
     return Object.entries(counts).sort((a, b) => b[1] - a[1]);
   }, [marketingItems]);
@@ -4510,14 +4710,17 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     if (search.trim()) {
       const q = search.trim().toLowerCase();
       list = list.filter(item =>
-        `${item.talentName} ${item.talentType} ${item.title} ${item.campaign} ${item.trafficType} ${item.channel} ${item.deliverableType} ${item.owner} ${item.email} ${item.instagramHandle} ${item.tiktokHandle} ${item.spotifyUrl} ${item.notes} ${item.rejectedReason || ""}`.toLowerCase().includes(q)
+        `${item.talentName} ${item.talentType} ${item.title} ${(item.campaigns || []).join(" ")} ${item.trafficType} ${(item.channels || []).join(" ")} ${item.deliverableType} ${item.owner} ${item.email} ${item.instagramHandle} ${item.tiktokHandle} ${item.spotifyUrl} ${item.notes} ${item.rejectedReason || ""}`.toLowerCase().includes(q)
       );
     }
     if (marketingStatusFilter !== "all") {
       list = list.filter(item => matchesMarketingStatusFilter(item.status, marketingStatusFilter));
     }
     if (marketingCampaignFilter !== "all") {
-      list = list.filter(item => (item.campaign || "No campaign") === marketingCampaignFilter);
+      list = list.filter(item => {
+        const campaigns = item.campaigns?.length ? item.campaigns : ["No campaign"];
+        return campaigns.includes(marketingCampaignFilter);
+      });
     }
     if (marketingTrafficFilter !== "all") {
       list = list.filter(item => item.trafficType === marketingTrafficFilter);
@@ -6548,6 +6751,10 @@ Requirements:
                   {projectMode === "work" && !isReadOnly && (isMarketingProject ? (
                     <>
                       <button onClick={() => openMarketingItemModal(null)} style={{ ...actionBtn(true, "good"), ...lockStyle(isReadOnly) }}>+ Talent Assignment</button>
+                      <label style={{ ...actionBtn(false, "neutral"), ...lockStyle(isReadOnly) }}>
+                        Import Talent CSV
+                        <input type="file" accept=".csv" ref={fr} onChange={importCSV} disabled={isReadOnly} />
+                      </label>
                     </>
                   ) : (
                     <>
@@ -6804,7 +7011,7 @@ Requirements:
                           <span style={{ fontSize: 13, fontWeight: 700, color: C.tx }}>{marketingItemPrimaryLabel(item)}</span>
                           <span style={{ ...mkP(true, marketingStatusTone(item.status, C).tone, marketingStatusTone(item.status, C).bg), cursor: "pointer" }}>{MM[item.status]?.label}</span>
                         </div>
-                        <div style={{ fontSize: 11, color: C.ts }}>{item.talentType} · {item.campaign || "No campaign"} · {item.trafficType} · {item.channel}</div>
+                        <div style={{ fontSize: 11, color: C.ts }}>{item.talentType} · {marketingCampaignsLabel(item)} · {item.trafficType} · {marketingChannelsLabel(item)}</div>
                         {marketingItemTitleLabel(item) && <div style={{ fontSize: 11, color: C.tt }}>{marketingItemTitleLabel(item)}</div>}
                         <div style={{ fontSize: 11, color: item.dueDate && item.dueDate < operationalTodayISOFor(clockNow) ? C.rd : C.tt }}>{item.priorityLabel}</div>
                       </button>
@@ -7036,11 +7243,11 @@ Requirements:
                           <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 12, background: C.sa, color: item.owner ? C.ts : C.rd, border: `1px solid ${C.bd}` }}>{item.owner || "Unassigned"}</span>
                         </div>
                         <div style={{ fontSize: 11, color: C.ts, marginTop: 3, display: "flex", gap: 10, flexWrap: "wrap" }}>
-                          <span>{item.campaign || "No campaign"}</span>
+                          <span>{marketingCampaignsLabel(item)}</span>
                           <span>{item.trafficType}</span>
-                          <span>{item.channel}</span>
+                          <span>{marketingChannelsLabel(item)}</span>
                           {item.deliverableType && <span>{item.deliverableType}</span>}
-                          {item.dueDate && <span style={{ color: item.dueDate < operationalTodayISOFor(clockNow) ? C.rd : C.ab }}>Due {sD(item.dueDate)}</span>}
+                          {marketingDueLabel(item, clockNow) && <span style={{ color: item.dueDate < operationalTodayISOFor(clockNow) ? C.rd : C.ab }}>{marketingDueLabel(item, clockNow)}</span>}
                         </div>
                         {titleLabel && <div style={{ fontSize: 11, color: C.tt, marginTop: 5 }}>{titleLabel}</div>}
                         {item.status === "rejected" && item.rejectedReason && (
@@ -7073,7 +7280,7 @@ Requirements:
                         {col.map(item => (
                           <button key={item.id} onClick={() => openMarketingItemModal(item)} style={{ ...cS, padding: "12px 14px", textAlign: "left", cursor: "pointer", fontFamily: ft }}>
                             <div style={{ fontSize: 13, fontWeight: 700, color: C.tx, marginBottom: 4 }}>{marketingItemPrimaryLabel(item)}</div>
-                            <div style={{ fontSize: 11, color: C.ts }}>{item.talentType} · {item.campaign || "No campaign"} · {item.trafficType}</div>
+                            <div style={{ fontSize: 11, color: C.ts }}>{item.talentType} · {marketingCampaignsLabel(item)} · {item.trafficType} · {marketingChannelsLabel(item)}</div>
                             {marketingItemTitleLabel(item) && <div style={{ fontSize: 11, color: C.tt, marginTop: 5 }}>{marketingItemTitleLabel(item)}</div>}
                             {item.status === "rejected" && item.rejectedReason && (
                               <div style={{ fontSize: 10, color: C.rd, marginTop: 6, lineHeight: 1.5 }}>Rejected: {item.rejectedReason}</div>
@@ -7094,7 +7301,7 @@ Requirements:
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                     <thead style={{ background: C.sa }}>
                       <tr>
-                        {["Talent", "Type", "Title", "Campaign", "Traffic", "Channel", "Deliverable", "Owner", "Status", "Rejected Reason", "Due", "Links", "Updated"].map(h => (
+                        {["Talent", "Type", "Title", "Campaigns", "Traffic", "Channels", "Deliverable", "Owner", "Status", "Rejected Reason", "Due", "Links", "Updated"].map(h => (
                           <th key={h} style={{ textAlign: "left", padding: "10px 12px", color: C.ts, fontSize: 11, borderBottom: `1px solid ${C.bd}` }}>{h}</th>
                         ))}
                       </tr>
@@ -7107,14 +7314,14 @@ Requirements:
                             <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, fontWeight: 700 }}>{marketingItemPrimaryLabel(item)}</td>
                             <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>{item.talentType}</td>
                             <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>{marketingItemTitleLabel(item) || "—"}</td>
-                            <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>{item.campaign || "No campaign"}</td>
+                            <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>{marketingCampaignsLabel(item)}</td>
                             <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>{item.trafficType}</td>
-                            <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>{item.channel}</td>
+                            <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>{marketingChannelsLabel(item)}</td>
                             <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>{item.deliverableType || "—"}</td>
                             <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: item.owner ? C.tx : C.rd }}>{item.owner || "Unassigned"}</td>
                             <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}` }}><span style={{ ...mkP(true, tone.tone, tone.bg), cursor: "pointer" }}>{MM[item.status]?.label}</span></td>
                             <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: item.rejectedReason ? C.rd : C.tt }}>{item.rejectedReason || "—"}</td>
-                            <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>{item.dueDate ? sD(item.dueDate) : "—"}</td>
+                            <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>{marketingShowsDue(item) && item.dueDate ? sD(item.dueDate) : "—"}</td>
                             <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>
                               {item.briefUrl && <a href={item.briefUrl} target="_blank" rel="noopener" onClick={e => e.stopPropagation()} style={{ marginRight: 8 }}>Brief</a>}
                               {item.contentUrl && <a href={item.contentUrl} target="_blank" rel="noopener" onClick={e => e.stopPropagation()}>Content</a>}
@@ -8169,7 +8376,7 @@ Requirements:
                 </label>
                 <input value={marketingForm.deliverableType} onChange={e => setMarketingForm({ ...marketingForm, deliverableType: e.target.value })} placeholder="Deliverable type" style={{ ...iS, width: "100%" }} />
 
-                <input value={marketingForm.campaign} onChange={e => setMarketingForm({ ...marketingForm, campaign: e.target.value })} placeholder="Campaign name" style={{ ...iS, width: "100%" }} />
+                <input value={(marketingForm.campaigns || []).join(", ")} onChange={e => setMarketingForm({ ...marketingForm, campaigns: normalizeMarketingCampaigns(e.target.value) })} placeholder="Campaigns (comma or semicolon separated)" style={{ ...iS, width: "100%" }} />
                 <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 4 }}>
                   <span>Owner</span>
                   <select value={marketingForm.owner} onChange={e => setMarketingForm({ ...marketingForm, owner: e.target.value })} style={{ ...iS, width: "100%" }}>
@@ -8184,12 +8391,29 @@ Requirements:
                     {MARKETING_TRAFFIC_TYPES.map(type => <option key={type} value={type}>{type}</option>)}
                   </select>
                 </label>
-                <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 4 }}>
-                  <span>Channel</span>
-                  <select value={marketingForm.channel} onChange={e => setMarketingForm({ ...marketingForm, channel: e.target.value })} style={{ ...iS, width: "100%" }}>
-                    {MARKETING_CHANNELS.map(type => <option key={type} value={type}>{type}</option>)}
-                  </select>
-                </label>
+                <div style={{ fontSize: 12, color: C.ts, display: "grid", gap: 6 }}>
+                  <span>Channels</span>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    {MARKETING_CHANNELS.map(type => {
+                      const active = (marketingForm.channels || []).includes(type);
+                      return (
+                        <button
+                          key={type}
+                          type="button"
+                          onClick={() => setMarketingForm({
+                            ...marketingForm,
+                            channels: active
+                              ? (marketingForm.channels || []).filter(channel => channel !== type)
+                              : [...(marketingForm.channels || []), type],
+                          })}
+                          style={mkP(active, C.ac, C.al)}
+                        >
+                          {type}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
 
                 <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 4 }}>
                   <span>Status</span>
