@@ -130,10 +130,11 @@ function artistProfileUrl(projectId: string, artistName: string): string {
   return `${base}/ar?${params.toString()}`;
 }
 
-function marketingProjectUrl(projectId: string): string {
+function marketingProjectUrl(projectId: string, assignmentId = ''): string {
   const base = appBaseUrl();
   if (!base) return '';
   const params = new URLSearchParams({ project: projectId });
+  if (assignmentId) params.set('assignment', assignmentId);
   return `${base}/ar?${params.toString()}`;
 }
 
@@ -222,7 +223,7 @@ function extractMarketingTransitions(previousProjects: unknown[], nextProjects: 
         owner: String(nextItem?.owner || 'Unassigned'),
         previousStatus,
         nextStatus,
-        projectUrl: marketingProjectUrl(projectId),
+        projectUrl: marketingProjectUrl(projectId, String(nextItem?.id || itemKey)),
         briefUrl: String(nextItem?.briefUrl || '').trim(),
         contentUrl: String(nextItem?.contentUrl || '').trim(),
       });
@@ -300,7 +301,7 @@ function buildMarketingSlackPayload(transition: MarketingTransition, actorEmail:
   if (transition.projectUrl) {
     accessoryButtons.push({
       type: 'button',
-      text: { type: 'plain_text', text: 'Open project' },
+      text: { type: 'plain_text', text: 'Open assignment' },
       url: transition.projectUrl,
     });
   }
@@ -353,8 +354,8 @@ function buildMarketingSlackPayload(transition: MarketingTransition, actorEmail:
           {
             type: 'mrkdwn',
             text: transition.projectUrl
-              ? `<${transition.projectUrl}|Open ${transition.projectName} in GemFinder>`
-              : 'GemFinder project link unavailable',
+              ? `<${transition.projectUrl}|Open this assignment in GemFinder>`
+              : 'GemFinder assignment link unavailable',
           },
         ],
       },

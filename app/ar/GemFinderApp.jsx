@@ -2266,7 +2266,7 @@ function artistProfilePath(projectId, artistName, tab = "overview") {
   return `/ar?${params.toString()}`;
 }
 
-function updateArtistProfileUrl(projectId = "", artistName = "", tab = "") {
+function updateWorkspaceUrl(projectId = "", artistName = "", tab = "", assignmentId = "") {
   if (typeof window === "undefined") return;
   const url = new URL(window.location.href);
   if (projectId) url.searchParams.set("project", String(projectId));
@@ -2275,6 +2275,8 @@ function updateArtistProfileUrl(projectId = "", artistName = "", tab = "") {
   else url.searchParams.delete("artist");
   if (tab) url.searchParams.set("tab", String(tab));
   else url.searchParams.delete("tab");
+  if (assignmentId) url.searchParams.set("assignment", String(assignmentId));
+  else url.searchParams.delete("assignment");
   window.history.replaceState({}, "", `${url.pathname}${url.search || ""}${url.hash || ""}`);
 }
 
@@ -2392,6 +2394,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const rosterRef = useRef(null);
   const workSurfaceRef = useRef(null);
   const handledArtistLinkRef = useRef("");
+  const handledMarketingLinkRef = useRef("");
 
   const [search, setSearch] = useState("");
   const [gf, setGf] = useState("All");
@@ -2730,6 +2733,10 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     note: "",
   });
   const resetMarketingForm = () => setMarketingForm(emptyMarketingForm());
+  const closeMarketingItemModal = () => {
+    setShowMarketingItemModal(false);
+    resetMarketingForm();
+  };
   const openMarketingItemModal = item => {
     if (item) {
       setMarketingForm({
@@ -2970,19 +2977,45 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   }, [loading, apId, proj?.id, projects.length]);
 
   useEffect(() => {
+    if (typeof window === "undefined" || loading) return;
+    const url = new URL(window.location.href);
+    const projectId = String(url.searchParams.get("project") || "").trim();
+    const assignmentId = String(url.searchParams.get("assignment") || "").trim();
+    if (!projectId || !assignmentId) return;
+
+    const linkKey = `${projectId}|${assignmentId}`;
+    if (handledMarketingLinkRef.current === linkKey) return;
+
+    if (apId !== projectId) {
+      setApId(projectId);
+      setScreen("project");
+      return;
+    }
+    if (!proj || proj.id !== projectId || normalizeProjectType(proj.type) !== "marketing") return;
+
+    const targetAssignment = (proj.marketingItems || []).find(item => String(item?.id || "") === assignmentId);
+    handledMarketingLinkRef.current = linkKey;
+    if (!targetAssignment) return;
+
+    setProjectMode("work");
+    openMarketingItemModal(targetAssignment);
+    setScreen("project");
+  }, [loading, apId, proj?.id, proj?.type, projects.length]);
+
+  useEffect(() => {
     if (loading) return;
     if (screen === "detail" && proj?.id && selA?.n) {
-      updateArtistProfileUrl(proj.id, selA.n, DETAIL_TAB_IDS.has(detailTab) ? detailTab : "overview");
+      updateWorkspaceUrl(proj.id, selA.n, DETAIL_TAB_IDS.has(detailTab) ? detailTab : "overview", "");
       return;
     }
     if (screen === "project" && proj?.id) {
-      updateArtistProfileUrl(proj.id, "", "");
+      updateWorkspaceUrl(proj.id, "", "", isMarketingProject && showMarketingItemModal && marketingForm.id ? marketingForm.id : "");
       return;
     }
     if (screen === "hub") {
-      updateArtistProfileUrl("", "", "");
+      updateWorkspaceUrl("", "", "", "");
     }
-  }, [loading, screen, proj?.id, selA?.n, detailTab]);
+  }, [loading, screen, proj?.id, selA?.n, detailTab, isMarketingProject, showMarketingItemModal, marketingForm.id]);
 
   useEffect(() => {
     if (!proj) return;
@@ -3987,8 +4020,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       },
     };
     await saveProject(nextProj);
-    setShowMarketingItemModal(false);
-    resetMarketingForm();
+    closeMarketingItemModal();
     flash(exists ? `Updated ${talentName}` : `Added ${talentName}`);
   };
 
@@ -4004,8 +4036,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     };
     await saveProject(nextProj);
     if (marketingForm.id === itemId) {
-      setShowMarketingItemModal(false);
-      resetMarketingForm();
+      closeMarketingItemModal();
     }
     flash(`${marketingItemPrimaryLabel(target)} deleted`);
   };
@@ -8661,14 +8692,14 @@ Requirements:
         )}
 
         {showMarketingItemModal && (
-          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 120 }} onClick={e => { if (e.target === e.currentTarget) { setShowMarketingItemModal(false); resetMarketingForm(); } }}>
+          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 120 }} onClick={e => { if (e.target === e.currentTarget) { closeMarketingItemModal(); } }}>
             <div style={{ background: C.sf, borderRadius: 18, padding: "24px 28px", width: 720, maxWidth: "calc(100vw - 32px)", boxShadow: "0 25px 70px rgba(0,0,0,0.2)", maxHeight: "88vh", overflowY: "auto" }}>
               <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", marginBottom: 12 }}>
                 <div>
                   <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 6, color: C.tx }}>{marketingForm.id ? "Edit Campaign Assignment" : "New Campaign Assignment"}</div>
                   <div style={{ fontSize: 12, color: C.ts }}>Track the talent, the campaign, the deliverable, and the links your team needs to move the work.</div>
                 </div>
-                <button onClick={() => { setShowMarketingItemModal(false); resetMarketingForm(); }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: C.ts }}>✕</button>
+                <button onClick={closeMarketingItemModal} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: C.ts }}>✕</button>
               </div>
 
               <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr", gap: 10 }}>
@@ -8787,7 +8818,7 @@ Requirements:
                       Delete
                     </button>
                   )}
-                  <button onClick={() => { setShowMarketingItemModal(false); resetMarketingForm(); }} style={{ padding: "8px 18px", borderRadius: 10, border: `1px solid ${C.bd}`, background: "transparent", cursor: "pointer", fontSize: 13, fontFamily: ft, color: C.ts }}>Cancel</button>
+                  <button onClick={closeMarketingItemModal} style={{ padding: "8px 18px", borderRadius: 10, border: `1px solid ${C.bd}`, background: "transparent", cursor: "pointer", fontSize: 13, fontFamily: ft, color: C.ts }}>Cancel</button>
                   <button onClick={saveMarketingItem} style={{ padding: "8px 24px", borderRadius: 10, border: "none", background: C.ac, color: "#fff", cursor: "pointer", fontSize: 13, fontWeight: 600, fontFamily: ft, opacity: marketingForm.talentName.trim() ? 1 : 0.45 }}>
                     {marketingForm.id ? "Save Changes" : "Add Assignment"}
                   </button>
