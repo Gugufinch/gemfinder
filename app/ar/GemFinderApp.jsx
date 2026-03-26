@@ -3216,20 +3216,6 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   }, [proj?.id]);
 
   useEffect(() => {
-    const validIds = new Set(marketingItemIds);
-    setSelectedMarketingIds(prev => {
-      const next = new Set([...prev].filter(id => validIds.has(id)));
-      return next.size === prev.size ? prev : next;
-    });
-  }, [marketingItemIds]);
-
-  useEffect(() => {
-    if (marketingGroupFilter === "all") return;
-    if (marketingGroupOptions.some(group => group.id === marketingGroupFilter)) return;
-    setMarketingGroupFilter("all");
-  }, [marketingGroupFilter, marketingGroupOptions]);
-
-  useEffect(() => {
     if (!proj) return;
     setAiKeySet(!!getStoredAiKey(currentAiProvider));
   }, [proj?.id, currentAiProvider]);
@@ -5040,6 +5026,20 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     () => normalizeMarketingGroups(proj?.settings?.marketingGroups || [], marketingItemIds),
     [proj?.settings?.marketingGroups, marketingItemIds]
   );
+
+  useEffect(() => {
+    const validIds = new Set(marketingItemIds);
+    setSelectedMarketingIds(prev => {
+      const next = new Set([...prev].filter(id => validIds.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [marketingItemIds]);
+
+  useEffect(() => {
+    if (marketingGroupFilter === "all") return;
+    if (marketingGroupOptions.some(group => group.id === marketingGroupFilter)) return;
+    setMarketingGroupFilter("all");
+  }, [marketingGroupFilter, marketingGroupOptions]);
 
   const marketingBulkRows = useMemo(
     () => parseMarketingBulkUpdateText(marketingBulkText, marketingBulkDefaultCampaign, marketingBulkDefaultStatus),
