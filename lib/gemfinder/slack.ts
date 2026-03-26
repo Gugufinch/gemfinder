@@ -22,6 +22,16 @@ const MARKETING_STATUS_LABELS: Record<string, string> = {
   rejected: 'Rejected',
 };
 
+const MARKETING_STATUS_EMOJIS: Record<string, string> = {
+  prospect: '👀',
+  interested: '✨',
+  creating: '🎬',
+  reviewing: '🧐',
+  revising: '🔁',
+  complete: '✅',
+  rejected: '⛔',
+};
+
 type ProjectArtist = {
   n?: string;
   e?: string;
@@ -95,6 +105,10 @@ function stageLabel(stageId: string): string {
 
 function marketingStatusLabel(statusId: string): string {
   return MARKETING_STATUS_LABELS[statusId] || statusId || 'Unknown';
+}
+
+function marketingStatusEmoji(statusId: string): string {
+  return MARKETING_STATUS_EMOJIS[statusId] || '📣';
 }
 
 function appBaseUrl(): string {
@@ -271,8 +285,17 @@ function buildArSlackPayload(transition: StageTransition, actorEmail: string) {
 
 function buildMarketingSlackPayload(transition: MarketingTransition, actorEmail: string) {
   const actorLabel = actorEmail || 'Unknown user';
-  const text = `GEMFINDER MARKETING: ${transition.talentName} moved to ${marketingStatusLabel(transition.nextStatus)} in ${transition.projectName}`;
-  const titleLine = transition.title && transition.title !== transition.talentName ? `${transition.talentName} · ${transition.title}` : transition.talentName;
+  const nextStatusLabel = marketingStatusLabel(transition.nextStatus);
+  const previousStatusLabel = marketingStatusLabel(transition.previousStatus);
+  const statusEmoji = marketingStatusEmoji(transition.nextStatus);
+  const text = `GEMFINDER MARKETING: ${transition.talentName} moved to ${nextStatusLabel} in ${transition.projectName}`;
+  const titleLine = `${statusEmoji} ${transition.talentName} -> ${nextStatusLabel}`;
+  const subtitleParts = [
+    transition.campaignLabel || 'No campaign',
+    transition.trafficType || 'Organic',
+    transition.deliverableType || 'UGC',
+  ].filter(Boolean);
+  const deliverableLine = transition.title && transition.title !== transition.talentName ? transition.title : '';
   const accessoryButtons = [];
   if (transition.projectUrl) {
     accessoryButtons.push({
@@ -302,8 +325,15 @@ function buildMarketingSlackPayload(transition: MarketingTransition, actorEmail:
         type: 'header',
         text: {
           type: 'plain_text',
-          text: `${titleLine} -> ${marketingStatusLabel(transition.nextStatus)}`,
+          text: titleLine,
         },
+      },
+      {
+        type: 'context',
+        elements: [
+          { type: 'mrkdwn', text: subtitleParts.join(' · ') },
+          ...(deliverableLine ? [{ type: 'mrkdwn', text: deliverableLine }] : []),
+        ],
       },
       {
         type: 'section',
@@ -313,7 +343,7 @@ function buildMarketingSlackPayload(transition: MarketingTransition, actorEmail:
           { type: 'mrkdwn', text: `*Traffic / Deliverable*\n${transition.trafficType} · ${transition.deliverableType}` },
           { type: 'mrkdwn', text: `*Owner*\n${transition.owner}` },
           { type: 'mrkdwn', text: `*Changed by*\n${actorLabel}` },
-          { type: 'mrkdwn', text: `*Status change*\n${marketingStatusLabel(transition.previousStatus)} -> ${marketingStatusLabel(transition.nextStatus)}` },
+          { type: 'mrkdwn', text: `*Status change*\n${previousStatusLabel} -> ${nextStatusLabel}` },
         ],
       },
       ...(accessoryButtons.length ? [{ type: 'actions', elements: accessoryButtons }] : []),
