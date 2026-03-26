@@ -4775,26 +4775,6 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     return normalizeMarketingCampaignBank([...fromSettings, ...fromItems]);
   }, [proj?.settings?.marketingCampaignBank, marketingItems]);
 
-  const marketingCampaigns = useMemo(() => {
-    const counts = {};
-    marketingItems.forEach(item => {
-      const buckets = item.campaigns?.length ? item.campaigns : ["No campaign"];
-      buckets.forEach(key => {
-        counts[key] = (counts[key] || 0) + 1;
-      });
-    });
-    return Object.entries(counts).sort((a, b) => b[1] - a[1]);
-  }, [marketingItems]);
-
-  const marketingStatusCounts = useMemo(() => {
-    const counts = {};
-    MARKETING_STATUSES.forEach(status => { counts[status.id] = 0; });
-    marketingItems.forEach(item => {
-      counts[item.status] = (counts[item.status] || 0) + 1;
-    });
-    return counts;
-  }, [marketingItems]);
-
   const effectiveMarketingOwnerFilter = useMemo(() => {
     if (marketingOwnerFilter === "__view__") {
       if (workspaceUser === ALL_USER_VIEW) return "all";
@@ -4803,6 +4783,35 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     }
     return marketingOwnerFilter;
   }, [marketingOwnerFilter, workspaceUser]);
+
+  const scopedMarketingItems = useMemo(() => {
+    let list = marketingItems;
+    if (effectiveMarketingOwnerFilter !== "all") {
+      if (!effectiveMarketingOwnerFilter) list = list.filter(item => !item.owner);
+      else list = list.filter(item => item.owner === effectiveMarketingOwnerFilter);
+    }
+    return list;
+  }, [marketingItems, effectiveMarketingOwnerFilter]);
+
+  const marketingCampaigns = useMemo(() => {
+    const counts = {};
+    scopedMarketingItems.forEach(item => {
+      const buckets = item.campaigns?.length ? item.campaigns : ["No campaign"];
+      buckets.forEach(key => {
+        counts[key] = (counts[key] || 0) + 1;
+      });
+    });
+    return Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  }, [scopedMarketingItems]);
+
+  const marketingStatusCounts = useMemo(() => {
+    const counts = {};
+    MARKETING_STATUSES.forEach(status => { counts[status.id] = 0; });
+    scopedMarketingItems.forEach(item => {
+      counts[item.status] = (counts[item.status] || 0) + 1;
+    });
+    return counts;
+  }, [scopedMarketingItems]);
 
   const saveMarketingCampaignBank = async nextBank => {
     if (!requireEditor()) return;
@@ -4837,7 +4846,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   };
 
   const filteredMarketingItems = useMemo(() => {
-    let list = marketingItems;
+    let list = scopedMarketingItems;
     if (search.trim()) {
       const q = search.trim().toLowerCase();
       list = list.filter(item =>
@@ -4856,17 +4865,13 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     if (marketingTrafficFilter !== "all") {
       list = list.filter(item => item.trafficType === marketingTrafficFilter);
     }
-    if (effectiveMarketingOwnerFilter !== "all") {
-      if (!effectiveMarketingOwnerFilter) list = list.filter(item => !item.owner);
-      else list = list.filter(item => item.owner === effectiveMarketingOwnerFilter);
-    }
     return [...list].sort((a, b) => {
       const aDue = a.dueDate || "9999-12-31";
       const bDue = b.dueDate || "9999-12-31";
       if (aDue !== bDue) return aDue.localeCompare(bDue);
       return String(b.updatedAt || "").localeCompare(String(a.updatedAt || ""));
     });
-  }, [marketingItems, search, marketingStatusFilter, marketingCampaignFilter, marketingTrafficFilter, effectiveMarketingOwnerFilter]);
+  }, [scopedMarketingItems, search, marketingStatusFilter, marketingCampaignFilter, marketingTrafficFilter]);
 
   const marketingQueue = useMemo(() => {
     const today = todayISO();
@@ -6609,7 +6614,7 @@ Requirements:
     const greetingHour = clockNow.getHours();
     const greetingLabel = greetingHour < 12 ? "Good morning" : greetingHour < 18 ? "Good afternoon" : "Good evening";
     const greetingName = (currentActor || "Team").split("@")[0];
-    const marketingSummary = summarizeMarketingItems(marketingItems, operationalTodayISOFor(clockNow));
+    const marketingSummary = summarizeMarketingItems(scopedMarketingItems, operationalTodayISOFor(clockNow));
     const projectDateLabel = clockNow.toLocaleString("en-US", {
       weekday: "short",
       month: "short",
@@ -6696,7 +6701,7 @@ Requirements:
     const sidebarUtilityCards = isMarketingProject ? [
       { label: "Campaigns", value: marketingSummary.campaigns, tone: C.tx },
       { label: "Due soon", value: marketingSummary.dueSoon, tone: marketingSummary.dueSoon ? C.ab : C.tx },
-      { label: "Scope", value: workspaceUser === ALL_USER_VIEW ? "All" : workspaceUser === UNASSIGNED_USER_VIEW ? "Unassigned" : workspaceUser },
+      { label: "Scope", value: marketingScopeLabel },
       { label: "Updated", value: queueUpdatedLabel, tone: C.tx },
     ] : [
       { label: "Mailbox", value: connectedMailboxText, tone: gmailConnected ? C.gn : C.rd },
@@ -6709,6 +6714,11 @@ Requirements:
       : workspaceUser === UNASSIGNED_USER_VIEW
         ? "Only unassigned artists"
         : `${workspaceUser}'s workspace`;
+    const marketingScopeLabel = effectiveMarketingOwnerFilter === "all"
+      ? "All assignments"
+      : !effectiveMarketingOwnerFilter
+        ? "Unassigned assignments only"
+        : `${effectiveMarketingOwnerFilter}'s assignments only`;
 
     return (
       <div className="gf-project-shell" style={{ fontFamily: ft, color: C.tx }}>
@@ -6840,7 +6850,7 @@ Requirements:
                       <div style={{ fontSize: 12, color: C.tt, textTransform: "uppercase", letterSpacing: 1.2, marginBottom: 6 }}>Today</div>
                       <div style={{ fontSize: 28, fontWeight: 800, letterSpacing: "-0.04em", lineHeight: 1.02 }}>{projectDateLabel}</div>
                       <div style={{ fontSize: 12, color: C.ts, marginTop: 8 }}>
-                        {projectMode === "inbox" ? `Connected mailbox: ${connectedMailboxText}` : `${scopeDescription} · ${operationalDayLabel}`}
+                        {projectMode === "inbox" ? `Connected mailbox: ${connectedMailboxText}` : `${isMarketingProject ? marketingScopeLabel : scopeDescription} · ${operationalDayLabel}`}
                       </div>
                     </div>
                   </div>
@@ -7052,7 +7062,7 @@ Requirements:
                 <div>
                   <div style={{ fontSize: 14, fontWeight: 700 }}>Marketing Reporting</div>
                   <div style={{ fontSize: 11, color: C.tt }}>
-                    Current view is {workspaceUser === ALL_USER_VIEW ? "the whole team" : scopeDescription.toLowerCase()} across paid and organic campaign work.
+                    Current view is {marketingScopeLabel.toLowerCase()} across paid and organic campaign work.
                   </div>
                 </div>
                 <div style={{ fontSize: 11, color: C.tt }}>
@@ -7331,7 +7341,7 @@ Requirements:
             {showFilters && (
               <div style={{ ...cS, padding: "12px 14px", marginBottom: 14 }}>
                 <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 8 }}>
-                  <button onClick={() => setMarketingStatusFilter("all")} style={mkP(marketingStatusFilter === "all", C.ac, C.al)}>All {marketingItems.length}</button>
+                  <button onClick={() => setMarketingStatusFilter("all")} style={mkP(marketingStatusFilter === "all", C.ac, C.al)}>All {marketingSummary.items}</button>
                   <button onClick={() => setMarketingStatusFilter("active")} style={mkP(marketingStatusFilter === "active", C.pr, C.pb)}>In Progress {marketingSummary.creating + marketingSummary.reviewing + marketingSummary.revising}</button>
                   {MARKETING_STATUSES.map(status => (
                     <button key={status.id} onClick={() => setMarketingStatusFilter(marketingStatusFilter === status.id ? "all" : status.id)} style={mkP(marketingStatusFilter === status.id, marketingStatusTone(status.id, C).tone, marketingStatusTone(status.id, C).bg)}>
@@ -7340,11 +7350,37 @@ Requirements:
                   ))}
                 </div>
 
-                <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 8 }}>
-                  <button onClick={() => setMarketingCampaignFilter("all")} style={mkP(marketingCampaignFilter === "all", C.ac, C.al)}>All Campaigns</button>
-                  {marketingCampaigns.slice(0, 10).map(([campaign, count]) => (
-                    <button key={campaign} onClick={() => setMarketingCampaignFilter(marketingCampaignFilter === campaign ? "all" : campaign)} style={mkP(marketingCampaignFilter === campaign, C.ac, C.al)}>{campaign} {count}</button>
-                  ))}
+                <div style={{ display: "grid", gridTemplateColumns: "minmax(180px,260px) minmax(180px,260px) auto", gap: 8, alignItems: "center", marginBottom: 8 }}>
+                  <label style={{ fontSize: 11, color: C.tt, display: "grid", gap: 4 }}>
+                    <span>Campaign</span>
+                    <select
+                      value={marketingCampaignFilter}
+                      onChange={e => setMarketingCampaignFilter(e.target.value)}
+                      style={{ ...iS, width: "100%", padding: "8px 10px", fontSize: 12 }}
+                    >
+                      <option value="all">All Campaigns</option>
+                      <option value="No campaign">No campaign</option>
+                      {marketingCampaignOptions.map(campaign => (
+                        <option key={campaign} value={campaign}>{campaign}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label style={{ fontSize: 11, color: C.tt, display: "grid", gap: 4 }}>
+                    <span>Owner Scope</span>
+                    <select
+                      value={marketingOwnerFilter}
+                      onChange={e => setMarketingOwnerFilter(e.target.value)}
+                      style={{ ...iS, width: "100%", padding: "8px 10px", fontSize: 12 }}
+                    >
+                      <option value="__view__">Current view ({workspaceUser === ALL_USER_VIEW ? "All" : workspaceUser === UNASSIGNED_USER_VIEW ? "Unassigned" : workspaceUser})</option>
+                      <option value="all">All owners</option>
+                      <option value="">Unassigned only</option>
+                      {(proj?.teamUsers || DEFAULT_TEAM_USERS).map(u => <option key={u} value={u}>{u}</option>)}
+                    </select>
+                  </label>
+                  <button onClick={() => setShowProjectMenu(true)} style={{ ...actionBtn(false, "neutral"), alignSelf: "end" }}>
+                    Open Campaign Bank
+                  </button>
                 </div>
 
                 <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
@@ -7356,7 +7392,10 @@ Requirements:
               </div>
             )}
 
-            <div style={{ fontSize: 12, color: C.tt, marginBottom: 12 }}>{filteredMarketingItems.length} assignment{filteredMarketingItems.length !== 1 ? "s" : ""}</div>
+            <div style={{ fontSize: 12, color: C.tt, marginBottom: 12 }}>
+              {filteredMarketingItems.length} assignment{filteredMarketingItems.length !== 1 ? "s" : ""} shown
+              {marketingSummary.items !== filteredMarketingItems.length ? ` · ${marketingScopeLabel}` : ""}
+            </div>
 
             {viewMode === "list" && (
               <div style={{ display: "grid", gap: 8 }}>
