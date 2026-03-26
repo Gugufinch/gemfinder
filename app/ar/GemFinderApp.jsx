@@ -6698,6 +6698,11 @@ Requirements:
       { label: "Contacted", value: contactedCount },
       { label: "Live", value: stCounts.live || 0 },
     ];
+    const marketingScopeLabel = effectiveMarketingOwnerFilter === "all"
+      ? "All assignments"
+      : !effectiveMarketingOwnerFilter
+        ? "Unassigned assignments only"
+        : `${effectiveMarketingOwnerFilter}'s assignments only`;
     const sidebarUtilityCards = isMarketingProject ? [
       { label: "Campaigns", value: marketingSummary.campaigns, tone: C.tx },
       { label: "Due soon", value: marketingSummary.dueSoon, tone: marketingSummary.dueSoon ? C.ab : C.tx },
@@ -6714,11 +6719,6 @@ Requirements:
       : workspaceUser === UNASSIGNED_USER_VIEW
         ? "Only unassigned artists"
         : `${workspaceUser}'s workspace`;
-    const marketingScopeLabel = effectiveMarketingOwnerFilter === "all"
-      ? "All assignments"
-      : !effectiveMarketingOwnerFilter
-        ? "Unassigned assignments only"
-        : `${effectiveMarketingOwnerFilter}'s assignments only`;
 
     return (
       <div className="gf-project-shell" style={{ fontFamily: ft, color: C.tx }}>
