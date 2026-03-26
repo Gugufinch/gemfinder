@@ -14,6 +14,7 @@ const STAGE_LABELS: Record<string, string> = {
 
 const MARKETING_STATUS_LABELS: Record<string, string> = {
   prospect: 'Prospect',
+  contacted: 'Contacted',
   interested: 'Interested',
   creating: 'Creating',
   reviewing: 'Reviewing',
@@ -24,6 +25,7 @@ const MARKETING_STATUS_LABELS: Record<string, string> = {
 
 const MARKETING_STATUS_EMOJIS: Record<string, string> = {
   prospect: '👀',
+  contacted: '📨',
   interested: '✨',
   creating: '🎬',
   reviewing: '🧐',

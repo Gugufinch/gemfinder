@@ -23,6 +23,7 @@ const PROJECT_TYPES = [
 ];
 const MARKETING_STATUSES = [
   { id: "prospect", label: "Prospect", icon: "◎", description: "Talent is identified for the campaign but has not replied yet." },
+  { id: "contacted", label: "Contacted", icon: "→", description: "The campaign ask has been sent to the talent." },
   { id: "interested", label: "Interested", icon: "◆", description: "They replied about the opportunity." },
   { id: "creating", label: "Creating", icon: "✦", description: "They accepted and are making the content." },
   { id: "reviewing", label: "Reviewing", icon: "◌", description: "The content is in review with the team." },
@@ -752,6 +753,8 @@ function marketingStatusTone(status, C) {
   switch (status) {
     case "prospect":
       return { fg: C.tt, bg: C.sa, border: `${C.bd}` };
+    case "contacted":
+      return { fg: C.bu, bg: C.bb, border: `${C.bu}33` };
     case "interested":
       return { fg: C.ac, bg: C.al, border: `${C.ac}33` };
     case "creating":
@@ -773,6 +776,7 @@ function summarizeMarketingItems(items = [], today = todayISO()) {
   const summary = {
     items: items.length,
     prospect: 0,
+    contacted: 0,
     interested: 0,
     creating: 0,
     reviewing: 0,
@@ -809,6 +813,7 @@ function summarizeProjectForHub(project, today = todayISO()) {
       cards: [
         ["Assignments", mk.items, "neutral"],
         ["Prospect", mk.prospect, "accent"],
+        ["Contacted", mk.contacted, "accent"],
         ["In Progress", mk.creating + mk.reviewing + mk.revising, "good"],
         ["Complete", mk.complete, "live"],
       ],
@@ -7739,6 +7744,7 @@ Requirements:
                 {[
                   ["Assignments", marketingSummary.items, "all", "All tracked campaign assignments"],
                   ["Prospect", marketingSummary.prospect, "prospect", "Queued or newly uploaded talent"],
+                  ["Contacted", marketingSummary.contacted, "contacted", "The opportunity has been sent to the talent"],
                   ["Interested", marketingSummary.interested, "interested", "Talent who replied about the opportunity"],
                   ["In Progress", marketingSummary.creating + marketingSummary.reviewing + marketingSummary.revising, "__active__", "Creating, reviewing, and revising"],
                   ["Complete", marketingSummary.complete, "complete", "Finished deliverables"],
@@ -9334,7 +9340,7 @@ Requirements:
                   <textarea
                     value={marketingBulkText}
                     onChange={e => setMarketingBulkText(e.target.value)}
-                    placeholder={`Patrick James Clark | D2F Paid 1 | Interested\nTejai Moore | D2F Paid 1 | Creating\nfeeljones | Direct To Fan Focus | Complete`}
+                    placeholder={`Patrick James Clark | D2F Paid 1 | Contacted\nTejai Moore | D2F Paid 1 | Interested\nfeeljones | Direct To Fan Focus | Complete`}
                     style={{ ...iS, width: "100%", minHeight: 170, resize: "vertical", fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", lineHeight: 1.5 }}
                   />
                 </label>
