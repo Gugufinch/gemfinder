@@ -413,6 +413,34 @@ function normalizeMarketingCampaigns(value) {
 function normalizeMarketingCampaignBank(value) {
   return normalizeMarketingCampaigns(Array.isArray(value) ? value : String(value || ""));
 }
+function normalizeMarketingGroup(value, index = 0, validAssignmentIds = []) {
+  const name = String(value?.name || "").replace(/\s+/g, " ").trim();
+  if (!name) return null;
+  const validSet = new Set((validAssignmentIds || []).map(id => String(id || "")));
+  const assignmentIds = uniqStrings(
+    Array.isArray(value?.assignmentIds)
+      ? value.assignmentIds.map(id => String(id || "").trim())
+      : []
+  ).filter(id => !validSet.size || validSet.has(id));
+  return {
+    id: String(value?.id || `mg_${index}_${canonicalArtistName(name) || "group"}`),
+    name,
+    assignmentIds,
+    createdAt: value?.createdAt || "",
+    updatedAt: value?.updatedAt || value?.createdAt || "",
+  };
+}
+function normalizeMarketingGroups(value = [], validAssignmentIds = []) {
+  const groups = Array.isArray(value) ? value : [];
+  const seen = new Set();
+  return groups
+    .map((group, index) => normalizeMarketingGroup(group, index, validAssignmentIds))
+    .filter(group => {
+      if (!group || seen.has(group.id)) return false;
+      seen.add(group.id);
+      return true;
+    });
+}
 function marketingChannelsLabel(item) {
   const channels = Array.isArray(item?.channels) ? item.channels : [];
   return channels.length ? channels.join(", ") : "No channels";
@@ -1244,6 +1272,7 @@ function normalizeProject(p) {
   const legacyModels = p.settings?.aiModels || {};
   const projectType = normalizeProjectType(p.type);
   const teamUsers = Array.isArray(p.teamUsers) && p.teamUsers.length ? p.teamUsers : [...DEFAULT_TEAM_USERS];
+  const marketingItems = Array.isArray(p.marketingItems) ? p.marketingItems.map(item => normalizeMarketingItem(item, teamUsers)) : [];
   const aiModelsByProvider = {
     anthropic: {
       ...DEFAULT_AI_MODELS.anthropic,
@@ -1283,7 +1312,7 @@ function normalizeProject(p) {
     archivedArtists: Array.isArray(p.archivedArtists) ? p.archivedArtists : [],
     teamUsers,
     assignments: p.assignments || {},
-    marketingItems: Array.isArray(p.marketingItems) ? p.marketingItems.map(item => normalizeMarketingItem(item, teamUsers)) : [],
+    marketingItems,
     replyIntel: p.replyIntel || {},
     internalRoster: {
       names: Array.isArray(p.internalRoster?.names) ? p.internalRoster.names : [],
@@ -1306,6 +1335,7 @@ function normalizeProject(p) {
         accent: p.settings?.appearance?.accent && ACCENT_PRESETS[p.settings.appearance.accent] ? p.settings.appearance.accent : "blue",
       },
       marketingCampaignBank: normalizeMarketingCampaignBank(p.settings?.marketingCampaignBank || []),
+      marketingGroups: normalizeMarketingGroups(p.settings?.marketingGroups || [], marketingItems.map(item => item.id)),
     },
   };
 }
@@ -2500,6 +2530,9 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [marketingCampaignFilter, setMarketingCampaignFilter] = useState("all");
   const [marketingTrafficFilter, setMarketingTrafficFilter] = useState("all");
   const [marketingOwnerFilter, setMarketingOwnerFilter] = useState("__view__");
+  const [marketingGroupFilter, setMarketingGroupFilter] = useState("all");
+  const [marketingSelectionMode, setMarketingSelectionMode] = useState(false);
+  const [selectedMarketingIds, setSelectedMarketingIds] = useState(new Set());
   const [showMarketingBulkUpdateModal, setShowMarketingBulkUpdateModal] = useState(false);
   const [marketingBulkText, setMarketingBulkText] = useState("");
   const [marketingBulkDefaultCampaign, setMarketingBulkDefaultCampaign] = useState("");
@@ -3155,6 +3188,26 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   }, [proj?.id]);
 
   useEffect(() => {
+    setMarketingGroupFilter("all");
+    setSelectedMarketingIds(new Set());
+    setMarketingSelectionMode(false);
+  }, [proj?.id]);
+
+  useEffect(() => {
+    const validIds = new Set(marketingItemIds);
+    setSelectedMarketingIds(prev => {
+      const next = new Set([...prev].filter(id => validIds.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [marketingItemIds]);
+
+  useEffect(() => {
+    if (marketingGroupFilter === "all") return;
+    if (marketingGroupOptions.some(group => group.id === marketingGroupFilter)) return;
+    setMarketingGroupFilter("all");
+  }, [marketingGroupFilter, marketingGroupOptions]);
+
+  useEffect(() => {
     if (!proj) return;
     setAiKeySet(!!getStoredAiKey(currentAiProvider));
   }, [proj?.id, currentAiProvider]);
@@ -3656,6 +3709,9 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       setMarketingCampaignFilter("all");
       setMarketingTrafficFilter("all");
       setMarketingOwnerFilter("all");
+      setMarketingGroupFilter("all");
+      setSelectedMarketingIds(new Set());
+      setMarketingSelectionMode(false);
       changeWorkspaceUser(ALL_USER_VIEW);
     }
     flash(`Project set to ${normalized === "marketing" ? "Marketing" : "A&R"}`);
@@ -3876,6 +3932,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         draftGuardrails: { ...DEFAULT_DRAFT_GUARDRAILS },
         savedTemplates: [],
         publicCsvToken: "",
+        marketingCampaignBank: [],
+        marketingGroups: [],
         appearance: { accent: "blue" },
       },
       created: new Date().toISOString(),
@@ -3940,6 +3998,9 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       setMarketingCampaignFilter("all");
       setMarketingTrafficFilter("all");
       setMarketingOwnerFilter("all");
+      setMarketingGroupFilter("all");
+      setSelectedMarketingIds(new Set());
+      setMarketingSelectionMode(false);
       changeWorkspaceUser(ALL_USER_VIEW);
       flash(`Imported ${parsed.length} rows · ${createdCount} new · ${refreshedCount} updated · ${unchangedCount} unchanged`);
     } else {
@@ -4942,11 +5003,21 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     return (proj.marketingItems || []).map(item => normalizeMarketingItem(item, proj.teamUsers || DEFAULT_TEAM_USERS));
   }, [proj]);
 
+  const marketingItemIds = useMemo(
+    () => marketingItems.map(item => String(item.id || "")).filter(Boolean),
+    [marketingItems]
+  );
+
   const marketingCampaignOptions = useMemo(() => {
     const fromSettings = Array.isArray(proj?.settings?.marketingCampaignBank) ? proj.settings.marketingCampaignBank : [];
     const fromItems = marketingItems.flatMap(item => item.campaigns || []);
     return normalizeMarketingCampaignBank([...fromSettings, ...fromItems]);
   }, [proj?.settings?.marketingCampaignBank, marketingItems]);
+
+  const marketingGroupOptions = useMemo(
+    () => normalizeMarketingGroups(proj?.settings?.marketingGroups || [], marketingItemIds),
+    [proj?.settings?.marketingGroups, marketingItemIds]
+  );
 
   const marketingBulkRows = useMemo(
     () => parseMarketingBulkUpdateText(marketingBulkText, marketingBulkDefaultCampaign, marketingBulkDefaultStatus),
@@ -5046,25 +5117,50 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     return list;
   }, [marketingItems, effectiveMarketingOwnerFilter]);
 
+  const activeMarketingGroup = useMemo(
+    () => marketingGroupOptions.find(group => group.id === marketingGroupFilter) || null,
+    [marketingGroupOptions, marketingGroupFilter]
+  );
+
+  const groupScopedMarketingItems = useMemo(() => {
+    if (!activeMarketingGroup) return scopedMarketingItems;
+    const allowedIds = new Set(activeMarketingGroup.assignmentIds || []);
+    return scopedMarketingItems.filter(item => allowedIds.has(item.id));
+  }, [scopedMarketingItems, activeMarketingGroup]);
+
+  const marketingSelectedItems = useMemo(
+    () => marketingItems.filter(item => selectedMarketingIds.has(item.id)),
+    [marketingItems, selectedMarketingIds]
+  );
+
+  const marketingSelectedEmails = useMemo(
+    () => uniqStrings(
+      marketingSelectedItems.flatMap(item => splitMultiValueField(item.email || ""))
+        .map(email => String(email || "").trim())
+        .filter(email => /@/.test(email))
+    ),
+    [marketingSelectedItems]
+  );
+
   const marketingCampaigns = useMemo(() => {
     const counts = {};
-    scopedMarketingItems.forEach(item => {
+    groupScopedMarketingItems.forEach(item => {
       const buckets = item.campaigns?.length ? item.campaigns : ["No campaign"];
       buckets.forEach(key => {
         counts[key] = (counts[key] || 0) + 1;
       });
     });
     return Object.entries(counts).sort((a, b) => b[1] - a[1]);
-  }, [scopedMarketingItems]);
+  }, [groupScopedMarketingItems]);
 
   const marketingStatusCounts = useMemo(() => {
     const counts = {};
     MARKETING_STATUSES.forEach(status => { counts[status.id] = 0; });
-    scopedMarketingItems.forEach(item => {
+    groupScopedMarketingItems.forEach(item => {
       counts[item.status] = (counts[item.status] || 0) + 1;
     });
     return counts;
-  }, [scopedMarketingItems]);
+  }, [groupScopedMarketingItems]);
 
   const saveMarketingCampaignBank = async nextBank => {
     if (!requireEditor()) return;
@@ -5096,6 +5192,132 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     const nextBank = (proj?.settings?.marketingCampaignBank || []).filter(item => item !== campaignName);
     await saveMarketingCampaignBank(nextBank);
     flash(`Removed "${campaignName}" from campaign bank`);
+  };
+
+  const toggleMarketingSelection = itemId => {
+    setSelectedMarketingIds(prev => {
+      const next = new Set(prev);
+      if (next.has(itemId)) next.delete(itemId);
+      else next.add(itemId);
+      return next;
+    });
+  };
+
+  const clearMarketingSelection = () => {
+    setSelectedMarketingIds(new Set());
+  };
+
+  const selectVisibleMarketingItems = () => {
+    const visibleIds = filteredMarketingItems.map(item => item.id).filter(Boolean);
+    if (!visibleIds.length) {
+      flash("No visible assignments to select", "err");
+      return;
+    }
+    setSelectedMarketingIds(new Set(visibleIds));
+    flash(`Selected ${visibleIds.length} assignment${visibleIds.length === 1 ? "" : "s"}`);
+  };
+
+  const saveMarketingGroupSelection = async () => {
+    if (!requireEditor()) return;
+    if (!proj) return;
+    if (!marketingSelectedItems.length) {
+      flash("Select assignments first", "err");
+      return;
+    }
+    const suggestedCampaign = uniqStrings(marketingSelectedItems.flatMap(item => item.campaigns || []).filter(Boolean))[0] || "";
+    const defaultName = suggestedCampaign ? `${suggestedCampaign} batch` : "Saved talent group";
+    const rawName = window.prompt("Save this selection as which group?", defaultName);
+    const nextName = String(rawName || "").replace(/\s+/g, " ").trim();
+    if (!nextName) return;
+
+    const existingGroups = normalizeMarketingGroups(proj.settings?.marketingGroups || [], marketingItemIds);
+    const matchingGroup = existingGroups.find(group => canonicalArtistName(group.name) === canonicalArtistName(nextName));
+    if (matchingGroup && !window.confirm(`Overwrite the saved group "${matchingGroup.name}" with the current selection?`)) return;
+
+    const now = new Date().toISOString();
+    const nextGroup = normalizeMarketingGroup({
+      id: matchingGroup?.id || `mg_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      name: nextName,
+      assignmentIds: marketingSelectedItems.map(item => item.id),
+      createdAt: matchingGroup?.createdAt || now,
+      updatedAt: now,
+    }, existingGroups.length, marketingItemIds);
+    const nextGroups = normalizeMarketingGroups(
+      [
+        ...existingGroups.filter(group => group.id !== matchingGroup?.id),
+        nextGroup,
+      ],
+      marketingItemIds
+    );
+    const ok = await saveProject({
+      ...proj,
+      settings: {
+        ...(proj.settings || {}),
+        marketingGroups: nextGroups,
+      },
+    });
+    if (!ok) return;
+    setMarketingGroupFilter(nextGroup.id);
+    flash(`Saved group "${nextGroup.name}"`);
+  };
+
+  const removeMarketingGroup = async groupId => {
+    if (!requireEditor()) return;
+    if (!proj) return;
+    const target = marketingGroupOptions.find(group => group.id === groupId);
+    if (!target) return;
+    if (!window.confirm(`Delete the saved group "${target.name}"?`)) return;
+    const nextGroups = marketingGroupOptions.filter(group => group.id !== groupId);
+    const ok = await saveProject({
+      ...proj,
+      settings: {
+        ...(proj.settings || {}),
+        marketingGroups: nextGroups,
+      },
+    });
+    if (!ok) return;
+    if (marketingGroupFilter === groupId) setMarketingGroupFilter("all");
+    flash(`Removed group "${target.name}"`);
+  };
+
+  const copyMarketingBccEmails = async () => {
+    if (!marketingSelectedEmails.length) {
+      flash("Selected assignments do not have email addresses", "err");
+      return;
+    }
+    const payload = marketingSelectedEmails.join(", ");
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(payload);
+      } else {
+        const el = document.createElement("textarea");
+        el.value = payload;
+        el.style.cssText = "position:fixed;top:-9999px";
+        document.body.appendChild(el);
+        el.select();
+        document.execCommand("copy");
+        document.body.removeChild(el);
+      }
+      flash(`Copied ${marketingSelectedEmails.length} BCC email${marketingSelectedEmails.length === 1 ? "" : "s"}`);
+    } catch {
+      flash("Could not copy BCC list", "err");
+    }
+  };
+
+  const openMarketingBccDraft = () => {
+    if (!marketingSelectedEmails.length) {
+      flash("Selected assignments do not have email addresses", "err");
+      return;
+    }
+    const campaignNames = uniqStrings(marketingSelectedItems.flatMap(item => item.campaigns || []).filter(Boolean));
+    const subject = campaignNames.length === 1
+      ? `${campaignNames[0]} outreach`
+      : campaignNames.length > 1
+        ? "Campaign outreach"
+        : "Marketing outreach";
+    const url = `https://mail.google.com/mail/?view=cm&fs=1&bcc=${encodeURIComponent(marketingSelectedEmails.join(","))}&su=${encodeURIComponent(subject)}`;
+    window.open(url, "_blank", "noopener");
+    flash(`Opened Gmail draft for ${marketingSelectedEmails.length} recipient${marketingSelectedEmails.length === 1 ? "" : "s"}`);
   };
 
   const openMarketingBulkUpdateModal = () => {
@@ -5246,6 +5468,9 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     setMarketingCampaignFilter("all");
     setMarketingTrafficFilter("all");
     setMarketingOwnerFilter("all");
+    setMarketingGroupFilter("all");
+    setSelectedMarketingIds(new Set());
+    setMarketingSelectionMode(false);
     changeWorkspaceUser(ALL_USER_VIEW);
     await persist(undefined, undefined, undefined, undefined, undefined, ALL_USER_VIEW, "work");
     closeMarketingBulkUpdateModal();
@@ -5253,7 +5478,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   };
 
   const filteredMarketingItems = useMemo(() => {
-    let list = scopedMarketingItems;
+    let list = groupScopedMarketingItems;
     if (search.trim()) {
       const q = search.trim().toLowerCase();
       list = list.filter(item =>
@@ -5278,7 +5503,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       if (aDue !== bDue) return aDue.localeCompare(bDue);
       return String(b.updatedAt || "").localeCompare(String(a.updatedAt || ""));
     });
-  }, [scopedMarketingItems, search, marketingStatusFilter, marketingCampaignFilter, marketingTrafficFilter]);
+  }, [groupScopedMarketingItems, search, marketingStatusFilter, marketingCampaignFilter, marketingTrafficFilter]);
 
   const marketingQueue = useMemo(() => {
     const today = todayISO();
@@ -7039,7 +7264,7 @@ Requirements:
     const greetingHour = clockNow.getHours();
     const greetingLabel = greetingHour < 12 ? "Good morning" : greetingHour < 18 ? "Good afternoon" : "Good evening";
     const greetingName = (currentActor || "Team").split("@")[0];
-    const marketingSummary = summarizeMarketingItems(scopedMarketingItems, operationalTodayISOFor(clockNow));
+    const marketingSummary = summarizeMarketingItems(groupScopedMarketingItems, operationalTodayISOFor(clockNow));
     const projectDateLabel = clockNow.toLocaleString("en-US", {
       weekday: "short",
       month: "short",
@@ -7123,11 +7348,14 @@ Requirements:
       { label: "Contacted", value: contactedCount },
       { label: "Live", value: stCounts.live || 0 },
     ];
-    const marketingScopeLabel = effectiveMarketingOwnerFilter === "all"
+    const marketingScopeBaseLabel = effectiveMarketingOwnerFilter === "all"
       ? "All assignments"
       : !effectiveMarketingOwnerFilter
         ? "Unassigned assignments only"
         : `${effectiveMarketingOwnerFilter}'s assignments only`;
+    const marketingScopeLabel = activeMarketingGroup
+      ? `${marketingScopeBaseLabel} · ${activeMarketingGroup.name}`
+      : marketingScopeBaseLabel;
     const sidebarUtilityCards = isMarketingProject ? [
       { label: "Campaigns", value: marketingSummary.campaigns, tone: C.tx },
       { label: "Due soon", value: marketingSummary.dueSoon, tone: marketingSummary.dueSoon ? C.ab : C.tx },
@@ -7318,6 +7546,18 @@ Requirements:
                     <>
                       <button onClick={() => openMarketingItemModal(null)} style={{ ...actionBtn(true, "good"), ...lockStyle(isReadOnly) }}>+ Campaign Assignment</button>
                       <button onClick={openMarketingBulkUpdateModal} style={{ ...actionBtn(false, "accent"), ...lockStyle(isReadOnly) }}>Bulk Update</button>
+                      <button onClick={() => setMarketingSelectionMode(prev => !prev)} style={{ ...actionBtn(marketingSelectionMode, "neutral"), ...lockStyle(isReadOnly) }}>
+                        {marketingSelectionMode ? "Done Selecting" : "Select Assignments"}
+                      </button>
+                      {(marketingSelectionMode || selectedMarketingIds.size > 0) && (
+                        <>
+                          <button onClick={selectVisibleMarketingItems} style={{ ...actionBtn(false, "neutral"), ...lockStyle(isReadOnly) }}>Select Visible</button>
+                          <button onClick={clearMarketingSelection} style={{ ...actionBtn(false, "neutral"), ...lockStyle(isReadOnly) }}>Clear Selection</button>
+                          <button onClick={saveMarketingGroupSelection} style={{ ...actionBtn(false, "accent"), ...lockStyle(isReadOnly || !selectedMarketingIds.size) }}>Save Group</button>
+                          <button onClick={copyMarketingBccEmails} style={{ ...actionBtn(false, "neutral"), ...lockStyle(isReadOnly || !marketingSelectedEmails.length) }}>Copy BCC</button>
+                          <button onClick={openMarketingBccDraft} style={{ ...actionBtn(false, "neutral"), ...lockStyle(isReadOnly || !marketingSelectedEmails.length) }}>Open Gmail Draft</button>
+                        </>
+                      )}
                       <label style={{ ...actionBtn(false, "neutral"), ...lockStyle(isReadOnly) }}>
                         Import Talent CSV
                         <input type="file" accept=".csv" ref={fr} onChange={importCSV} disabled={isReadOnly} />
@@ -7776,7 +8016,7 @@ Requirements:
                   ))}
                 </div>
 
-                <div style={{ display: "grid", gridTemplateColumns: "minmax(180px,260px) minmax(180px,260px) auto", gap: 8, alignItems: "center", marginBottom: 8 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "minmax(180px,260px) minmax(180px,260px) minmax(180px,260px) auto", gap: 8, alignItems: "center", marginBottom: 8 }}>
                   <label style={{ fontSize: 11, color: C.tt, display: "grid", gap: 4 }}>
                     <span>Campaign</span>
                     <select
@@ -7804,8 +8044,23 @@ Requirements:
                       {(proj?.teamUsers || DEFAULT_TEAM_USERS).map(u => <option key={u} value={u}>{u}</option>)}
                     </select>
                   </label>
+                  <label style={{ fontSize: 11, color: C.tt, display: "grid", gap: 4 }}>
+                    <span>Group</span>
+                    <select
+                      value={marketingGroupFilter}
+                      onChange={e => setMarketingGroupFilter(e.target.value)}
+                      style={{ ...iS, width: "100%", padding: "8px 10px", fontSize: 12 }}
+                    >
+                      <option value="all">All Groups</option>
+                      {marketingGroupOptions.map(group => (
+                        <option key={group.id} value={group.id}>
+                          {group.name} ({group.assignmentIds.length})
+                        </option>
+                      ))}
+                    </select>
+                  </label>
                   <button onClick={() => setShowProjectMenu(true)} style={{ ...actionBtn(false, "neutral"), alignSelf: "end" }}>
-                    Manage Campaign Bank
+                    {isMarketingProject ? "Campaigns + Groups" : "Settings"}
                   </button>
                 </div>
 
@@ -7821,6 +8076,8 @@ Requirements:
             <div style={{ fontSize: 12, color: C.tt, marginBottom: 12 }}>
               {filteredMarketingItems.length} assignment{filteredMarketingItems.length !== 1 ? "s" : ""} shown
               {marketingSummary.items !== filteredMarketingItems.length ? ` · ${marketingScopeLabel}` : ""}
+              {activeMarketingGroup ? ` · group: ${activeMarketingGroup.name}` : ""}
+              {selectedMarketingIds.size ? ` · ${selectedMarketingIds.size} selected` : ""}
             </div>
 
             {viewMode === "list" && (
@@ -7829,11 +8086,28 @@ Requirements:
                   const tone = marketingStatusTone(item.status, C);
                   const primary = marketingItemPrimaryLabel(item);
                   const titleLabel = marketingItemTitleLabel(item);
+                  const isSelected = selectedMarketingIds.has(item.id);
                   return (
-                    <div key={item.id} onClick={() => openMarketingItemModal(item)} style={{ ...cS, padding: "14px 18px", cursor: "pointer", display: "flex", alignItems: "center", gap: 14, transition: "all 0.15s", animation: `fu 0.2s ease ${Math.min(i, 15) * 0.02}s both` }}>
+                    <div
+                      key={item.id}
+                      onClick={() => marketingSelectionMode ? toggleMarketingSelection(item.id) : openMarketingItemModal(item)}
+                      style={{
+                        ...cS,
+                        padding: "14px 18px",
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 14,
+                        transition: "all 0.15s",
+                        animation: `fu 0.2s ease ${Math.min(i, 15) * 0.02}s both`,
+                        borderColor: isSelected ? C.ac : C.bd,
+                        background: isSelected ? C.al : C.sf,
+                      }}
+                    >
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                           <span style={{ fontSize: 14, fontWeight: 700 }}>{primary}</span>
+                          {marketingSelectionMode && <span style={{ ...mkP(true, isSelected ? C.ac : C.tt, isSelected ? C.al : C.sa), cursor: "pointer" }}>{isSelected ? "Selected" : "Select"}</span>}
                           <span style={{ ...mkP(true, tone.tone, tone.bg), cursor: "pointer" }}>{MM[item.status]?.label}</span>
                           <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 12, background: C.sa, color: C.ts, border: `1px solid ${C.bd}` }}>{item.talentType}</span>
                           <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 12, background: C.sa, color: item.owner ? C.ts : C.rd, border: `1px solid ${C.bd}` }}>{item.owner || "Unassigned"}</span>
@@ -7874,8 +8148,25 @@ Requirements:
                       </div>
                       <div style={{ display: "grid", gap: 8 }}>
                         {col.map(item => (
-                          <button key={item.id} onClick={() => openMarketingItemModal(item)} style={{ ...cS, padding: "12px 14px", textAlign: "left", cursor: "pointer", fontFamily: ft }}>
+                          <button
+                            key={item.id}
+                            onClick={() => marketingSelectionMode ? toggleMarketingSelection(item.id) : openMarketingItemModal(item)}
+                            style={{
+                              ...cS,
+                              padding: "12px 14px",
+                              textAlign: "left",
+                              cursor: "pointer",
+                              fontFamily: ft,
+                              borderColor: selectedMarketingIds.has(item.id) ? C.ac : C.bd,
+                              background: selectedMarketingIds.has(item.id) ? C.al : C.sf,
+                            }}
+                          >
                             <div style={{ fontSize: 13, fontWeight: 700, color: C.tx, marginBottom: 4 }}>{marketingItemPrimaryLabel(item)}</div>
+                            {marketingSelectionMode && (
+                              <div style={{ fontSize: 10, marginBottom: 5, color: selectedMarketingIds.has(item.id) ? C.ac : C.tt }}>
+                                {selectedMarketingIds.has(item.id) ? "Selected" : "Click to select"}
+                              </div>
+                            )}
                             <div style={{ fontSize: 11, color: C.ts }}>{item.talentType} · {marketingCampaignsLabel(item)} · {item.trafficType} · {marketingChannelsLabel(item)}</div>
                             {marketingItemTitleLabel(item) && <div style={{ fontSize: 11, color: C.tt, marginTop: 5 }}>{marketingItemTitleLabel(item)}</div>}
                             {item.status === "rejected" && item.rejectedReason && (
@@ -7906,7 +8197,11 @@ Requirements:
                       {filteredMarketingItems.map(item => {
                         const tone = marketingStatusTone(item.status, C);
                         return (
-                          <tr key={item.id} onClick={() => openMarketingItemModal(item)} style={{ cursor: "pointer" }}>
+                          <tr
+                            key={item.id}
+                            onClick={() => marketingSelectionMode ? toggleMarketingSelection(item.id) : openMarketingItemModal(item)}
+                            style={{ cursor: "pointer", background: selectedMarketingIds.has(item.id) ? C.al : "transparent" }}
+                          >
                             <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, fontWeight: 700 }}>{marketingItemPrimaryLabel(item)}</td>
                             <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>{item.talentType}</td>
                             <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>{marketingItemTitleLabel(item) || "—"}</td>
@@ -8510,6 +8805,37 @@ Requirements:
                       </div>
                     ) : (
                       <div style={{ fontSize: 12, color: C.ts }}>No campaigns saved yet.</div>
+                    )}
+                  </div>
+                )}
+
+                {isMarketingProject && (
+                  <div style={{ ...cS, boxShadow: "none", padding: "14px 16px", background: C.sa }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>Saved Groups</div>
+                    <div style={{ fontSize: 11, color: C.tt, lineHeight: 1.5, marginBottom: 10 }}>
+                      Use selection mode in the campaign board to save reusable outreach or review groups for BCC and batch work.
+                    </div>
+                    {marketingGroupOptions.length ? (
+                      <div style={{ display: "grid", gap: 8 }}>
+                        {marketingGroupOptions.map(group => (
+                          <div key={group.id} style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", padding: "10px 12px", borderRadius: 12, border: `1px solid ${marketingGroupFilter === group.id ? C.ac : C.bd}`, background: marketingGroupFilter === group.id ? C.al : C.sf }}>
+                            <div style={{ minWidth: 0 }}>
+                              <div style={{ fontSize: 12, fontWeight: 700, color: C.tx }}>{group.name}</div>
+                              <div style={{ fontSize: 11, color: C.ts }}>{group.assignmentIds.length} assignment{group.assignmentIds.length === 1 ? "" : "s"}</div>
+                            </div>
+                            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                              <button onClick={() => setMarketingGroupFilter(group.id)} style={actionBtn(marketingGroupFilter === group.id, "neutral")}>
+                                Use
+                              </button>
+                              <button disabled={!canEdit} onClick={() => removeMarketingGroup(group.id)} style={{ ...actionBtn(false, "danger"), ...lockStyle(!canEdit) }}>
+                                Delete
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div style={{ fontSize: 12, color: C.ts }}>No saved groups yet. Select assignments from the board to create one.</div>
                     )}
                   </div>
                 )}
