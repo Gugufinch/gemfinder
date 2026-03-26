@@ -5011,6 +5011,20 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
           {projects.map((p, i) => {
             const projectTypeLabel = normalizeProjectType(p.type) === "marketing" ? "Marketing" : "A&R";
             const summary = summarizeProjectForHub(p, todayISO());
+            const hubTone = tone => {
+              switch (tone) {
+                case "accent":
+                  return [C.ac, C.al];
+                case "good":
+                  return [C.gn, C.gb];
+                case "live":
+                  return [C.lv, C.lvb];
+                case "warn":
+                  return [C.ab, C.abb];
+                default:
+                  return [C.tx, C.sa];
+              }
+            };
             const seqDue = normalizeProjectType(p.type) === "marketing"
               ? summarizeMarketingItems(p.marketingItems || [], todayISO()).overdue + summarizeMarketingItems(p.marketingItems || [], todayISO()).dueSoon
               : Object.values(p.sequenceState || {}).filter(ss => ss?.status === "active" && ss.nextDue && ss.nextDue <= todayISO()).length;
@@ -5030,15 +5044,29 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                   </div>
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10, marginBottom: 12 }}>
-                  {summary.map(([label, value, tone, bg]) => (
-                    <div key={label} style={{ borderRadius: 12, border: `1px solid ${C.bd}`, background: bg, padding: "10px 12px" }}>
+                  {(summary.cards || []).map(([label, value, tone]) => {
+                    const [toneColor, toneBg] = hubTone(tone);
+                    return (
+                    <div key={label} style={{ borderRadius: 12, border: `1px solid ${C.bd}`, background: toneBg, padding: "10px 12px" }}>
                       <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 1, color: C.tt, marginBottom: 6 }}>{label}</div>
-                      <div style={{ fontSize: 20, fontWeight: 800, color: tone, lineHeight: 1 }}>{value}</div>
+                      <div style={{ fontSize: 20, fontWeight: 800, color: toneColor, lineHeight: 1 }}>{value}</div>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
-                <div style={{ display: "flex", justifyContent: "space-between", marginTop: 10 }}>
-                  <span style={{ fontSize: 11, color: C.tt }}>Created {sD(p.created)}</span>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8, marginTop: 10 }}>
+                  <div style={{ display: "grid", gap: 6 }}>
+                    <span style={{ fontSize: 11, color: C.tt }}>Created {sD(p.created)}</span>
+                    {!!summary.badges?.length && (
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        {summary.badges.map((badge, index) => (
+                          <span key={`${p.id}-badge-${index}`} style={{ ...mkP(true, C.tt, C.sa), fontSize: 10, cursor: "default" }}>
+                            {badge}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                   <button onClick={e => {
                     e.stopPropagation();
                     if (!requireEditor()) return;
