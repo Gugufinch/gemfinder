@@ -452,6 +452,53 @@ function marketingImportKey(item) {
     String(item.email || "").toLowerCase(),
   ].join("::");
 }
+function mergeMarketingImportedItem(existingItem, importedItem, teamUsers = DEFAULT_TEAM_USERS) {
+  const existing = normalizeMarketingItem(existingItem, teamUsers);
+  const incoming = normalizeMarketingItem(importedItem, teamUsers);
+  const mergedCampaigns = normalizeMarketingCampaigns([...(existing.campaigns || []), ...(incoming.campaigns || [])]);
+  const mergedChannels = normalizeMarketingChannels([...(existing.channels || []), ...(incoming.channels || [])]);
+  const chooseEnriched = (current, next) => String(next || "").trim() || String(current || "").trim();
+  const chooseOperational = (current, next) => String(current || "").trim() || String(next || "").trim();
+  const nextTrafficType = existing.trafficType && existing.trafficType !== "Organic"
+    ? existing.trafficType
+    : (incoming.trafficType || existing.trafficType || "Organic");
+  const nextDeliverableType = existing.deliverableType && existing.deliverableType !== "UGC"
+    ? existing.deliverableType
+    : (incoming.deliverableType || existing.deliverableType || "UGC");
+  const merged = normalizeMarketingItem({
+    ...existing,
+    id: existing.id,
+    createdAt: existing.createdAt,
+    updatedAt: new Date().toISOString(),
+    talentName: chooseOperational(existing.talentName, incoming.talentName),
+    talentType: chooseOperational(existing.talentType, incoming.talentType),
+    title: chooseOperational(existing.title, incoming.title),
+    campaigns: mergedCampaigns,
+    campaign: mergedCampaigns[0] || "",
+    trafficType: nextTrafficType,
+    channels: mergedChannels,
+    channel: mergedChannels[0] || "",
+    deliverableType: nextDeliverableType,
+    status: existing.status || incoming.status,
+    owner: chooseOperational(existing.owner, incoming.owner),
+    dueDate: chooseOperational(existing.dueDate, incoming.dueDate),
+    email: chooseEnriched(existing.email, incoming.email),
+    instagramUrl: chooseEnriched(existing.instagramUrl, incoming.instagramUrl),
+    instagramHandle: chooseEnriched(existing.instagramHandle, incoming.instagramHandle),
+    instagramFollowers: chooseEnriched(existing.instagramFollowers, incoming.instagramFollowers),
+    tiktokUrl: chooseEnriched(existing.tiktokUrl, incoming.tiktokUrl),
+    tiktokHandle: chooseEnriched(existing.tiktokHandle, incoming.tiktokHandle),
+    tiktokFollowers: chooseEnriched(existing.tiktokFollowers, incoming.tiktokFollowers),
+    spotifyUrl: chooseEnriched(existing.spotifyUrl, incoming.spotifyUrl),
+    spotifyMonthlyListeners: chooseEnriched(existing.spotifyMonthlyListeners, incoming.spotifyMonthlyListeners),
+    briefUrl: chooseEnriched(existing.briefUrl, incoming.briefUrl),
+    contentUrl: chooseEnriched(existing.contentUrl, incoming.contentUrl),
+    notes: chooseOperational(existing.notes, incoming.notes),
+    rejectedReason: chooseOperational(existing.rejectedReason, incoming.rejectedReason),
+  }, teamUsers);
+  const changed = JSON.stringify(merged) !== JSON.stringify(existing);
+  return { merged, changed };
+}
 function csvRowValue(row, headers, aliases = []) {
   for (const alias of aliases) {
     const match = headers.find(key => key === alias || key.replace(/[^a-z0-9]/g, "") === alias.replace(/[^a-z0-9]/g, ""));
@@ -3508,7 +3555,14 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     }
     const nextProj = { ...proj, type: normalized };
     await saveProject(nextProj);
-    if (normalized === "marketing" && projectMode === "inbox") setProjectMode("work");
+    if (normalized === "marketing") {
+      if (projectMode === "inbox") setProjectMode("work");
+      setMarketingStatusFilter("all");
+      setMarketingCampaignFilter("all");
+      setMarketingTrafficFilter("all");
+      setMarketingOwnerFilter("all");
+      changeWorkspaceUser(ALL_USER_VIEW);
+    }
     flash(`Project set to ${normalized === "marketing" ? "Marketing" : "A&R"}`);
   };
 
@@ -3751,12 +3805,32 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     if (isMarketingProject) {
       const parsed = parseMarketingCSV(t, proj.teamUsers || DEFAULT_TEAM_USERS);
       if (!parsed.length) { flash("No valid talent assignments found in CSV", "err"); e.target.value = ""; return; }
-      const existing = proj.marketingItems || [];
-      const existingKeys = new Set(existing.map(item => marketingImportKey(normalizeMarketingItem(item, proj.teamUsers || DEFAULT_TEAM_USERS))));
-      const nextItems = parsed.filter(item => !existingKeys.has(marketingImportKey(item)));
+      const existing = (proj.marketingItems || []).map(item => normalizeMarketingItem(item, proj.teamUsers || DEFAULT_TEAM_USERS));
+      const nextItems = [...existing];
+      const keyToIndex = new Map();
+      nextItems.forEach((item, index) => {
+        keyToIndex.set(marketingImportKey(item), index);
+      });
+      let createdCount = 0;
+      let refreshedCount = 0;
+      let unchangedCount = 0;
+      parsed.forEach(item => {
+        const key = marketingImportKey(item);
+        const existingIndex = keyToIndex.get(key);
+        if (typeof existingIndex === "number") {
+          const { merged, changed } = mergeMarketingImportedItem(nextItems[existingIndex], item, proj.teamUsers || DEFAULT_TEAM_USERS);
+          nextItems[existingIndex] = merged;
+          if (changed) refreshedCount += 1;
+          else unchangedCount += 1;
+          return;
+        }
+        nextItems.push(item);
+        keyToIndex.set(key, nextItems.length - 1);
+        createdCount += 1;
+      });
       const nextProj = {
         ...proj,
-        marketingItems: [...existing, ...nextItems],
+        marketingItems: nextItems,
         settings: {
           ...(proj.settings || {}),
           marketingCampaignBank: normalizeMarketingCampaignBank([
@@ -3766,7 +3840,13 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         },
       };
       await saveProject(nextProj);
-      flash(`Merged ${nextItems.length} new talent assignments · ${parsed.length - nextItems.length} duplicates skipped`);
+      setSearch("");
+      setMarketingStatusFilter("all");
+      setMarketingCampaignFilter("all");
+      setMarketingTrafficFilter("all");
+      setMarketingOwnerFilter("all");
+      changeWorkspaceUser(ALL_USER_VIEW);
+      flash(`Imported ${parsed.length} rows · ${createdCount} new · ${refreshedCount} updated · ${unchangedCount} unchanged`);
     } else {
       const p = parseCSV(t);
       if (!p.length) { flash("No valid artists", "err"); return; }
@@ -5423,7 +5503,25 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
               ? summarizeMarketingItems(p.marketingItems || [], todayISO()).overdue + summarizeMarketingItems(p.marketingItems || [], todayISO()).dueSoon
               : Object.values(p.sequenceState || {}).filter(ss => ss?.status === "active" && ss.nextDue && ss.nextDue <= todayISO()).length;
             return (
-              <div key={p.id} onClick={() => { setApId(p.id); setScreen("project"); setSearch(""); setGf("All"); setSf("all"); setPf("all"); setOwnerFilter("__view__"); setMarketingStatusFilter("all"); setMarketingCampaignFilter("all"); setMarketingTrafficFilter("all"); setMarketingOwnerFilter("__view__"); persist(projects, p.id); }}
+              <div key={p.id} onClick={() => {
+                const nextType = normalizeProjectType(p.type);
+                setApId(p.id);
+                setScreen("project");
+                setSearch("");
+                setGf("All");
+                setSf("all");
+                setPf("all");
+                setOwnerFilter("__view__");
+                setMarketingStatusFilter("all");
+                setMarketingCampaignFilter("all");
+                setMarketingTrafficFilter("all");
+                setMarketingOwnerFilter(nextType === "marketing" ? "all" : "__view__");
+                if (nextType === "marketing") {
+                  setProjectMode("work");
+                  changeWorkspaceUser(ALL_USER_VIEW);
+                }
+                persist(projects, p.id);
+              }}
                 style={{ ...cS, padding: "22px 24px", cursor: "pointer", transition: "all 0.2s", animation: `fu 0.3s ease ${i * 0.06}s both`, background: dark ? "linear-gradient(180deg, #111a2b 0%, #0f1729 100%)" : "linear-gradient(180deg, #ffffff 0%, #f8fbff 100%)" }}
                 onMouseEnter={e => { e.currentTarget.style.borderColor = C.ac; e.currentTarget.style.boxShadow = C.sm; }}
                 onMouseLeave={e => { e.currentTarget.style.borderColor = C.bd; e.currentTarget.style.boxShadow = C.sw; }}>
@@ -7379,7 +7477,7 @@ Requirements:
                     </select>
                   </label>
                   <button onClick={() => setShowProjectMenu(true)} style={{ ...actionBtn(false, "neutral"), alignSelf: "end" }}>
-                    Open Campaign Bank
+                    Manage Campaign Bank
                   </button>
                 </div>
 
