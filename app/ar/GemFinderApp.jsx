@@ -22,6 +22,7 @@ const PROJECT_TYPES = [
   { id: "marketing", label: "Marketing" },
 ];
 const MARKETING_STATUSES = [
+  { id: "prospect", label: "Prospect", icon: "◎", description: "Talent is identified for the campaign but has not replied yet." },
   { id: "interested", label: "Interested", icon: "◆", description: "They replied about the opportunity." },
   { id: "creating", label: "Creating", icon: "✦", description: "They accepted and are making the content." },
   { id: "reviewing", label: "Reviewing", icon: "◌", description: "The content is in review with the team." },
@@ -29,6 +30,7 @@ const MARKETING_STATUSES = [
   { id: "complete", label: "Complete", icon: "✓", description: "The deliverable is complete." },
   { id: "rejected", label: "Rejected", icon: "✕", description: "The talent passed on the opportunity." },
 ];
+const MARKETING_DELIVERABLE_TYPES = ["UGC", "VO", "MIXED"];
 const MM = Object.fromEntries(MARKETING_STATUSES.map(s => [s.id, s]));
 const VALID_MARKETING_STATUS_IDS = new Set(MARKETING_STATUSES.map(s => s.id));
 const VALID_STAGE_IDS = new Set(STAGES.map(s => s.id));
@@ -49,17 +51,22 @@ function emptyMarketingForm() {
     talentName: "",
     talentType: "Internal Artist",
     title: "",
-    campaigns: [],
+    campaign: "",
     trafficType: "Organic",
     channels: ["Instagram"],
-    deliverableType: "",
-    status: "interested",
+    deliverableType: "UGC",
+    status: "prospect",
     owner: "",
     dueDate: "",
     email: "",
     instagramHandle: "",
+    instagramUrl: "",
+    instagramFollowers: "",
     tiktokHandle: "",
+    tiktokUrl: "",
+    tiktokFollowers: "",
     spotifyUrl: "",
+    spotifyMonthlyListeners: "",
     briefUrl: "",
     contentUrl: "",
     notes: "",
@@ -317,7 +324,7 @@ function normalizeProjectType(type) {
 }
 function normalizeMarketingStatus(status) {
   const normalized = String(status || "").toLowerCase();
-  return VALID_MARKETING_STATUS_IDS.has(normalized) ? normalized : "interested";
+  return VALID_MARKETING_STATUS_IDS.has(normalized) ? normalized : "prospect";
 }
 function parseCSVGrid(text) {
   const rows = [];
@@ -410,6 +417,15 @@ function marketingCampaignsLabel(item) {
   const campaigns = Array.isArray(item?.campaigns) ? item.campaigns : [];
   return campaigns.length ? campaigns.join(", ") : "No campaign";
 }
+function normalizeFollowerCount(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const digits = raw.replace(/[^\d.]/g, "");
+  if (!digits) return "";
+  const parsed = Number(digits);
+  if (!Number.isFinite(parsed)) return "";
+  return String(Math.round(parsed));
+}
 function marketingShowsDue(item) {
   return item?.status !== "complete" && item?.status !== "rejected";
 }
@@ -469,31 +485,43 @@ function parseMarketingCSV(text, teamUsers = DEFAULT_TEAM_USERS) {
     const trafficValue = csvRowValue(row, headers, ["traffictype", "traffic_type", "traffic", "paidorganic", "paid_organic"]);
     const statusValue = csvRowValue(row, headers, ["status", "campaignstatus", "campaign_status", "artiststatus", "artist_status"]);
     const talentTypeValue = csvRowValue(row, headers, ["talenttype", "talent_type", "artisttype", "artist_type", "type"]);
-    const item = normalizeMarketingItem({
+    const commonFields = {
       talentName,
       talentType: MARKETING_TALENT_TYPES.find(type => type.toLowerCase() === String(talentTypeValue || "").toLowerCase()) || "Internal Artist",
       title: csvRowValue(row, headers, ["title", "deliverabletitle", "deliverable_title", "contenttitle", "content_title", "deliverable", "assettitle", "asset_title"]).trim(),
-      campaigns,
       trafficType: MARKETING_TRAFFIC_TYPES.find(type => type.toLowerCase() === String(trafficValue || "").toLowerCase()) || "Organic",
       channels,
-      deliverableType: csvRowValue(row, headers, ["deliverabletype", "deliverable_type", "contenttype", "content_type", "assettype", "asset_type", "format"]).trim(),
+      deliverableType: csvRowValue(row, headers, ["deliverabletype", "deliverable_type", "contenttype", "content_type", "assettype", "asset_type", "format"]).trim() || "UGC",
       status: normalizeMarketingStatus(statusValue),
       owner: teamUsers.includes(csvRowValue(row, headers, ["owner", "internaluser", "internal_user", "assignee"]).trim())
         ? csvRowValue(row, headers, ["owner", "internaluser", "internal_user", "assignee"]).trim()
         : "",
       dueDate: csvRowValue(row, headers, ["duedate", "due_date", "due", "deadline"]).trim(),
       email: email.includes("@") ? email : "",
+      instagramUrl: /instagram\.com/i.test(instagramValue) ? instagramValue.trim() : "",
       instagramHandle: normalizeSocialHandle(instagramValue),
+      instagramFollowers: normalizeFollowerCount(csvRowValue(row, headers, ["instagramfollowers", "instagram_followers", "igfollowers", "ig_followers"])),
+      tiktokUrl: /tiktok\.com/i.test(tiktokValue) ? tiktokValue.trim() : "",
       tiktokHandle: normalizeSocialHandle(tiktokValue),
+      tiktokFollowers: normalizeFollowerCount(csvRowValue(row, headers, ["tiktokfollowers", "tiktok_followers"])),
       spotifyUrl: /spotify\.com/i.test(spotifyValue) ? spotifyValue.trim() : "",
+      spotifyMonthlyListeners: normalizeFollowerCount(csvRowValue(row, headers, ["spotifymonthlylisteners", "spotify_monthly_listeners", "monthlylisteners", "monthly_listeners"])),
       briefUrl: csvRowValue(row, headers, ["briefurl", "brief_url", "brieflink", "brief_link"]).trim(),
       contentUrl: csvRowValue(row, headers, ["contenturl", "content_url", "contentlink", "content_link", "asseturl", "asset_url", "posturl", "post_url", "videourl", "video_url", "photourl", "photo_url"]).trim(),
       notes: csvRowValue(row, headers, ["notes", "note", "description", "briefnotes", "brief_notes"]).trim(),
-    }, teamUsers);
-    const key = marketingImportKey(item);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    records.push(item);
+    };
+    const campaignBuckets = campaigns.length ? campaigns : [""];
+    campaignBuckets.forEach(campaign => {
+      const item = normalizeMarketingItem({
+        ...commonFields,
+        campaign,
+        campaigns: campaign ? [campaign] : [],
+      }, teamUsers);
+      const key = marketingImportKey(item);
+      if (seen.has(key)) return;
+      seen.add(key);
+      records.push(item);
+    });
   }
   return records;
 }
@@ -507,10 +535,13 @@ function normalizeMarketingItem(item, teamUsers = DEFAULT_TEAM_USERS) {
     item?.title ||
     ""
   ).trim();
-  const deliverableType = String(item?.deliverableType || "").trim();
+  const deliverableRaw = String(item?.deliverableType || "").trim().toUpperCase();
+  const deliverableType = MARKETING_DELIVERABLE_TYPES.includes(deliverableRaw) ? deliverableRaw : "UGC";
   const channels = normalizeMarketingChannels(item?.channels?.length ? item.channels : item?.channel || "");
   const campaigns = normalizeMarketingCampaigns(item?.campaigns?.length ? item.campaigns : item?.campaign || "");
   const title = String(item?.title || item?.contentTitle || "").trim() || [talentName, campaigns[0] || deliverableType].filter(Boolean).join(" · ");
+  const instagramUrl = String(item?.instagramUrl || item?.instagramURL || "").trim();
+  const tiktokUrl = String(item?.tiktokUrl || item?.tiktokURL || "").trim();
   return {
     id: String(item?.id || `mkt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`),
     talentName,
@@ -526,9 +557,14 @@ function normalizeMarketingItem(item, teamUsers = DEFAULT_TEAM_USERS) {
     owner: teamUsers.includes(String(item?.owner || "")) ? String(item.owner) : String(item?.owner || ""),
     dueDate: String(item?.dueDate || ""),
     email: String(item?.email || "").trim(),
-    instagramHandle: normalizeSocialHandle(item?.instagramHandle || item?.instagram || ""),
-    tiktokHandle: normalizeSocialHandle(item?.tiktokHandle || item?.tiktok || ""),
+    instagramHandle: normalizeSocialHandle(item?.instagramHandle || item?.instagram || instagramUrl || ""),
+    instagramUrl,
+    instagramFollowers: normalizeFollowerCount(item?.instagramFollowers || item?.igFollowers || item?.instagram_followers || ""),
+    tiktokHandle: normalizeSocialHandle(item?.tiktokHandle || item?.tiktok || tiktokUrl || ""),
+    tiktokUrl,
+    tiktokFollowers: normalizeFollowerCount(item?.tiktokFollowers || item?.tiktok_followers || ""),
     spotifyUrl: String(item?.spotifyUrl || "").trim(),
+    spotifyMonthlyListeners: normalizeFollowerCount(item?.spotifyMonthlyListeners || item?.monthlyListeners || item?.spotify_monthly_listeners || ""),
     briefUrl: String(item?.briefUrl || "").trim(),
     contentUrl: String(item?.contentUrl || "").trim(),
     notes: String(item?.notes || "").trim(),
@@ -577,6 +613,8 @@ function matchesMarketingStatusFilter(status, filterId) {
 }
 function marketingStatusTone(status, C) {
   switch (status) {
+    case "prospect":
+      return { fg: C.tt, bg: C.sa, border: `${C.bd}` };
     case "interested":
       return { fg: C.ac, bg: C.al, border: `${C.ac}33` };
     case "creating":
@@ -597,6 +635,7 @@ function marketingStatusTone(status, C) {
 function summarizeMarketingItems(items = [], today = todayISO()) {
   const summary = {
     items: items.length,
+    prospect: 0,
     interested: 0,
     creating: 0,
     reviewing: 0,
@@ -632,7 +671,7 @@ function summarizeProjectForHub(project, today = todayISO()) {
       title: "Marketing",
       cards: [
         ["Assignments", mk.items, "neutral"],
-        ["Interested", mk.interested, "accent"],
+        ["Prospect", mk.prospect, "accent"],
         ["In Progress", mk.creating + mk.reviewing + mk.revising, "good"],
         ["Complete", mk.complete, "live"],
       ],
@@ -2118,7 +2157,7 @@ function normalizeSocialHandle(value) {
   if (!raw) return "";
   const withoutUrl = raw
     .replace(/^https?:\/\/(www\.)?instagram\.com\//i, "")
-    .replace(/^https?:\/\/(www\.)?tiktok\.com\/@/i, "")
+    .replace(/^https?:\/\/(www\.)?tiktok\.com\//i, "")
     .replace(/^https?:\/\/(www\.)?x\.com\//i, "")
     .replace(/^https?:\/\/(www\.)?twitter\.com\//i, "");
   return withoutUrl.replace(/^@/, "").replace(/\/.*$/, "").trim();
@@ -2228,7 +2267,7 @@ function exportMarketingItems(proj) {
     "Talent Name",
     "Talent Type",
     "Title",
-    "Campaigns",
+    "Campaign",
     "Traffic Type",
     "Channels",
     "Deliverable Type",
@@ -2237,9 +2276,14 @@ function exportMarketingItems(proj) {
     "Owner",
     "Due Date",
     "Email",
-    "Instagram",
-    "TikTok",
+    "Instagram URL",
+    "Instagram Handle",
+    "Instagram Followers",
+    "TikTok URL",
+    "TikTok Handle",
+    "TikTok Followers",
     "Spotify URL",
+    "Spotify Monthly Listeners",
     "Brief URL",
     "Content URL",
     "Notes",
@@ -2251,7 +2295,7 @@ function exportMarketingItems(proj) {
       normalized.talentName,
       normalized.talentType,
       normalized.title,
-      (normalized.campaigns || []).join(" | "),
+      normalized.campaign || "",
       normalized.trafficType,
       (normalized.channels || []).join(" | "),
       normalized.deliverableType,
@@ -2260,9 +2304,14 @@ function exportMarketingItems(proj) {
       normalized.owner,
       normalized.dueDate,
       normalized.email,
+      normalized.instagramUrl,
       normalized.instagramHandle ? `@${normalized.instagramHandle}` : "",
+      normalized.instagramFollowers,
+      normalized.tiktokUrl,
       normalized.tiktokHandle ? `@${normalized.tiktokHandle}` : "",
+      normalized.tiktokFollowers,
       normalized.spotifyUrl,
+      normalized.spotifyMonthlyListeners,
       normalized.briefUrl,
       normalized.contentUrl,
       normalized.notes.replace(/,/g, ";"),
@@ -2635,17 +2684,22 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         talentName: item.talentName || item.title || "",
         talentType: item.talentType || "Internal Artist",
         title: item.title || "",
-        campaigns: Array.isArray(item.campaigns) ? item.campaigns : normalizeMarketingCampaigns(item.campaign || ""),
+        campaign: item.campaign || (Array.isArray(item.campaigns) ? item.campaigns[0] || "" : ""),
         trafficType: item.trafficType || "Organic",
         channels: Array.isArray(item.channels) && item.channels.length ? item.channels : normalizeMarketingChannels(item.channel || ""),
-        deliverableType: item.deliverableType || "",
-        status: item.status || "interested",
+        deliverableType: item.deliverableType || "UGC",
+        status: item.status || "prospect",
         owner: item.owner || "",
         dueDate: item.dueDate || "",
         email: item.email || "",
         instagramHandle: item.instagramHandle || "",
+        instagramUrl: item.instagramUrl || "",
+        instagramFollowers: item.instagramFollowers || "",
         tiktokHandle: item.tiktokHandle || "",
+        tiktokUrl: item.tiktokUrl || "",
+        tiktokFollowers: item.tiktokFollowers || "",
         spotifyUrl: item.spotifyUrl || "",
+        spotifyMonthlyListeners: item.spotifyMonthlyListeners || "",
         briefUrl: item.briefUrl || "",
         contentUrl: item.contentUrl || "",
         notes: item.notes || "",
@@ -3786,7 +3840,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       flash("Talent name is required", "err");
       return;
     }
-    const normalizedCampaigns = normalizeMarketingCampaigns(marketingForm.campaigns);
+    const normalizedCampaigns = normalizeMarketingCampaigns(marketingForm.campaign);
     const normalizedChannels = normalizeMarketingChannels(marketingForm.channels);
     const title = marketingForm.title.trim() || [talentName, normalizedCampaigns[0] || marketingForm.deliverableType.trim()].filter(Boolean).join(" · ");
     if (marketingForm.status === "rejected" && !marketingForm.rejectedReason.trim()) {
@@ -3798,8 +3852,11 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       ...marketingForm,
       id: itemId,
       talentName,
+      campaign: normalizedCampaigns[0] || "",
       campaigns: normalizedCampaigns,
       channels: normalizedChannels,
+      instagramHandle: normalizeSocialHandle(marketingForm.instagramUrl || marketingForm.instagramHandle),
+      tiktokHandle: normalizeSocialHandle(marketingForm.tiktokUrl || marketingForm.tiktokHandle),
       title,
       updatedAt: new Date().toISOString(),
       createdAt: marketingForm.id
@@ -4710,7 +4767,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     if (search.trim()) {
       const q = search.trim().toLowerCase();
       list = list.filter(item =>
-        `${item.talentName} ${item.talentType} ${item.title} ${(item.campaigns || []).join(" ")} ${item.trafficType} ${(item.channels || []).join(" ")} ${item.deliverableType} ${item.owner} ${item.email} ${item.instagramHandle} ${item.tiktokHandle} ${item.spotifyUrl} ${item.notes} ${item.rejectedReason || ""}`.toLowerCase().includes(q)
+        `${item.talentName} ${item.talentType} ${item.title} ${(item.campaigns || []).join(" ")} ${item.trafficType} ${(item.channels || []).join(" ")} ${item.deliverableType} ${item.owner} ${item.email} ${item.instagramHandle} ${item.instagramUrl} ${item.instagramFollowers} ${item.tiktokHandle} ${item.tiktokUrl} ${item.tiktokFollowers} ${item.spotifyUrl} ${item.spotifyMonthlyListeners} ${item.notes} ${item.rejectedReason || ""}`.toLowerCase().includes(q)
       );
     }
     if (marketingStatusFilter !== "all") {
@@ -6544,7 +6601,7 @@ Requirements:
     ];
     const overviewCards = isMarketingProject ? [
       { label: "Assignments", value: marketingSummary.items, tone: C.tx, accent: C.ac, helper: "in this project" },
-      { label: "Interested", value: marketingSummary.interested, tone: C.bu, accent: C.bu, helper: "replied about the opportunity" },
+      { label: "Prospect", value: marketingSummary.prospect, tone: C.tt, accent: C.tt, helper: "uploaded or queued" },
       { label: "In Progress", value: marketingSummary.creating + marketingSummary.reviewing + marketingSummary.revising, tone: C.pr, accent: C.pr, helper: "creating, reviewing, revising" },
       { label: "Complete", value: marketingSummary.complete, tone: C.gn, accent: C.gn, helper: operationalDayLabel },
     ] : [
@@ -6555,7 +6612,7 @@ Requirements:
     ];
     const sidebarQuickStats = isMarketingProject ? [
       { label: "Assignments", value: marketingSummary.items },
-      { label: "Interested", value: marketingSummary.interested },
+      { label: "Prospect", value: marketingSummary.prospect },
       { label: "Complete", value: marketingSummary.complete },
     ] : [
       { label: "Artists", value: enriched.length },
@@ -6738,7 +6795,7 @@ Requirements:
                   <div style={{ fontSize: 12, color: C.ts, lineHeight: 1.6 }}>
                     {isMarketingProject
                       ? (projectMode === "work"
-                        ? "Track talent from interest to completion, keep briefs organized, and keep campaign assets attached to the assignment."
+                        ? "Track talent from prospect to completion, keep briefs organized, and keep campaign assets attached to the assignment."
                         : "Review campaign mix, completion rate, and overdue work without leaving the project.")
                       : (projectMode === "work"
                         ? "Keep the core moves high-signal. Add artists, import CSVs, and move the pipeline forward from here."
@@ -6750,7 +6807,7 @@ Requirements:
                 <div className="gf-project-toolbar-actions">
                   {projectMode === "work" && !isReadOnly && (isMarketingProject ? (
                     <>
-                      <button onClick={() => openMarketingItemModal(null)} style={{ ...actionBtn(true, "good"), ...lockStyle(isReadOnly) }}>+ Talent Assignment</button>
+                      <button onClick={() => openMarketingItemModal(null)} style={{ ...actionBtn(true, "good"), ...lockStyle(isReadOnly) }}>+ Campaign Assignment</button>
                       <label style={{ ...actionBtn(false, "neutral"), ...lockStyle(isReadOnly) }}>
                         Import Talent CSV
                         <input type="file" accept=".csv" ref={fr} onChange={importCSV} disabled={isReadOnly} />
@@ -6930,11 +6987,11 @@ Requirements:
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 10 }}>
                 {[
-                  ["Assignments", marketingSummary.items, "all", "All tracked talent assignments"],
+                  ["Assignments", marketingSummary.items, "all", "All tracked campaign assignments"],
+                  ["Prospect", marketingSummary.prospect, "prospect", "Queued or newly uploaded talent"],
                   ["Interested", marketingSummary.interested, "interested", "Talent who replied about the opportunity"],
                   ["In Progress", marketingSummary.creating + marketingSummary.reviewing + marketingSummary.revising, "__active__", "Creating, reviewing, and revising"],
                   ["Complete", marketingSummary.complete, "complete", "Finished deliverables"],
-                  ["Overdue", marketingSummary.overdue, "__overdue__", "Past due date"],
                   ["Campaigns", marketingSummary.campaigns, "__campaigns__", "Distinct campaign buckets"],
                 ].map(([label, value, filterId, helper]) => (
                   <button
@@ -7243,7 +7300,7 @@ Requirements:
                           <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 12, background: C.sa, color: item.owner ? C.ts : C.rd, border: `1px solid ${C.bd}` }}>{item.owner || "Unassigned"}</span>
                         </div>
                         <div style={{ fontSize: 11, color: C.ts, marginTop: 3, display: "flex", gap: 10, flexWrap: "wrap" }}>
-                          <span>{marketingCampaignsLabel(item)}</span>
+                          <span>{item.campaign || "No campaign"}</span>
                           <span>{item.trafficType}</span>
                           <span>{marketingChannelsLabel(item)}</span>
                           {item.deliverableType && <span>{item.deliverableType}</span>}
@@ -7301,7 +7358,7 @@ Requirements:
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                     <thead style={{ background: C.sa }}>
                       <tr>
-                        {["Talent", "Type", "Title", "Campaigns", "Traffic", "Channels", "Deliverable", "Owner", "Status", "Rejected Reason", "Due", "Links", "Updated"].map(h => (
+                        {["Talent", "Type", "Title", "Campaign", "Traffic", "Channels", "Deliverable", "Owner", "Status", "Rejected Reason", "Due", "Links", "Updated"].map(h => (
                           <th key={h} style={{ textAlign: "left", padding: "10px 12px", color: C.ts, fontSize: 11, borderBottom: `1px solid ${C.bd}` }}>{h}</th>
                         ))}
                       </tr>
@@ -7314,7 +7371,7 @@ Requirements:
                             <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, fontWeight: 700 }}>{marketingItemPrimaryLabel(item)}</td>
                             <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>{item.talentType}</td>
                             <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>{marketingItemTitleLabel(item) || "—"}</td>
-                            <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>{marketingCampaignsLabel(item)}</td>
+                            <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>{item.campaign || "—"}</td>
                             <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>{item.trafficType}</td>
                             <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>{marketingChannelsLabel(item)}</td>
                             <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>{item.deliverableType || "—"}</td>
@@ -8358,7 +8415,7 @@ Requirements:
             <div style={{ background: C.sf, borderRadius: 18, padding: "24px 28px", width: 720, maxWidth: "calc(100vw - 32px)", boxShadow: "0 25px 70px rgba(0,0,0,0.2)", maxHeight: "88vh", overflowY: "auto" }}>
               <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", marginBottom: 12 }}>
                 <div>
-                  <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 6, color: C.tx }}>{marketingForm.id ? "Edit Talent Assignment" : "New Talent Assignment"}</div>
+                  <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 6, color: C.tx }}>{marketingForm.id ? "Edit Campaign Assignment" : "New Campaign Assignment"}</div>
                   <div style={{ fontSize: 12, color: C.ts }}>Track the talent, the campaign, the deliverable, and the links your team needs to move the work.</div>
                 </div>
                 <button onClick={() => { setShowMarketingItemModal(false); resetMarketingForm(); }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: C.ts }}>✕</button>
@@ -8374,9 +8431,14 @@ Requirements:
                     {MARKETING_TALENT_TYPES.map(type => <option key={type} value={type}>{type}</option>)}
                   </select>
                 </label>
-                <input value={marketingForm.deliverableType} onChange={e => setMarketingForm({ ...marketingForm, deliverableType: e.target.value })} placeholder="Deliverable type" style={{ ...iS, width: "100%" }} />
+                <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 4 }}>
+                  <span>Deliverable type</span>
+                  <select value={marketingForm.deliverableType} onChange={e => setMarketingForm({ ...marketingForm, deliverableType: e.target.value })} style={{ ...iS, width: "100%" }}>
+                    {MARKETING_DELIVERABLE_TYPES.map(type => <option key={type} value={type}>{type}</option>)}
+                  </select>
+                </label>
 
-                <input value={(marketingForm.campaigns || []).join(", ")} onChange={e => setMarketingForm({ ...marketingForm, campaigns: normalizeMarketingCampaigns(e.target.value) })} placeholder="Campaigns (comma or semicolon separated)" style={{ ...iS, width: "100%" }} />
+                <input value={marketingForm.campaign} onChange={e => setMarketingForm({ ...marketingForm, campaign: e.target.value })} placeholder="Campaign*" style={{ ...iS, width: "100%" }} />
                 <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 4 }}>
                   <span>Owner</span>
                   <select value={marketingForm.owner} onChange={e => setMarketingForm({ ...marketingForm, owner: e.target.value })} style={{ ...iS, width: "100%" }}>
@@ -8427,10 +8489,15 @@ Requirements:
                   <span>Due date</span>
                   <input type="date" value={marketingForm.dueDate} onChange={e => setMarketingForm({ ...marketingForm, dueDate: e.target.value })} style={{ ...iS, width: "100%" }} />
                 </label>
-                <input value={marketingForm.instagramHandle} onChange={e => setMarketingForm({ ...marketingForm, instagramHandle: normalizeSocialHandle(e.target.value) })} placeholder="Instagram handle" style={{ ...iS, width: "100%" }} />
+                <input value={marketingForm.instagramUrl} onChange={e => setMarketingForm({ ...marketingForm, instagramUrl: e.target.value, instagramHandle: normalizeSocialHandle(e.target.value) })} placeholder="Instagram URL" style={{ ...iS, width: "100%" }} />
 
-                <input value={marketingForm.tiktokHandle} onChange={e => setMarketingForm({ ...marketingForm, tiktokHandle: normalizeSocialHandle(e.target.value) })} placeholder="TikTok handle" style={{ ...iS, width: "100%" }} />
+                <input value={marketingForm.instagramFollowers} onChange={e => setMarketingForm({ ...marketingForm, instagramFollowers: normalizeFollowerCount(e.target.value) })} placeholder="Instagram followers" style={{ ...iS, width: "100%" }} />
+                <input value={marketingForm.tiktokUrl} onChange={e => setMarketingForm({ ...marketingForm, tiktokUrl: e.target.value, tiktokHandle: normalizeSocialHandle(e.target.value) })} placeholder="TikTok URL" style={{ ...iS, width: "100%" }} />
+
+                <input value={marketingForm.tiktokFollowers} onChange={e => setMarketingForm({ ...marketingForm, tiktokFollowers: normalizeFollowerCount(e.target.value) })} placeholder="TikTok followers" style={{ ...iS, width: "100%" }} />
                 <input value={marketingForm.spotifyUrl} onChange={e => setMarketingForm({ ...marketingForm, spotifyUrl: e.target.value })} placeholder="Spotify artist link" style={{ ...iS, width: "100%" }} />
+
+                <input value={marketingForm.spotifyMonthlyListeners} onChange={e => setMarketingForm({ ...marketingForm, spotifyMonthlyListeners: normalizeFollowerCount(e.target.value) })} placeholder="Spotify monthly listeners" style={{ ...iS, width: "100%" }} />
 
                 <input value={marketingForm.briefUrl} onChange={e => setMarketingForm({ ...marketingForm, briefUrl: e.target.value })} placeholder="Brief link" style={{ ...iS, width: "100%" }} />
                 <input value={marketingForm.contentUrl} onChange={e => setMarketingForm({ ...marketingForm, contentUrl: e.target.value })} placeholder="Content link" style={{ ...iS, width: "100%" }} />
@@ -8450,8 +8517,8 @@ Requirements:
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginTop: 18 }}>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                   {marketingForm.email && <a href={`mailto:${marketingForm.email}`} style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Email Talent</a>}
-                  {marketingForm.instagramHandle && <a href={`https://instagram.com/${marketingForm.instagramHandle}`} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Instagram</a>}
-                  {marketingForm.tiktokHandle && <a href={`https://www.tiktok.com/@${marketingForm.tiktokHandle}`} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>TikTok</a>}
+                  {(marketingForm.instagramUrl || marketingForm.instagramHandle) && <a href={marketingForm.instagramUrl || `https://instagram.com/${marketingForm.instagramHandle}`} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Instagram</a>}
+                  {(marketingForm.tiktokUrl || marketingForm.tiktokHandle) && <a href={marketingForm.tiktokUrl || `https://www.tiktok.com/@${marketingForm.tiktokHandle}`} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>TikTok</a>}
                   {marketingForm.spotifyUrl && <a href={marketingForm.spotifyUrl} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Spotify</a>}
                   {marketingForm.briefUrl && <a href={marketingForm.briefUrl} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Open Brief</a>}
                   {marketingForm.contentUrl && <a href={marketingForm.contentUrl} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Open Content</a>}
