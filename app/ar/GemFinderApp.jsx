@@ -27,7 +27,7 @@ const MARKETING_STATUSES = [
   { id: "reviewing", label: "Reviewing", icon: "◌", description: "The content is in review with the team." },
   { id: "revising", label: "Revising", icon: "↺", description: "Changes are being made after review." },
   { id: "complete", label: "Complete", icon: "✓", description: "The deliverable is complete." },
-  { id: "rejected", label: "Rejected", icon: "✕", description: "The artist passed on the opportunity." },
+  { id: "rejected", label: "Rejected", icon: "✕", description: "The talent passed on the opportunity." },
 ];
 const MM = Object.fromEntries(MARKETING_STATUSES.map(s => [s.id, s]));
 const VALID_MARKETING_STATUS_IDS = new Set(MARKETING_STATUSES.map(s => s.id));
@@ -41,17 +41,25 @@ const OPEN_STAGE_IDS = STAGES.map(s => s.id).filter(id => !CLOSED_STAGE_IDS.incl
 const DETAIL_TAB_IDS = new Set(["overview", "outreach", "inbox", "activity"]);
 const MARKETING_TRAFFIC_TYPES = ["Paid", "Organic"];
 const MARKETING_CHANNELS = ["Instagram", "TikTok", "YouTube", "Meta", "X", "Email", "Other"];
+const MARKETING_TALENT_TYPES = ["Internal Artist", "External Artist", "Content Creator", "AI UGC"];
 
 function emptyMarketingForm() {
   return {
     id: "",
+    talentName: "",
+    talentType: "Internal Artist",
     title: "",
     campaign: "",
     trafficType: "Organic",
     channel: "Instagram",
+    deliverableType: "",
     status: "interested",
     owner: "",
     dueDate: "",
+    email: "",
+    instagramHandle: "",
+    tiktokHandle: "",
+    spotifyUrl: "",
     briefUrl: "",
     contentUrl: "",
     notes: "",
@@ -313,15 +321,31 @@ function normalizeMarketingStatus(status) {
 }
 function normalizeMarketingItem(item, teamUsers = DEFAULT_TEAM_USERS) {
   const normalizedStatus = normalizeMarketingStatus(item?.status);
+  const talentName = String(
+    item?.talentName ||
+    item?.artistName ||
+    item?.creatorName ||
+    item?.name ||
+    item?.title ||
+    ""
+  ).trim();
+  const title = String(item?.title || item?.contentTitle || "").trim();
   return {
     id: String(item?.id || `mkt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`),
-    title: String(item?.title || "").trim(),
+    talentName,
+    talentType: MARKETING_TALENT_TYPES.includes(String(item?.talentType || "")) ? String(item.talentType) : "Internal Artist",
+    title,
     campaign: String(item?.campaign || "").trim(),
     trafficType: MARKETING_TRAFFIC_TYPES.includes(String(item?.trafficType || "")) ? String(item.trafficType) : "Organic",
     channel: MARKETING_CHANNELS.includes(String(item?.channel || "")) ? String(item.channel) : "Instagram",
+    deliverableType: String(item?.deliverableType || "").trim(),
     status: normalizedStatus,
     owner: teamUsers.includes(String(item?.owner || "")) ? String(item.owner) : String(item?.owner || ""),
     dueDate: String(item?.dueDate || ""),
+    email: String(item?.email || "").trim(),
+    instagramHandle: normalizeSocialHandle(item?.instagramHandle || item?.instagram || ""),
+    tiktokHandle: normalizeSocialHandle(item?.tiktokHandle || item?.tiktok || ""),
+    spotifyUrl: String(item?.spotifyUrl || "").trim(),
     briefUrl: String(item?.briefUrl || "").trim(),
     contentUrl: String(item?.contentUrl || "").trim(),
     notes: String(item?.notes || "").trim(),
@@ -329,6 +353,14 @@ function normalizeMarketingItem(item, teamUsers = DEFAULT_TEAM_USERS) {
     createdAt: String(item?.createdAt || new Date().toISOString()),
     updatedAt: String(item?.updatedAt || item?.createdAt || new Date().toISOString()),
   };
+}
+function marketingItemPrimaryLabel(item) {
+  return String(item?.talentName || item?.title || "").trim() || "Untitled assignment";
+}
+function marketingItemTitleLabel(item) {
+  const title = String(item?.title || "").trim();
+  const primary = marketingItemPrimaryLabel(item);
+  return title && title !== primary ? title : "";
 }
 function normalizeStageFilterId(filterId) {
   if (filterId === "contacted") return "contacted";
@@ -416,7 +448,7 @@ function summarizeProjectForHub(project, today = todayISO()) {
       type,
       title: "Marketing",
       cards: [
-        ["Items", mk.items, "neutral"],
+        ["Assignments", mk.items, "neutral"],
         ["Interested", mk.interested, "accent"],
         ["In Progress", mk.creating + mk.reviewing + mk.revising, "good"],
         ["Complete", mk.complete, "live"],
@@ -2010,14 +2042,21 @@ function exportPipeline(proj, enriched) {
 
 function exportMarketingItems(proj) {
   const rows = [[
+    "Talent Name",
+    "Talent Type",
     "Title",
     "Campaign",
     "Traffic Type",
     "Channel",
+    "Deliverable Type",
     "Status",
     "Rejected Reason",
     "Owner",
     "Due Date",
+    "Email",
+    "Instagram",
+    "TikTok",
+    "Spotify URL",
     "Brief URL",
     "Content URL",
     "Notes",
@@ -2026,14 +2065,21 @@ function exportMarketingItems(proj) {
   (proj?.marketingItems || []).forEach(item => {
     const normalized = normalizeMarketingItem(item, proj?.teamUsers || DEFAULT_TEAM_USERS);
     rows.push([
+      normalized.talentName,
+      normalized.talentType,
       normalized.title,
       normalized.campaign,
       normalized.trafficType,
       normalized.channel,
+      normalized.deliverableType,
       MM[normalized.status]?.label || normalized.status,
       normalized.rejectedReason,
       normalized.owner,
       normalized.dueDate,
+      normalized.email,
+      normalized.instagramHandle ? `@${normalized.instagramHandle}` : "",
+      normalized.tiktokHandle ? `@${normalized.tiktokHandle}` : "",
+      normalized.spotifyUrl,
       normalized.briefUrl,
       normalized.contentUrl,
       normalized.notes.replace(/,/g, ";"),
@@ -2403,13 +2449,20 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     if (item) {
       setMarketingForm({
         id: item.id || "",
+        talentName: item.talentName || item.title || "",
+        talentType: item.talentType || "Internal Artist",
         title: item.title || "",
         campaign: item.campaign || "",
         trafficType: item.trafficType || "Organic",
         channel: item.channel || "Instagram",
+        deliverableType: item.deliverableType || "",
         status: item.status || "interested",
         owner: item.owner || "",
         dueDate: item.dueDate || "",
+        email: item.email || "",
+        instagramHandle: item.instagramHandle || "",
+        tiktokHandle: item.tiktokHandle || "",
+        spotifyUrl: item.spotifyUrl || "",
         briefUrl: item.briefUrl || "",
         contentUrl: item.contentUrl || "",
         notes: item.notes || "",
@@ -3534,11 +3587,12 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const saveMarketingItem = async () => {
     if (!requireEditor()) return;
     if (!proj) return;
-    const title = marketingForm.title.trim();
-    if (!title) {
-      flash("Content title is required", "err");
+    const talentName = marketingForm.talentName.trim();
+    if (!talentName) {
+      flash("Talent name is required", "err");
       return;
     }
+    const title = marketingForm.title.trim() || [talentName, marketingForm.campaign.trim() || marketingForm.deliverableType.trim()].filter(Boolean).join(" · ");
     if (marketingForm.status === "rejected" && !marketingForm.rejectedReason.trim()) {
       flash("Please add a rejection reason", "err");
       return;
@@ -3547,6 +3601,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     const nextItem = normalizeMarketingItem({
       ...marketingForm,
       id: itemId,
+      talentName,
       title,
       updatedAt: new Date().toISOString(),
       createdAt: marketingForm.id
@@ -3563,7 +3618,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     await saveProject(nextProj);
     setShowMarketingItemModal(false);
     resetMarketingForm();
-    flash(exists ? `Updated ${title}` : `Added ${title}`);
+    flash(exists ? `Updated ${talentName}` : `Added ${talentName}`);
   };
 
   const deleteMarketingItem = async itemId => {
@@ -3571,7 +3626,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     if (!proj) return;
     const target = (proj.marketingItems || []).find(item => item.id === itemId);
     if (!target) return;
-    if (!window.confirm(`Delete "${target.title}" from this marketing project?`)) return;
+    if (!window.confirm(`Delete "${marketingItemPrimaryLabel(target)}" from this marketing project?`)) return;
     const nextProj = {
       ...proj,
       marketingItems: (proj.marketingItems || []).filter(item => item.id !== itemId),
@@ -3581,7 +3636,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       setShowMarketingItemModal(false);
       resetMarketingForm();
     }
-    flash(`${target.title} deleted`);
+    flash(`${marketingItemPrimaryLabel(target)} deleted`);
   };
 
   const setMarketingItemStatus = async (itemId, status) => {
@@ -4455,7 +4510,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     if (search.trim()) {
       const q = search.trim().toLowerCase();
       list = list.filter(item =>
-        `${item.title} ${item.campaign} ${item.channel} ${item.owner} ${item.notes} ${item.rejectedReason || ""}`.toLowerCase().includes(q)
+        `${item.talentName} ${item.talentType} ${item.title} ${item.campaign} ${item.trafficType} ${item.channel} ${item.deliverableType} ${item.owner} ${item.email} ${item.instagramHandle} ${item.tiktokHandle} ${item.spotifyUrl} ${item.notes} ${item.rejectedReason || ""}`.toLowerCase().includes(q)
       );
     }
     if (marketingStatusFilter !== "all") {
@@ -4972,7 +5027,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 14 }}>
                 <span style={{ ...mkP(true, C.ac, C.al) }}>{workspaceOverview.projects} projects</span>
                 <span style={{ ...mkP(true, C.ts, C.sa) }}>{workspaceOverview.artists} artists</span>
-                <span style={{ ...mkP(true, C.pr, C.pb) }}>{workspaceOverview.marketingItems} content items</span>
+                <span style={{ ...mkP(true, C.pr, C.pb) }}>{workspaceOverview.marketingItems} assignments</span>
                 <span style={{ ...mkP(true, C.bu, C.bb) }}>{workspaceOverview.contacted} contacted</span>
                 <span style={{ ...mkP(true, C.lv, C.lvb) }}>{workspaceOverview.live} live</span>
                 <span style={{ ...mkP(true, C.gn, C.gb) }}>{workspaceOverview.marketingComplete} complete</span>
@@ -4986,7 +5041,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                 ["Projects", workspaceOverview.projects, C.ac, C.al],
                 ["Artists", workspaceOverview.artists, C.tx, C.sa],
                 ["Contacted", workspaceOverview.contacted, C.bu, C.bb],
-                ["Content", workspaceOverview.marketingItems, C.pr, C.pb],
+                ["Assignments", workspaceOverview.marketingItems, C.pr, C.pb],
                 ["Live", workspaceOverview.live, C.lv, C.lvb],
                 ["Complete", workspaceOverview.marketingComplete, C.gn, C.gb],
               ].map(([label, value, tone, bg]) => (
@@ -6230,7 +6285,7 @@ Requirements:
     });
     const projectModeMeta = isMarketingProject ? {
       work: {
-        nav: "Content Board",
+        nav: "Campaign Board",
         eyebrow: "Marketing",
         title: proj.name,
         helper: `${operationalDayLabel} · updated ${queueUpdatedLabel} · resets 6:00 AM`,
@@ -6239,7 +6294,7 @@ Requirements:
         nav: "Reports",
         eyebrow: "Performance",
         title: "Campaign reporting",
-        helper: "Status mix, due work, and campaign visibility for paid and organic content.",
+        helper: "Status mix, talent coverage, and campaign visibility for paid and organic work.",
       },
     } : {
       work: {
@@ -6267,15 +6322,15 @@ Requirements:
       : "Not connected";
     const spotlightLine = isMarketingProject
       ? projectMode === "work"
-        ? `${marketingQueue.length} priority items in scope. ${marketingSummary.overdue} overdue and ${marketingSummary.dueSoon} due soon.`
-        : `${marketingSummary.items} content items across ${marketingSummary.campaigns} campaign${marketingSummary.campaigns === 1 ? "" : "s"}.`
+        ? `${marketingQueue.length} priority assignments in scope. ${marketingSummary.overdue} overdue and ${marketingSummary.dueSoon} due soon.`
+        : `${marketingSummary.items} talent assignments across ${marketingSummary.campaigns} campaign${marketingSummary.campaigns === 1 ? "" : "s"}.`
       : projectMode === "work"
         ? `${queue.length} priority actions in scope. ${dueSeqCount} follow-ups due by 6:00 AM.`
         : projectMode === "inbox"
           ? `${projectInboxActionableCount} inbox threads still need attention. Sync from artist inboxes to pull the latest replies.`
           : `${reportActivityStats.actions} logged actions in range. ${reportScopedArtists.length} artists in the current reporting scope.`;
     const sidebarModeItems = isMarketingProject ? [
-      { id: "work", label: projectModeMeta.work.nav, icon: "◫", hint: "content pipeline" },
+      { id: "work", label: projectModeMeta.work.nav, icon: "◫", hint: "talent + campaign pipeline" },
       { id: "report", label: projectModeMeta.report.nav, icon: "↗", hint: "status + campaign view" },
       { id: "settings", label: "Settings", icon: "⚙", hint: "models + links + tools", action: () => setShowProjectMenu(true) },
     ] : [
@@ -6285,8 +6340,8 @@ Requirements:
       { id: "settings", label: "Settings", icon: "⚙", hint: "models + keys + tools", action: () => setShowProjectMenu(true) },
     ];
     const overviewCards = isMarketingProject ? [
-      { label: "Items", value: marketingSummary.items, tone: C.tx, accent: C.ac, helper: "in this project" },
-      { label: "Interested", value: marketingSummary.interested, tone: C.bu, accent: C.bu, helper: "replied about the opp" },
+      { label: "Assignments", value: marketingSummary.items, tone: C.tx, accent: C.ac, helper: "in this project" },
+      { label: "Interested", value: marketingSummary.interested, tone: C.bu, accent: C.bu, helper: "replied about the opportunity" },
       { label: "In Progress", value: marketingSummary.creating + marketingSummary.reviewing + marketingSummary.revising, tone: C.pr, accent: C.pr, helper: "creating, reviewing, revising" },
       { label: "Complete", value: marketingSummary.complete, tone: C.gn, accent: C.gn, helper: operationalDayLabel },
     ] : [
@@ -6296,7 +6351,7 @@ Requirements:
       { label: "Due Today", value: dueSeqCount, tone: C.ab, accent: C.ab, helper: operationalDayLabel },
     ];
     const sidebarQuickStats = isMarketingProject ? [
-      { label: "Items", value: marketingSummary.items },
+      { label: "Assignments", value: marketingSummary.items },
       { label: "Interested", value: marketingSummary.interested },
       { label: "Complete", value: marketingSummary.complete },
     ] : [
@@ -6339,7 +6394,7 @@ Requirements:
               <div className="gf-project-project-card-title">{proj.name}</div>
               <div style={{ fontSize: 13, color: C.ts, lineHeight: 1.7, marginBottom: 16 }}>
                 {proj.desc || (isMarketingProject
-                  ? "Shared content workspace for briefs, campaigns, review cycles, and delivery tracking."
+                  ? "Shared talent workspace for campaigns, briefs, review cycles, and deliverable tracking."
                   : "Shared outreach workspace for pipeline movement, inbox handling, and reporting.")}
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 8, marginBottom: 12 }}>
@@ -6474,13 +6529,13 @@ Requirements:
                   <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.8, textTransform: "uppercase", color: C.ac, marginBottom: 6 }}>Actions</div>
                   <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>
                     {isMarketingProject
-                      ? (projectMode === "work" ? "Content workflow" : "Campaign reporting")
+                      ? (projectMode === "work" ? "Talent workflow" : "Campaign reporting")
                       : (projectMode === "work" ? "Pipeline execution" : projectMode === "inbox" ? "Inbox handling" : "Reporting cadence")}
                   </div>
                   <div style={{ fontSize: 12, color: C.ts, lineHeight: 1.6 }}>
                     {isMarketingProject
                       ? (projectMode === "work"
-                        ? "Track content from interest to completion, keep briefs organized, and keep asset links attached to the work."
+                        ? "Track talent from interest to completion, keep briefs organized, and keep campaign assets attached to the assignment."
                         : "Review campaign mix, completion rate, and overdue work without leaving the project.")
                       : (projectMode === "work"
                         ? "Keep the core moves high-signal. Add artists, import CSVs, and move the pipeline forward from here."
@@ -6492,7 +6547,7 @@ Requirements:
                 <div className="gf-project-toolbar-actions">
                   {projectMode === "work" && !isReadOnly && (isMarketingProject ? (
                     <>
-                      <button onClick={() => openMarketingItemModal(null)} style={{ ...actionBtn(true, "good"), ...lockStyle(isReadOnly) }}>+ Content Item</button>
+                      <button onClick={() => openMarketingItemModal(null)} style={{ ...actionBtn(true, "good"), ...lockStyle(isReadOnly) }}>+ Talent Assignment</button>
                     </>
                   ) : (
                     <>
@@ -6659,7 +6714,7 @@ Requirements:
                 <div>
                   <div style={{ fontSize: 14, fontWeight: 700 }}>Marketing Reporting</div>
                   <div style={{ fontSize: 11, color: C.tt }}>
-                    Current view is {workspaceUser === ALL_USER_VIEW ? "the whole team" : scopeDescription.toLowerCase()} across paid and organic content.
+                    Current view is {workspaceUser === ALL_USER_VIEW ? "the whole team" : scopeDescription.toLowerCase()} across paid and organic campaign work.
                   </div>
                 </div>
                 <div style={{ fontSize: 11, color: C.tt }}>
@@ -6668,8 +6723,8 @@ Requirements:
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 10 }}>
                 {[
-                  ["Items", marketingSummary.items, "all", "All tracked content items"],
-                  ["Interested", marketingSummary.interested, "interested", "Creators who replied about the opp"],
+                  ["Assignments", marketingSummary.items, "all", "All tracked talent assignments"],
+                  ["Interested", marketingSummary.interested, "interested", "Talent who replied about the opportunity"],
                   ["In Progress", marketingSummary.creating + marketingSummary.reviewing + marketingSummary.revising, "__active__", "Creating, reviewing, and revising"],
                   ["Complete", marketingSummary.complete, "complete", "Finished deliverables"],
                   ["Overdue", marketingSummary.overdue, "__overdue__", "Past due date"],
@@ -6746,16 +6801,17 @@ Requirements:
                         style={{ display: "grid", gap: 4, textAlign: "left", padding: "10px 12px", borderRadius: 10, border: `1px solid ${C.bd}`, background: C.sa, cursor: "pointer", fontFamily: ft }}
                       >
                         <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
-                          <span style={{ fontSize: 13, fontWeight: 700, color: C.tx }}>{item.title}</span>
+                          <span style={{ fontSize: 13, fontWeight: 700, color: C.tx }}>{marketingItemPrimaryLabel(item)}</span>
                           <span style={{ ...mkP(true, marketingStatusTone(item.status, C).tone, marketingStatusTone(item.status, C).bg), cursor: "pointer" }}>{MM[item.status]?.label}</span>
                         </div>
-                        <div style={{ fontSize: 11, color: C.ts }}>{item.campaign || "No campaign"} · {item.trafficType} · {item.channel}</div>
+                        <div style={{ fontSize: 11, color: C.ts }}>{item.talentType} · {item.campaign || "No campaign"} · {item.trafficType} · {item.channel}</div>
+                        {marketingItemTitleLabel(item) && <div style={{ fontSize: 11, color: C.tt }}>{marketingItemTitleLabel(item)}</div>}
                         <div style={{ fontSize: 11, color: item.dueDate && item.dueDate < operationalTodayISOFor(clockNow) ? C.rd : C.tt }}>{item.priorityLabel}</div>
                       </button>
                     ))}
                   </div>
                 ) : (
-                  <div style={{ fontSize: 12, color: C.tt }}>No active marketing items in the current scope.</div>
+                  <div style={{ fontSize: 12, color: C.tt }}>No active talent assignments in the current scope.</div>
                 )}
               </div>
             </div>
@@ -6863,7 +6919,7 @@ Requirements:
                 <div>
                   <div style={{ fontSize: 13, fontWeight: 700 }}>Today Queue</div>
                   <div style={{ fontSize: 11, color: C.tt }}>
-                    {operationalDayLabel} · top content items for the current scope · resets at 6:00 AM
+                    {operationalDayLabel} · top talent assignments for the current scope · resets at 6:00 AM
                   </div>
                 </div>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -6883,7 +6939,7 @@ Requirements:
                       <div key={item.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", borderRadius: 10, border: `1px solid ${C.bd}`, background: C.sa }}>
                         <button onClick={() => openMarketingItemModal(item)} style={{ display: "flex", alignItems: "center", gap: 10, flex: 1, minWidth: 0, background: "none", border: "none", cursor: "pointer", fontFamily: ft, textAlign: "left", padding: 0 }}>
                           <span style={{ fontSize: 14 }}>{MM[item.status]?.icon || "•"}</span>
-                          <span style={{ fontWeight: 700, minWidth: 120, color: C.tx }}>{item.title}</span>
+                          <span style={{ fontWeight: 700, minWidth: 120, color: C.tx }}>{marketingItemPrimaryLabel(item)}</span>
                           <span style={{ color: C.ts, flex: 1, fontSize: 12 }}>{item.priorityLabel}</span>
                           <span style={{ ...mkP(true, marketingStatusTone(item.status, C).tone, marketingStatusTone(item.status, C).bg), fontSize: 10, padding: "2px 8px", cursor: "pointer" }}>{MM[item.status]?.label}</span>
                         </button>
@@ -6896,7 +6952,7 @@ Requirements:
                     ))}
                   </div>
                 ) : (
-                  <div style={{ fontSize: 12, color: C.ts }}>No queued content items for this scope right now. Last refreshed {queueUpdatedLabel}.</div>
+                  <div style={{ fontSize: 12, color: C.ts }}>No queued talent assignments for this scope right now. Last refreshed {queueUpdatedLabel}.</div>
                 )
               )}
             </div>
@@ -6905,7 +6961,7 @@ Requirements:
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" }}>
                 <div>
                   <div style={{ fontSize: 13, fontWeight: 700 }}>Status Board</div>
-                  <div style={{ fontSize: 11, color: C.tt }}>Quick filter by campaign stage.</div>
+                  <div style={{ fontSize: 11, color: C.tt }}>Quick filter by assignment stage.</div>
                 </div>
                 {marketingStatusFilter !== "all" && <button onClick={() => setMarketingStatusFilter("all")} style={actionBtn(false, "neutral")}>Clear Status Filter</button>}
               </div>
@@ -6923,7 +6979,7 @@ Requirements:
             </div>
 
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10, alignItems: "center" }}>
-              <input placeholder="Search content..." value={search} onChange={e => setSearch(e.target.value)} style={{ ...iS, width: 220 }} />
+              <input placeholder="Search talent, campaign, or title..." value={search} onChange={e => setSearch(e.target.value)} style={{ ...iS, width: 260 }} />
               <div style={{ display: "flex", gap: 2, background: C.sa, borderRadius: 10, padding: 3, border: `1px solid ${C.bd}` }}>
                 {[ ["list", "☰"], ["kanban", "▦"], ["table", "▤"] ].map(([v, ic]) => (
                   <button key={v} title={`${v[0].toUpperCase()}${v.slice(1)} view`} onClick={() => setView(v)} style={{ padding: "5px 12px", borderRadius: 8, border: "none", background: viewMode === v ? C.ac : "transparent", color: viewMode === v ? "#fff" : C.ts, cursor: "pointer", fontSize: 13, fontFamily: ft }}>{ic}</button>
@@ -6962,26 +7018,31 @@ Requirements:
               </div>
             )}
 
-            <div style={{ fontSize: 12, color: C.tt, marginBottom: 12 }}>{filteredMarketingItems.length} item{filteredMarketingItems.length !== 1 ? "s" : ""}</div>
+            <div style={{ fontSize: 12, color: C.tt, marginBottom: 12 }}>{filteredMarketingItems.length} assignment{filteredMarketingItems.length !== 1 ? "s" : ""}</div>
 
             {viewMode === "list" && (
               <div style={{ display: "grid", gap: 8 }}>
                 {filteredMarketingItems.map((item, i) => {
                   const tone = marketingStatusTone(item.status, C);
+                  const primary = marketingItemPrimaryLabel(item);
+                  const titleLabel = marketingItemTitleLabel(item);
                   return (
                     <div key={item.id} onClick={() => openMarketingItemModal(item)} style={{ ...cS, padding: "14px 18px", cursor: "pointer", display: "flex", alignItems: "center", gap: 14, transition: "all 0.15s", animation: `fu 0.2s ease ${Math.min(i, 15) * 0.02}s both` }}>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                          <span style={{ fontSize: 14, fontWeight: 700 }}>{item.title}</span>
+                          <span style={{ fontSize: 14, fontWeight: 700 }}>{primary}</span>
                           <span style={{ ...mkP(true, tone.tone, tone.bg), cursor: "pointer" }}>{MM[item.status]?.label}</span>
+                          <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 12, background: C.sa, color: C.ts, border: `1px solid ${C.bd}` }}>{item.talentType}</span>
                           <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 12, background: C.sa, color: item.owner ? C.ts : C.rd, border: `1px solid ${C.bd}` }}>{item.owner || "Unassigned"}</span>
                         </div>
                         <div style={{ fontSize: 11, color: C.ts, marginTop: 3, display: "flex", gap: 10, flexWrap: "wrap" }}>
                           <span>{item.campaign || "No campaign"}</span>
                           <span>{item.trafficType}</span>
                           <span>{item.channel}</span>
+                          {item.deliverableType && <span>{item.deliverableType}</span>}
                           {item.dueDate && <span style={{ color: item.dueDate < operationalTodayISOFor(clockNow) ? C.rd : C.ab }}>Due {sD(item.dueDate)}</span>}
                         </div>
+                        {titleLabel && <div style={{ fontSize: 11, color: C.tt, marginTop: 5 }}>{titleLabel}</div>}
                         {item.status === "rejected" && item.rejectedReason && (
                           <div style={{ fontSize: 11, color: C.rd, marginTop: 6, lineHeight: 1.5 }}>
                             Rejected: {item.rejectedReason}
@@ -7011,8 +7072,9 @@ Requirements:
                       <div style={{ display: "grid", gap: 8 }}>
                         {col.map(item => (
                           <button key={item.id} onClick={() => openMarketingItemModal(item)} style={{ ...cS, padding: "12px 14px", textAlign: "left", cursor: "pointer", fontFamily: ft }}>
-                            <div style={{ fontSize: 13, fontWeight: 700, color: C.tx, marginBottom: 4 }}>{item.title}</div>
-                            <div style={{ fontSize: 11, color: C.ts }}>{item.campaign || "No campaign"} · {item.trafficType}</div>
+                            <div style={{ fontSize: 13, fontWeight: 700, color: C.tx, marginBottom: 4 }}>{marketingItemPrimaryLabel(item)}</div>
+                            <div style={{ fontSize: 11, color: C.ts }}>{item.talentType} · {item.campaign || "No campaign"} · {item.trafficType}</div>
+                            {marketingItemTitleLabel(item) && <div style={{ fontSize: 11, color: C.tt, marginTop: 5 }}>{marketingItemTitleLabel(item)}</div>}
                             {item.status === "rejected" && item.rejectedReason && (
                               <div style={{ fontSize: 10, color: C.rd, marginTop: 6, lineHeight: 1.5 }}>Rejected: {item.rejectedReason}</div>
                             )}
@@ -7032,7 +7094,7 @@ Requirements:
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                     <thead style={{ background: C.sa }}>
                       <tr>
-                        {["Title", "Campaign", "Traffic", "Channel", "Owner", "Status", "Rejected Reason", "Due", "Links", "Updated"].map(h => (
+                        {["Talent", "Type", "Title", "Campaign", "Traffic", "Channel", "Deliverable", "Owner", "Status", "Rejected Reason", "Due", "Links", "Updated"].map(h => (
                           <th key={h} style={{ textAlign: "left", padding: "10px 12px", color: C.ts, fontSize: 11, borderBottom: `1px solid ${C.bd}` }}>{h}</th>
                         ))}
                       </tr>
@@ -7042,10 +7104,13 @@ Requirements:
                         const tone = marketingStatusTone(item.status, C);
                         return (
                           <tr key={item.id} onClick={() => openMarketingItemModal(item)} style={{ cursor: "pointer" }}>
-                            <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, fontWeight: 700 }}>{item.title}</td>
+                            <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, fontWeight: 700 }}>{marketingItemPrimaryLabel(item)}</td>
+                            <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>{item.talentType}</td>
+                            <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>{marketingItemTitleLabel(item) || "—"}</td>
                             <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>{item.campaign || "No campaign"}</td>
                             <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>{item.trafficType}</td>
                             <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>{item.channel}</td>
+                            <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>{item.deliverableType || "—"}</td>
                             <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: item.owner ? C.tx : C.rd }}>{item.owner || "Unassigned"}</td>
                             <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}` }}><span style={{ ...mkP(true, tone.tone, tone.bg), cursor: "pointer" }}>{MM[item.status]?.label}</span></td>
                             <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: item.rejectedReason ? C.rd : C.tt }}>{item.rejectedReason || "—"}</td>
@@ -7583,7 +7648,7 @@ Requirements:
                     </label>
                     <div style={{ fontSize: 11, color: C.tt, lineHeight: 1.5 }}>
                       {isMarketingProject
-                        ? "Marketing projects use content items, campaign statuses, and brief or content links. A&R data stays untouched."
+                        ? "Marketing projects use talent assignments with campaign status, brief links, content links, and person-level tracking. A&R data stays untouched."
                         : "A&R projects keep the artist pipeline, outreach workflow, Gmail inbox, and roster tools."}
                     </div>
                     {!isMarketingProject && (
@@ -7596,7 +7661,7 @@ Requirements:
                       </>
                     )}
                     <button onClick={() => isMarketingProject ? exportMarketingItems(proj) : exportPipeline(proj, enriched)} style={actionBtn(false, "neutral")}>
-                      {isMarketingProject ? "Export Content CSV" : "Export Project CSV"}
+                      {isMarketingProject ? "Export Assignment CSV" : "Export Project CSV"}
                     </button>
                     {isAdmin && (
                       <a href="/ar/admin" style={{ ...actionBtn(false, "neutral"), textDecoration: "none", display: "inline-flex", justifyContent: "center" }}>
@@ -8086,15 +8151,32 @@ Requirements:
             <div style={{ background: C.sf, borderRadius: 18, padding: "24px 28px", width: 720, maxWidth: "calc(100vw - 32px)", boxShadow: "0 25px 70px rgba(0,0,0,0.2)", maxHeight: "88vh", overflowY: "auto" }}>
               <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", marginBottom: 12 }}>
                 <div>
-                  <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 6, color: C.tx }}>{marketingForm.id ? "Edit Content Item" : "New Content Item"}</div>
-                  <div style={{ fontSize: 12, color: C.ts }}>Track campaign work with clear status, brief link, content link, notes, and owner.</div>
+                  <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 6, color: C.tx }}>{marketingForm.id ? "Edit Talent Assignment" : "New Talent Assignment"}</div>
+                  <div style={{ fontSize: 12, color: C.ts }}>Track the talent, the campaign, the deliverable, and the links your team needs to move the work.</div>
                 </div>
                 <button onClick={() => { setShowMarketingItemModal(false); resetMarketingForm(); }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: C.ts }}>✕</button>
               </div>
 
               <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr", gap: 10 }}>
-                <input value={marketingForm.title} onChange={e => setMarketingForm({ ...marketingForm, title: e.target.value })} placeholder="Content title*" autoFocus style={{ ...iS, width: "100%" }} />
+                <input value={marketingForm.talentName} onChange={e => setMarketingForm({ ...marketingForm, talentName: e.target.value })} placeholder="Talent name*" autoFocus style={{ ...iS, width: "100%" }} />
+                <input value={marketingForm.title} onChange={e => setMarketingForm({ ...marketingForm, title: e.target.value })} placeholder="Title or deliverable headline" style={{ ...iS, width: "100%" }} />
+
+                <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 4 }}>
+                  <span>Talent type</span>
+                  <select value={marketingForm.talentType} onChange={e => setMarketingForm({ ...marketingForm, talentType: e.target.value })} style={{ ...iS, width: "100%" }}>
+                    {MARKETING_TALENT_TYPES.map(type => <option key={type} value={type}>{type}</option>)}
+                  </select>
+                </label>
+                <input value={marketingForm.deliverableType} onChange={e => setMarketingForm({ ...marketingForm, deliverableType: e.target.value })} placeholder="Deliverable type" style={{ ...iS, width: "100%" }} />
+
                 <input value={marketingForm.campaign} onChange={e => setMarketingForm({ ...marketingForm, campaign: e.target.value })} placeholder="Campaign name" style={{ ...iS, width: "100%" }} />
+                <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 4 }}>
+                  <span>Owner</span>
+                  <select value={marketingForm.owner} onChange={e => setMarketingForm({ ...marketingForm, owner: e.target.value })} style={{ ...iS, width: "100%" }}>
+                    <option value="">Unassigned</option>
+                    {(proj?.teamUsers || DEFAULT_TEAM_USERS).map(u => <option key={u} value={u}>{u}</option>)}
+                  </select>
+                </label>
 
                 <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 4 }}>
                   <span>Traffic type</span>
@@ -8115,19 +8197,16 @@ Requirements:
                     {MARKETING_STATUSES.map(status => <option key={status.id} value={status.id}>{status.label}</option>)}
                   </select>
                 </label>
-                <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 4 }}>
-                  <span>Owner</span>
-                  <select value={marketingForm.owner} onChange={e => setMarketingForm({ ...marketingForm, owner: e.target.value })} style={{ ...iS, width: "100%" }}>
-                    <option value="">Unassigned</option>
-                    {(proj?.teamUsers || DEFAULT_TEAM_USERS).map(u => <option key={u} value={u}>{u}</option>)}
-                  </select>
-                </label>
+                <input value={marketingForm.email} onChange={e => setMarketingForm({ ...marketingForm, email: e.target.value })} placeholder="Talent email" style={{ ...iS, width: "100%" }} />
 
                 <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 4 }}>
                   <span>Due date</span>
                   <input type="date" value={marketingForm.dueDate} onChange={e => setMarketingForm({ ...marketingForm, dueDate: e.target.value })} style={{ ...iS, width: "100%" }} />
                 </label>
-                <div />
+                <input value={marketingForm.instagramHandle} onChange={e => setMarketingForm({ ...marketingForm, instagramHandle: normalizeSocialHandle(e.target.value) })} placeholder="Instagram handle" style={{ ...iS, width: "100%" }} />
+
+                <input value={marketingForm.tiktokHandle} onChange={e => setMarketingForm({ ...marketingForm, tiktokHandle: normalizeSocialHandle(e.target.value) })} placeholder="TikTok handle" style={{ ...iS, width: "100%" }} />
+                <input value={marketingForm.spotifyUrl} onChange={e => setMarketingForm({ ...marketingForm, spotifyUrl: e.target.value })} placeholder="Spotify artist link" style={{ ...iS, width: "100%" }} />
 
                 <input value={marketingForm.briefUrl} onChange={e => setMarketingForm({ ...marketingForm, briefUrl: e.target.value })} placeholder="Brief link" style={{ ...iS, width: "100%" }} />
                 <input value={marketingForm.contentUrl} onChange={e => setMarketingForm({ ...marketingForm, contentUrl: e.target.value })} placeholder="Content link" style={{ ...iS, width: "100%" }} />
@@ -8145,7 +8224,11 @@ Requirements:
               </div>
 
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginTop: 18 }}>
-                <div style={{ display: "flex", gap: 8 }}>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  {marketingForm.email && <a href={`mailto:${marketingForm.email}`} style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Email Talent</a>}
+                  {marketingForm.instagramHandle && <a href={`https://instagram.com/${marketingForm.instagramHandle}`} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Instagram</a>}
+                  {marketingForm.tiktokHandle && <a href={`https://www.tiktok.com/@${marketingForm.tiktokHandle}`} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>TikTok</a>}
+                  {marketingForm.spotifyUrl && <a href={marketingForm.spotifyUrl} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Spotify</a>}
                   {marketingForm.briefUrl && <a href={marketingForm.briefUrl} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Open Brief</a>}
                   {marketingForm.contentUrl && <a href={marketingForm.contentUrl} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Open Content</a>}
                 </div>
@@ -8156,8 +8239,8 @@ Requirements:
                     </button>
                   )}
                   <button onClick={() => { setShowMarketingItemModal(false); resetMarketingForm(); }} style={{ padding: "8px 18px", borderRadius: 10, border: `1px solid ${C.bd}`, background: "transparent", cursor: "pointer", fontSize: 13, fontFamily: ft, color: C.ts }}>Cancel</button>
-                  <button onClick={saveMarketingItem} style={{ padding: "8px 24px", borderRadius: 10, border: "none", background: C.ac, color: "#fff", cursor: "pointer", fontSize: 13, fontWeight: 600, fontFamily: ft, opacity: marketingForm.title.trim() ? 1 : 0.45 }}>
-                    {marketingForm.id ? "Save Changes" : "Add Item"}
+                  <button onClick={saveMarketingItem} style={{ padding: "8px 24px", borderRadius: 10, border: "none", background: C.ac, color: "#fff", cursor: "pointer", fontSize: 13, fontWeight: 600, fontFamily: ft, opacity: marketingForm.talentName.trim() ? 1 : 0.45 }}>
+                    {marketingForm.id ? "Save Changes" : "Add Assignment"}
                   </button>
                 </div>
               </div>
