@@ -7577,7 +7577,7 @@ Requirements:
                   <div style={{ display: "grid", gap: 10 }}>
                     <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 4 }}>
                       <span>Project type</span>
-                      <select value={projectType} disabled={!isAdmin} onChange={e => saveProjectType(e.target.value)} style={{ ...iS, ...lockStyle(!isAdmin) }}>
+                      <select value={projectType} disabled={!canEdit} onChange={e => saveProjectType(e.target.value)} style={{ ...iS, ...lockStyle(!canEdit) }}>
                         {PROJECT_TYPES.map(type => <option key={type.id} value={type.id}>{type.label}</option>)}
                       </select>
                     </label>
@@ -7612,20 +7612,20 @@ Requirements:
                   <div style={{ display: "grid", gap: 10 }}>
                     <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 4 }}>
                       <span>Provider</span>
-                      <select value={currentAiProvider} disabled={!isAdmin} onChange={e => saveAiProvider(e.target.value)} style={{ ...iS, ...lockStyle(!isAdmin) }}>
+                      <select value={currentAiProvider} disabled={!canEdit} onChange={e => saveAiProvider(e.target.value)} style={{ ...iS, ...lockStyle(!canEdit) }}>
                         {AI_PROVIDERS.map(provider => (
                           <option key={provider.id} value={provider.id}>{provider.label}</option>
                         ))}
                       </select>
                     </label>
-                    <button disabled={!isAdmin} onClick={configureAiKey} style={{ ...actionBtn(true, aiKeySet ? "good" : "danger"), ...lockStyle(!isAdmin) }}>
+                    <button disabled={!canEdit} onClick={configureAiKey} style={{ ...actionBtn(true, aiKeySet ? "good" : "danger"), ...lockStyle(!canEdit) }}>
                       {providerLabel(currentAiProvider)} Key {aiKeySet ? "Set" : "Missing"}
                     </button>
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                       {[["intel", "Intel"], ["drafts", "Drafts"], ["discovery", "Discovery"], ["reply", "Reply"], ["followup", "Follow-up"]].map(([task, label]) => (
                         <label key={task} style={{ fontSize: 11, color: C.ts, display: "grid", gap: 4 }}>
                           <span>{label}</span>
-                          <select value={taskModel(task)} disabled={!isAdmin} onChange={e => saveAiModel(task, e.target.value)} style={{ ...iS, padding: "6px 10px", fontSize: 11, ...lockStyle(!isAdmin) }}>
+                          <select value={taskModel(task)} disabled={!canEdit} onChange={e => saveAiModel(task, e.target.value)} style={{ ...iS, padding: "6px 10px", fontSize: 11, ...lockStyle(!canEdit) }}>
                             {aiOptions.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
                           </select>
                         </label>
@@ -7644,7 +7644,7 @@ Requirements:
                       return (
                         <button
                           key={accentId}
-                          disabled={!isAdmin}
+                          disabled={!canEdit}
                           onClick={() => saveAppearanceAccent(accentId)}
                           style={{
                             padding: "10px 12px",
@@ -7652,7 +7652,7 @@ Requirements:
                             border: `1.5px solid ${active ? swatch : C.bd}`,
                             background: active ? (dark ? preset.dark.al : preset.light.al) : C.sf,
                             color: active ? swatch : C.ts,
-                            cursor: isAdmin ? "pointer" : "not-allowed",
+                            cursor: canEdit ? "pointer" : "not-allowed",
                             fontSize: 11,
                             fontWeight: 700,
                             fontFamily: ft,
@@ -7660,7 +7660,7 @@ Requirements:
                             alignItems: "center",
                             gap: 8,
                             justifyContent: "center",
-                            ...lockStyle(!isAdmin),
+                            ...lockStyle(!canEdit),
                           }}
                         >
                           <span style={{ width: 10, height: 10, borderRadius: 999, background: swatch, display: "inline-block" }} />
