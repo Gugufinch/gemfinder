@@ -576,6 +576,64 @@ function parseMarketingCSV(text, teamUsers = DEFAULT_TEAM_USERS) {
   }
   return records;
 }
+function parseMarketingBulkUpdateText(text, defaultCampaign = "", defaultStatus = "prospect") {
+  const raw = String(text || "").trim();
+  if (!raw) return [];
+  const lines = raw.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  if (!lines.length) return [];
+
+  const csvLike = lines[0].includes(",") && !lines[0].includes("|");
+  const pipeLike = lines[0].includes("|");
+  const tabLike = lines[0].includes("\t");
+
+  const normalizeHeader = value => String(value || "").trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+  const isHeaderRow = cols => {
+    const normalized = cols.map(normalizeHeader);
+    return normalized.some(col => ["name", "talentname", "artistname", "artist"].includes(col))
+      && normalized.some(col => ["campaign", "campaignname"].includes(col));
+  };
+  const rowFromCells = (cells, lineNumber, headerMap = null) => {
+    const get = aliases => {
+      if (!headerMap) return "";
+      const key = Object.keys(headerMap).find(header => aliases.includes(normalizeHeader(header)));
+      return key ? String(headerMap[key] || "").trim() : "";
+    };
+    const positional = index => String(cells[index] || "").trim();
+    const talentName = (get(["name", "talentname", "artistname", "artist"]) || positional(0)).trim();
+    if (!talentName) return null;
+    return {
+      lineNumber,
+      talentName,
+      campaign: (get(["campaign", "campaignname"]) || positional(1) || defaultCampaign || "").trim(),
+      status: normalizeMarketingStatus(get(["status", "stage"]) || positional(2) || defaultStatus || "prospect"),
+      raw: cells.map(col => String(col || "").trim()).join(" | "),
+    };
+  };
+
+  if (csvLike) {
+    const grid = parseCSVGrid(raw);
+    if (!grid.length) return [];
+    const header = isHeaderRow(grid[0]) ? grid[0] : null;
+    return grid
+      .slice(header ? 1 : 0)
+      .map((cells, index) => {
+        const headerMap = header ? Object.fromEntries(header.map((key, cellIndex) => [key, cells[cellIndex] || ""])) : null;
+        return rowFromCells(cells, index + (header ? 2 : 1), headerMap);
+      })
+      .filter(Boolean);
+  }
+
+  return lines
+    .map((line, index) => {
+      const cells = pipeLike
+        ? line.split("|")
+        : tabLike
+          ? line.split("\t")
+          : line.split(",");
+      return rowFromCells(cells, index + 1);
+    })
+    .filter(Boolean);
+}
 function normalizeMarketingItem(item, teamUsers = DEFAULT_TEAM_USERS) {
   const normalizedStatus = normalizeMarketingStatus(item?.status);
   const talentName = String(
@@ -2442,6 +2500,10 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [marketingCampaignFilter, setMarketingCampaignFilter] = useState("all");
   const [marketingTrafficFilter, setMarketingTrafficFilter] = useState("all");
   const [marketingOwnerFilter, setMarketingOwnerFilter] = useState("__view__");
+  const [showMarketingBulkUpdateModal, setShowMarketingBulkUpdateModal] = useState(false);
+  const [marketingBulkText, setMarketingBulkText] = useState("");
+  const [marketingBulkDefaultCampaign, setMarketingBulkDefaultCampaign] = useState("");
+  const [marketingBulkDefaultStatus, setMarketingBulkDefaultStatus] = useState("prospect");
 
   const [batch, setBatch] = useState(false);
   const [bSel, setBSel] = useState(new Set());
@@ -4886,6 +4948,86 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     return normalizeMarketingCampaignBank([...fromSettings, ...fromItems]);
   }, [proj?.settings?.marketingCampaignBank, marketingItems]);
 
+  const marketingBulkRows = useMemo(
+    () => parseMarketingBulkUpdateText(marketingBulkText, marketingBulkDefaultCampaign, marketingBulkDefaultStatus),
+    [marketingBulkText, marketingBulkDefaultCampaign, marketingBulkDefaultStatus]
+  );
+
+  const marketingBulkPreview = useMemo(() => {
+    if (!proj || !marketingBulkRows.length) return [];
+    const existingItems = (proj.marketingItems || []).map(item => normalizeMarketingItem(item, proj.teamUsers || DEFAULT_TEAM_USERS));
+    const byName = new Map();
+    const byNameCampaign = new Map();
+    existingItems.forEach(item => {
+      const nameKey = canonicalArtistName(item.talentName);
+      if (!nameKey) return;
+      const list = byName.get(nameKey) || [];
+      list.push(item);
+      byName.set(nameKey, list);
+      const campaigns = item.campaigns?.length ? item.campaigns : [""];
+      campaigns.forEach(campaign => {
+        byNameCampaign.set(`${nameKey}::${canonicalArtistName(campaign)}`, item);
+      });
+    });
+
+    const artistRosterByName = new Map();
+    (proj.artists || []).forEach(artist => {
+      const key = canonicalArtistName(artist?.n || "");
+      if (key) artistRosterByName.set(key, artist);
+    });
+
+    return marketingBulkRows.map(row => {
+      const nameKey = canonicalArtistName(row.talentName);
+      const campaignKey = canonicalArtistName(row.campaign || "");
+      const exactMatch = byNameCampaign.get(`${nameKey}::${campaignKey}`);
+      if (exactMatch) {
+        return {
+          ...row,
+          action: "update",
+          source: "assignment",
+          targetId: exactMatch.id,
+          previewLabel: `${marketingItemPrimaryLabel(exactMatch)} · ${row.campaign || "No campaign"}`,
+        };
+      }
+
+      const sameTalent = byName.get(nameKey) || [];
+      if (sameTalent.length) {
+        return {
+          ...row,
+          action: "create",
+          source: "existing_talent",
+          baseItem: sameTalent[0],
+          previewLabel: `${row.talentName} · ${row.campaign || "No campaign"}`,
+        };
+      }
+
+      const rosterArtist = artistRosterByName.get(nameKey);
+      if (rosterArtist) {
+        return {
+          ...row,
+          action: "create",
+          source: "artist_roster",
+          baseArtist: rosterArtist,
+          previewLabel: `${row.talentName} · ${row.campaign || "No campaign"}`,
+        };
+      }
+
+      return {
+        ...row,
+        action: "skip",
+        source: "unmatched",
+        reason: "No matching talent found in this project yet",
+      };
+    });
+  }, [proj, marketingBulkRows]);
+
+  const marketingBulkSummary = useMemo(() => {
+    return marketingBulkPreview.reduce((acc, row) => {
+      acc[row.action] = (acc[row.action] || 0) + 1;
+      return acc;
+    }, { update: 0, create: 0, skip: 0 });
+  }, [marketingBulkPreview]);
+
   const effectiveMarketingOwnerFilter = useMemo(() => {
     if (marketingOwnerFilter === "__view__") {
       if (workspaceUser === ALL_USER_VIEW) return "all";
@@ -4954,6 +5096,160 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     const nextBank = (proj?.settings?.marketingCampaignBank || []).filter(item => item !== campaignName);
     await saveMarketingCampaignBank(nextBank);
     flash(`Removed "${campaignName}" from campaign bank`);
+  };
+
+  const openMarketingBulkUpdateModal = () => {
+    setMarketingBulkText("");
+    setMarketingBulkDefaultCampaign(marketingCampaignFilter !== "all" ? marketingCampaignFilter : "");
+    setMarketingBulkDefaultStatus(marketingStatusFilter !== "all" && marketingStatusFilter !== "active" ? marketingStatusFilter : "prospect");
+    setShowMarketingBulkUpdateModal(true);
+  };
+
+  const closeMarketingBulkUpdateModal = () => {
+    setShowMarketingBulkUpdateModal(false);
+    setMarketingBulkText("");
+    setMarketingBulkDefaultCampaign("");
+    setMarketingBulkDefaultStatus("prospect");
+  };
+
+  const applyMarketingBulkUpdate = async () => {
+    if (!requireEditor()) return;
+    if (!proj) return;
+    if (!marketingBulkPreview.length) {
+      flash("Paste a list of talent first", "err");
+      return;
+    }
+    const teamUsers = proj.teamUsers || DEFAULT_TEAM_USERS;
+    const now = new Date().toISOString();
+    const existingItems = (proj.marketingItems || []).map(item => normalizeMarketingItem(item, teamUsers));
+    const nextItems = [...existingItems];
+    const itemIndexById = new Map(nextItems.map((item, index) => [item.id, index]));
+    const seenNameCampaign = new Set();
+    nextItems.forEach(item => {
+      const campaigns = item.campaigns?.length ? item.campaigns : [""];
+      campaigns.forEach(campaign => {
+        seenNameCampaign.add(`${canonicalArtistName(item.talentName)}::${canonicalArtistName(campaign)}`);
+      });
+    });
+
+    let updatedCount = 0;
+    let createdCount = 0;
+    let skippedCount = 0;
+
+    marketingBulkPreview.forEach(entry => {
+      const normalizedCampaign = String(entry.campaign || "").trim();
+      const exactKey = `${canonicalArtistName(entry.talentName)}::${canonicalArtistName(normalizedCampaign)}`;
+      if (entry.action === "update") {
+        const itemIndex = itemIndexById.get(entry.targetId);
+        if (typeof itemIndex !== "number") {
+          skippedCount += 1;
+          return;
+        }
+        const current = normalizeMarketingItem(nextItems[itemIndex], teamUsers);
+        const nextCampaigns = normalizedCampaign
+          ? normalizeMarketingCampaigns([...(current.campaigns || []), normalizedCampaign])
+          : current.campaigns || [];
+        const updatedItem = normalizeMarketingItem({
+          ...current,
+          status: entry.status,
+          campaigns: nextCampaigns,
+          campaign: normalizedCampaign || current.campaign || "",
+          updatedAt: now,
+        }, teamUsers);
+        if (JSON.stringify(updatedItem) !== JSON.stringify(current)) {
+          nextItems[itemIndex] = updatedItem;
+          updatedCount += 1;
+        }
+        seenNameCampaign.add(exactKey);
+        return;
+      }
+
+      if (entry.action === "create") {
+        if (seenNameCampaign.has(exactKey)) {
+          skippedCount += 1;
+          return;
+        }
+        const baseFromMarketing = entry.baseItem ? normalizeMarketingItem(entry.baseItem, teamUsers) : null;
+        const baseFromArtist = entry.baseArtist
+          ? {
+              talentName: entry.baseArtist.n || entry.talentName,
+              talentType: "Internal Artist",
+              title: entry.baseArtist.n || entry.talentName,
+              campaign: "",
+              campaigns: [],
+              trafficType: "Organic",
+              channels: [],
+              deliverableType: "UGC",
+              owner: "",
+              dueDate: "",
+              email: entry.baseArtist.e || "",
+              instagramHandle: normalizeSocialHandle(entry.baseArtist.ig || entry.baseArtist.soc || ""),
+              instagramUrl: /instagram\.com/i.test(entry.baseArtist.ig || "") ? entry.baseArtist.ig : "",
+              instagramFollowers: "",
+              tiktokHandle: "",
+              tiktokUrl: "",
+              tiktokFollowers: "",
+              spotifyUrl: "",
+              spotifyMonthlyListeners: normalizeFollowerCount(entry.baseArtist.l || ""),
+              briefUrl: "",
+              contentUrl: "",
+              notes: "",
+              rejectedReason: "",
+            }
+          : null;
+        const base = baseFromMarketing || baseFromArtist || {
+          talentName: entry.talentName,
+          talentType: "Internal Artist",
+          title: entry.talentName,
+          trafficType: "Organic",
+          channels: [],
+          deliverableType: "UGC",
+        };
+        const nextItem = normalizeMarketingItem({
+          ...base,
+          id: `mkt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+          talentName: entry.talentName,
+          title: String(base.title || "").trim() && String(base.title || "").trim() !== String(base.talentName || "").trim()
+            ? base.title
+            : [entry.talentName, normalizedCampaign || base.deliverableType || "UGC"].filter(Boolean).join(" · "),
+          campaign: normalizedCampaign,
+          campaigns: normalizedCampaign ? [normalizedCampaign] : [],
+          status: entry.status,
+          createdAt: now,
+          updatedAt: now,
+        }, teamUsers);
+        nextItems.push(nextItem);
+        itemIndexById.set(nextItem.id, nextItems.length - 1);
+        seenNameCampaign.add(exactKey);
+        createdCount += 1;
+        return;
+      }
+
+      skippedCount += 1;
+    });
+
+    const nextProj = {
+      ...proj,
+      marketingItems: nextItems,
+      settings: {
+        ...(proj.settings || {}),
+        marketingCampaignBank: normalizeMarketingCampaignBank([
+          ...(proj.settings?.marketingCampaignBank || []),
+          ...marketingBulkPreview.map(row => row.campaign).filter(Boolean),
+        ]),
+      },
+    };
+
+    await saveProject(nextProj);
+    setSearch("");
+    setMarketingStatusFilter("all");
+    setMarketingCampaignFilter("all");
+    setMarketingTrafficFilter("all");
+    setMarketingOwnerFilter("all");
+    changeWorkspaceUser(ALL_USER_VIEW);
+    await persist(undefined, undefined, undefined, undefined, undefined, ALL_USER_VIEW, "work");
+    closeMarketingBulkUpdateModal();
+    flash(`Bulk update applied · ${updatedCount} updated · ${createdCount} created · ${skippedCount} skipped`);
   };
 
   const filteredMarketingItems = useMemo(() => {
@@ -7021,6 +7317,7 @@ Requirements:
                   {projectMode === "work" && !isReadOnly && (isMarketingProject ? (
                     <>
                       <button onClick={() => openMarketingItemModal(null)} style={{ ...actionBtn(true, "good"), ...lockStyle(isReadOnly) }}>+ Campaign Assignment</button>
+                      <button onClick={openMarketingBulkUpdateModal} style={{ ...actionBtn(false, "accent"), ...lockStyle(isReadOnly) }}>Bulk Update</button>
                       <label style={{ ...actionBtn(false, "neutral"), ...lockStyle(isReadOnly) }}>
                         Import Talent CSV
                         <input type="file" accept=".csv" ref={fr} onChange={importCSV} disabled={isReadOnly} />
@@ -8686,6 +8983,110 @@ Requirements:
                 <button onClick={addManualArtist} style={{ padding: "8px 24px", borderRadius: 10, border: "none", background: C.ac, color: "#fff", cursor: "pointer", fontSize: 13, fontWeight: 600, fontFamily: ft, opacity: artistForm.name.trim() ? 1 : 0.45 }}>
                   Add Artist
                 </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {showMarketingBulkUpdateModal && (
+          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 125 }} onClick={e => { if (e.target === e.currentTarget) closeMarketingBulkUpdateModal(); }}>
+            <div style={{ background: C.sf, borderRadius: 18, padding: "24px 28px", width: 880, maxWidth: "calc(100vw - 32px)", boxShadow: "0 25px 70px rgba(0,0,0,0.2)", maxHeight: "88vh", overflowY: "auto" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", marginBottom: 12 }}>
+                <div>
+                  <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 6, color: C.tx }}>Bulk Update Assignments</div>
+                  <div style={{ fontSize: 12, color: C.ts, lineHeight: 1.6 }}>
+                    Paste a quick list of <code style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>name | campaign | status</code> rows.
+                    We will update exact talent + campaign matches, create a new campaign assignment when the talent already exists in the project, and skip unmatched names safely.
+                  </div>
+                </div>
+                <button onClick={closeMarketingBulkUpdateModal} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: C.ts }}>✕</button>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 220px 220px", gap: 10, alignItems: "end", marginBottom: 12 }}>
+                <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 4 }}>
+                  <span>Paste list</span>
+                  <textarea
+                    value={marketingBulkText}
+                    onChange={e => setMarketingBulkText(e.target.value)}
+                    placeholder={`Patrick James Clark | D2F Paid 1 | Interested\nTejai Moore | D2F Paid 1 | Creating\nfeeljones | Direct To Fan Focus | Complete`}
+                    style={{ ...iS, width: "100%", minHeight: 170, resize: "vertical", fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", lineHeight: 1.5 }}
+                  />
+                </label>
+                <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 4 }}>
+                  <span>Default campaign</span>
+                  <select value={marketingBulkDefaultCampaign} onChange={e => setMarketingBulkDefaultCampaign(e.target.value)} style={{ ...iS, width: "100%" }}>
+                    <option value="">None</option>
+                    {marketingCampaignOptions.map(campaign => <option key={campaign} value={campaign}>{campaign}</option>)}
+                  </select>
+                  <div style={{ fontSize: 11, color: C.tt }}>Used when a pasted row omits the campaign.</div>
+                </label>
+                <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 4 }}>
+                  <span>Default status</span>
+                  <select value={marketingBulkDefaultStatus} onChange={e => setMarketingBulkDefaultStatus(e.target.value)} style={{ ...iS, width: "100%" }}>
+                    {MARKETING_STATUSES.map(status => <option key={status.id} value={status.id}>{status.label}</option>)}
+                  </select>
+                  <div style={{ fontSize: 11, color: C.tt }}>Used when a pasted row omits the status.</div>
+                </label>
+              </div>
+
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
+                <span style={{ ...mkP(true, C.ac, C.al), cursor: "default" }}>{marketingBulkRows.length} parsed</span>
+                <span style={{ ...mkP(true, C.bu, C.bb), cursor: "default" }}>{marketingBulkSummary.update || 0} updates</span>
+                <span style={{ ...mkP(true, C.gn, C.gb), cursor: "default" }}>{marketingBulkSummary.create || 0} new assignments</span>
+                <span style={{ ...mkP(true, C.rd, C.rb), cursor: "default" }}>{marketingBulkSummary.skip || 0} unmatched / skipped</span>
+              </div>
+
+              <div style={{ borderRadius: 16, border: `1px solid ${C.bd}`, overflow: "hidden", marginBottom: 18 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "88px minmax(180px, 1.3fr) minmax(160px, 1fr) 120px minmax(160px, 1.2fr)", gap: 0, background: C.sa, padding: "10px 12px", fontSize: 11, color: C.tt, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1 }}>
+                  <div>Action</div>
+                  <div>Talent</div>
+                  <div>Campaign</div>
+                  <div>Status</div>
+                  <div>Match / Result</div>
+                </div>
+                <div style={{ maxHeight: 280, overflowY: "auto" }}>
+                  {marketingBulkPreview.length ? marketingBulkPreview.map(entry => {
+                    const actionTone = entry.action === "update"
+                      ? [C.bu, C.bb]
+                      : entry.action === "create"
+                        ? [C.gn, C.gb]
+                        : [C.rd, C.rb];
+                    return (
+                      <div key={`${entry.lineNumber}-${entry.talentName}-${entry.campaign}`} style={{ display: "grid", gridTemplateColumns: "88px minmax(180px, 1.3fr) minmax(160px, 1fr) 120px minmax(160px, 1.2fr)", gap: 0, padding: "10px 12px", borderTop: `1px solid ${C.bd}`, alignItems: "start" }}>
+                        <div><span style={{ ...mkP(true, actionTone[0], actionTone[1]), cursor: "default", fontSize: 11 }}>{entry.action === "update" ? "Update" : entry.action === "create" ? "Create" : "Skip"}</span></div>
+                        <div>
+                          <div style={{ fontWeight: 600, color: C.tx }}>{entry.talentName}</div>
+                          <div style={{ fontSize: 11, color: C.tt }}>Line {entry.lineNumber}</div>
+                        </div>
+                        <div style={{ color: C.ts }}>{entry.campaign || "No campaign"}</div>
+                        <div style={{ color: C.ts }}>{MM[entry.status]?.label || titleCaseWords(entry.status)}</div>
+                        <div style={{ color: C.ts, lineHeight: 1.45 }}>
+                          {entry.action === "update" && `Existing assignment match`}
+                          {entry.action === "create" && (entry.source === "existing_talent" ? "Existing talent found · new campaign assignment" : "Matched artist from project roster · new campaign assignment")}
+                          {entry.action === "skip" && entry.reason}
+                        </div>
+                      </div>
+                    );
+                  }) : (
+                    <div style={{ padding: "18px 14px", fontSize: 12, color: C.tt }}>
+                      Paste rows above to preview what will happen before applying changes.
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+                <div style={{ fontSize: 11, color: C.tt, lineHeight: 1.5 }}>
+                  Supported formats: pipe-separated, comma-separated, or tab-separated. Header rows like <code style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>name,campaign,status</code> also work.
+                </div>
+                <div style={{ display: "flex", gap: 10 }}>
+                  <button onClick={closeMarketingBulkUpdateModal} style={{ padding: "8px 18px", borderRadius: 10, border: `1px solid ${C.bd}`, background: "transparent", cursor: "pointer", fontSize: 13, fontFamily: ft, color: C.ts }}>
+                    Cancel
+                  </button>
+                  <button onClick={applyMarketingBulkUpdate} style={{ padding: "8px 24px", borderRadius: 10, border: "none", background: C.ac, color: "#fff", cursor: "pointer", fontSize: 13, fontWeight: 600, fontFamily: ft, opacity: marketingBulkPreview.some(entry => entry.action !== "skip") ? 1 : 0.45 }}>
+                    Apply Updates
+                  </button>
+                </div>
               </div>
             </div>
           </div>
