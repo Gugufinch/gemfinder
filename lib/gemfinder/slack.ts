@@ -93,6 +93,13 @@ type MarketingTransition = {
   contentUrl: string;
 };
 
+type MarketingSummaryPayloadInput = {
+  projectName: string;
+  projectUrl: string;
+  actorEmail: string;
+  transitions: MarketingTransition[];
+};
+
 function asProjects(value: unknown): WorkspaceProject[] {
   return Array.isArray(value) ? (value as WorkspaceProject[]) : [];
 }
@@ -365,6 +372,72 @@ function buildMarketingSlackPayload(transition: MarketingTransition, actorEmail:
   };
 }
 
+function buildMarketingBulkSlackPayload(input: MarketingSummaryPayloadInput) {
+  const actorLabel = input.actorEmail || 'Unknown user';
+  const statusCounts = new Map<string, number>();
+  const campaignCounts = new Map<string, number>();
+  const names = new Set<string>();
+
+  input.transitions.forEach((transition) => {
+    statusCounts.set(transition.nextStatus, (statusCounts.get(transition.nextStatus) || 0) + 1);
+    campaignCounts.set(transition.campaignLabel || 'No campaign', (campaignCounts.get(transition.campaignLabel || 'No campaign') || 0) + 1);
+    if (transition.talentName) names.add(transition.talentName);
+  });
+
+  const statusLabel = Array.from(statusCounts.entries())
+    .sort((a, b) => b[1] - a[1])
+    .map(([status, count]) => `${marketingStatusEmoji(status)} ${marketingStatusLabel(status)} (${count})`)
+    .join(' · ');
+  const campaignLabel = Array.from(campaignCounts.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 4)
+    .map(([campaign, count]) => `${campaign} (${count})`)
+    .join(' · ');
+  const namesPreview = Array.from(names).slice(0, 8).join(', ');
+  const extraCount = Math.max(0, names.size - 8);
+
+  return {
+    text: `GEMFINDER MARKETING: bulk update in ${input.projectName}`,
+    blocks: [
+      {
+        type: 'header',
+        text: {
+          type: 'plain_text',
+          text: `📦 Bulk marketing update · ${input.transitions.length} assignments`,
+        },
+      },
+      {
+        type: 'section',
+        fields: [
+          { type: 'mrkdwn', text: `*Project*\n${input.projectName}` },
+          { type: 'mrkdwn', text: `*Changed by*\n${actorLabel}` },
+          { type: 'mrkdwn', text: `*Statuses*\n${statusLabel || 'Mixed updates'}` },
+          { type: 'mrkdwn', text: `*Campaigns*\n${campaignLabel || 'Mixed campaigns'}` },
+        ],
+      },
+      ...(namesPreview ? [{
+        type: 'context',
+        elements: [
+          {
+            type: 'mrkdwn',
+            text: `Updated talent: ${namesPreview}${extraCount ? ` and ${extraCount} more` : ''}`,
+          },
+        ],
+      }] : []),
+      ...(input.projectUrl ? [{
+        type: 'actions',
+        elements: [
+          {
+            type: 'button',
+            text: { type: 'plain_text', text: 'Open project' },
+            url: input.projectUrl,
+          },
+        ],
+      }] : []),
+    ],
+  };
+}
+
 async function postSlackNotifications(webhookUrl: string, payloads: unknown[], context: Array<Record<string, string>>) {
   if (!webhookUrl || !payloads.length) return;
   const results = await Promise.allSettled(
@@ -404,6 +477,35 @@ export async function notifySlackOnProjectTransitions(input: {
 
   const artistTransitions = extractArtistTransitions(input.previousProjects, input.nextProjects);
   const marketingTransitions = extractMarketingTransitions(input.previousProjects, input.nextProjects);
+  const marketingPayloads =
+    marketingTransitions.length > 12
+      ? [
+          buildMarketingBulkSlackPayload({
+            projectName: marketingTransitions[0]?.projectName || 'Marketing Project',
+            projectUrl: marketingTransitions[0]?.projectUrl
+              ? marketingTransitions[0].projectUrl.replace(/([?&])assignment=[^&]+(&|$)/, '$1').replace(/[?&]$/, '')
+              : '',
+            actorEmail: input.actorEmail,
+            transitions: marketingTransitions,
+          }),
+        ]
+      : marketingTransitions.map((transition) => buildMarketingSlackPayload(transition, input.actorEmail));
+  const marketingContext =
+    marketingTransitions.length > 12
+      ? [
+          {
+            channel: 'marketing',
+            projectId: marketingTransitions[0]?.projectId || '',
+            mode: 'bulk-summary',
+            count: String(marketingTransitions.length),
+          },
+        ]
+      : marketingTransitions.map((transition) => ({
+          channel: 'marketing',
+          projectId: transition.projectId,
+          talentName: transition.talentName,
+          assignmentId: transition.assignmentId,
+        }));
 
   await Promise.all([
     postSlackNotifications(
@@ -417,13 +519,8 @@ export async function notifySlackOnProjectTransitions(input: {
     ),
     postSlackNotifications(
       marketingWebhookUrl,
-      marketingTransitions.map((transition) => buildMarketingSlackPayload(transition, input.actorEmail)),
-      marketingTransitions.map((transition) => ({
-        channel: 'marketing',
-        projectId: transition.projectId,
-        talentName: transition.talentName,
-        assignmentId: transition.assignmentId,
-      }))
+      marketingPayloads,
+      marketingContext
     ),
   ]);
 }
