@@ -2537,6 +2537,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     location: "",
     note: "",
   });
+  const [manualArtistSaving, setManualArtistSaving] = useState(false);
   const [artistEditForm, setArtistEditForm] = useState({
     name: "",
     genre: "",
@@ -2549,6 +2550,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [artistEditSaving, setArtistEditSaving] = useState(false);
   const [showMarketingItemModal, setShowMarketingItemModal] = useState(false);
   const [marketingForm, setMarketingForm] = useState(() => emptyMarketingForm());
+  const [marketingItemSaving, setMarketingItemSaving] = useState(false);
   const [campaignBankDraft, setCampaignBankDraft] = useState("");
   const [marketingStatusFilter, setMarketingStatusFilter] = useState("all");
   const [marketingCampaignFilter, setMarketingCampaignFilter] = useState("all");
@@ -2581,6 +2583,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [showFilters, setShowFilters] = useState(true);
   const [showQueue, setShowQueue] = useState(true);
   const [clockNow, setClockNow] = useState(() => new Date());
+  const manualArtistSubmitRef = useRef(false);
+  const marketingItemSubmitRef = useRef(false);
   const [reportStart, setReportStart] = useState(addDaysISO(todayISO(), -29));
   const [reportEnd, setReportEnd] = useState(todayISO());
   const [projectMode, setProjectMode] = useState("work");
@@ -2855,6 +2859,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   });
   const resetMarketingForm = () => setMarketingForm(emptyMarketingForm());
   const closeMarketingItemModal = () => {
+    marketingItemSubmitRef.current = false;
+    setMarketingItemSaving(false);
     setShowMarketingItemModal(false);
     resetMarketingForm();
   };
@@ -4083,6 +4089,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const addManualArtist = async () => {
     if (!requireEditor()) return;
     if (!proj) return;
+    if (manualArtistSubmitRef.current) return;
     const name = artistForm.name.trim();
     if (!name) {
       flash("Artist name is required", "err");
@@ -4094,6 +4101,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       flash(`${name} is already in this project`, "err");
       return;
     }
+    manualArtistSubmitRef.current = true;
+    setManualArtistSaving(true);
     const socialHandle = normalizeSocialHandle(artistForm.social);
     const nextArtist = {
       n: name,
@@ -4119,11 +4128,16 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     setShowAddArtist(false);
     saveProjectFast(nextProj);
     flash(alreadyOnPlatform ? `Added ${name} · already found in internal roster` : `Added ${name}`);
+    setTimeout(() => {
+      manualArtistSubmitRef.current = false;
+      setManualArtistSaving(false);
+    }, 350);
   };
 
   const saveMarketingItem = async () => {
     if (!requireEditor()) return;
     if (!proj) return;
+    if (marketingItemSubmitRef.current) return;
     const talentName = marketingForm.talentName.trim();
     if (!talentName) {
       flash("Talent name is required", "err");
@@ -4135,6 +4149,31 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     const title = marketingForm.title.trim() || [talentName, normalizedCampaigns[0] || marketingForm.deliverableType.trim()].filter(Boolean).join(" · ");
     if (marketingForm.status === "rejected" && !marketingForm.rejectedReason.trim()) {
       flash("Please add a rejection reason", "err");
+      return;
+    }
+    marketingItemSubmitRef.current = true;
+    setMarketingItemSaving(true);
+    const existingMarketingItems = (proj.marketingItems || []).map(item => normalizeMarketingItem(item, proj.teamUsers || DEFAULT_TEAM_USERS));
+    const normalizedCampaignKey = canonicalArtistName(normalizedCampaigns[0] || "");
+    const normalizedEmail = String(marketingForm.email || "").trim().toLowerCase();
+    const duplicateItem = !marketingForm.id
+      ? existingMarketingItems.find(item => {
+          if (normalizedCampaignKey) {
+            const hasCampaign = (item.campaigns || []).some(campaign => canonicalArtistName(campaign) === normalizedCampaignKey);
+            if (!hasCampaign) return false;
+          } else if ((item.campaigns || []).length) {
+            return false;
+          }
+          const sameName = canonicalArtistName(item.talentName) === canonicalArtistName(talentName);
+          const sameEmail = normalizedEmail && String(item.email || "").trim().toLowerCase() === normalizedEmail;
+          return sameName || sameEmail;
+        })
+      : null;
+    if (duplicateItem) {
+      marketingItemSubmitRef.current = false;
+      setMarketingItemSaving(false);
+      openMarketingItemModal(duplicateItem);
+      flash(`${talentName} already has an assignment for ${normalizedCampaigns[0] || "No campaign"}`, "err");
       return;
     }
     const itemId = marketingForm.id || `mkt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -4170,6 +4209,10 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     closeMarketingItemModal();
     saveProjectFast(nextProj);
     flash(exists ? `Updated ${talentName}` : `Added ${talentName}`);
+    setTimeout(() => {
+      marketingItemSubmitRef.current = false;
+      setMarketingItemSaving(false);
+    }, 350);
   };
 
   const deleteMarketingItem = async itemId => {
@@ -9451,8 +9494,8 @@ Requirements:
               </div>
               <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 18 }}>
                 <button onClick={() => { setShowAddArtist(false); resetArtistForm(); }} style={{ padding: "8px 18px", borderRadius: 10, border: `1px solid ${C.bd}`, background: "transparent", cursor: "pointer", fontSize: 13, fontFamily: ft, color: C.ts }}>Cancel</button>
-                <button onClick={addManualArtist} style={{ padding: "8px 24px", borderRadius: 10, border: "none", background: C.ac, color: "#fff", cursor: "pointer", fontSize: 13, fontWeight: 600, fontFamily: ft, opacity: artistForm.name.trim() ? 1 : 0.45 }}>
-                  Add Artist
+                <button disabled={!artistForm.name.trim() || manualArtistSaving} onClick={addManualArtist} style={{ padding: "8px 24px", borderRadius: 10, border: "none", background: C.ac, color: "#fff", cursor: !artistForm.name.trim() || manualArtistSaving ? "not-allowed" : "pointer", fontSize: 13, fontWeight: 600, fontFamily: ft, opacity: artistForm.name.trim() && !manualArtistSaving ? 1 : 0.45 }}>
+                  {manualArtistSaving ? "Adding..." : "Add Artist"}
                 </button>
               </div>
             </div>
@@ -9699,8 +9742,8 @@ Requirements:
                     </button>
                   )}
                   <button onClick={closeMarketingItemModal} style={{ padding: "8px 18px", borderRadius: 10, border: `1px solid ${C.bd}`, background: "transparent", cursor: "pointer", fontSize: 13, fontFamily: ft, color: C.ts }}>Cancel</button>
-                  <button onClick={saveMarketingItem} style={{ padding: "8px 24px", borderRadius: 10, border: "none", background: C.ac, color: "#fff", cursor: "pointer", fontSize: 13, fontWeight: 600, fontFamily: ft, opacity: marketingForm.talentName.trim() ? 1 : 0.45 }}>
-                    {marketingForm.id ? "Save Changes" : "Add Assignment"}
+                  <button disabled={!marketingForm.talentName.trim() || marketingItemSaving} onClick={saveMarketingItem} style={{ padding: "8px 24px", borderRadius: 10, border: "none", background: C.ac, color: "#fff", cursor: !marketingForm.talentName.trim() || marketingItemSaving ? "not-allowed" : "pointer", fontSize: 13, fontWeight: 600, fontFamily: ft, opacity: marketingForm.talentName.trim() && !marketingItemSaving ? 1 : 0.45 }}>
+                    {marketingItemSaving ? (marketingForm.id ? "Saving..." : "Adding...") : (marketingForm.id ? "Save Changes" : "Add Assignment")}
                   </button>
                 </div>
               </div>
