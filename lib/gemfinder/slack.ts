@@ -212,7 +212,7 @@ function extractMarketingTransitions(previousProjects: unknown[], nextProjects: 
       const itemKey = marketingItemKey(nextItem);
       const previousItem = prevItems.get(itemKey);
       const nextStatus = String(nextItem?.status || 'prospect').toLowerCase();
-      const previousStatus = String(previousItem?.status || '').toLowerCase();
+      const previousStatus = String(previousItem?.status || '').toLowerCase() || 'prospect';
       if (!previousStatus || previousStatus === nextStatus) return;
       if (!MARKETING_NOTIFY_STATUS_IDS.has(nextStatus)) return;
 
