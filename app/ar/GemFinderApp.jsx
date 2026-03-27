@@ -4664,8 +4664,16 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         ]),
       },
     };
+    const previousStatus = exists
+      ? normalizeMarketingStatus((proj.marketingItems || []).find(item => item.id === itemId)?.status)
+      : "prospect";
+    const shouldAwaitSave = !exists || previousStatus !== nextItem.status;
     closeMarketingItemModal();
-    saveProjectFast(nextProj);
+    if (shouldAwaitSave) {
+      await saveProject(nextProj);
+    } else {
+      saveProjectFast(nextProj);
+    }
     flash(exists ? `Updated ${talentName}` : `Added ${talentName}`);
     setTimeout(() => {
       marketingItemSubmitRef.current = false;
