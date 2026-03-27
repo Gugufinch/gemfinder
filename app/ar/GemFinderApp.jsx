@@ -3039,6 +3039,61 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     () => workspaceTalentProfileMap.get(selectedTalentProfileId) || null,
     [workspaceTalentProfileMap, selectedTalentProfileId]
   );
+  const selectedTalentProjectSummaries = useMemo(() => {
+    if (!selectedTalentProfile) return [];
+    const byProject = new Map();
+    const ensureProjectSummary = (projectId, projectName, projectType, kind) => {
+      const key = String(projectId || "");
+      if (!byProject.has(key)) {
+        byProject.set(key, {
+          projectId: key,
+          projectName: projectName || "Untitled Project",
+          projectType: normalizeProjectType(projectType),
+          membershipKinds: [],
+          arRecords: [],
+          marketingAssignments: [],
+        });
+      }
+      const summary = byProject.get(key);
+      summary.membershipKinds.push(kind);
+      return summary;
+    };
+
+    selectedTalentProfile.projectMemberships.forEach(item => {
+      ensureProjectSummary(item.projectId, item.projectName, item.projectType, item.kind);
+    });
+
+    selectedTalentProfile.arRecords.forEach(record => {
+      const summary = ensureProjectSummary(record.projectId, record.projectName, "ar", "ar");
+      summary.arRecords.push(record);
+    });
+
+    selectedTalentProfile.marketingAssignments.forEach(assignment => {
+      const summary = ensureProjectSummary(assignment.projectId, assignment.projectName, "marketing", "marketing");
+      summary.marketingAssignments.push(assignment);
+    });
+
+    return [...byProject.values()]
+      .map(summary => ({
+        ...summary,
+        membershipKinds: uniqStrings(summary.membershipKinds.filter(Boolean)),
+        owners: uniqStrings([
+          ...summary.arRecords.map(record => record.owner),
+          ...summary.marketingAssignments.map(assignment => assignment.owner),
+        ].filter(Boolean)),
+        arStages: uniqStrings(summary.arRecords.map(record => record.stage).filter(Boolean)),
+        marketingStatuses: uniqStrings(summary.marketingAssignments.map(assignment => assignment.status).filter(Boolean)),
+      }))
+      .sort((a, b) => a.projectName.localeCompare(b.projectName));
+  }, [selectedTalentProfile]);
+  const selectedTalentArProjectSummaries = useMemo(
+    () => selectedTalentProjectSummaries.filter(summary => summary.arRecords.length),
+    [selectedTalentProjectSummaries]
+  );
+  const selectedTalentMarketingProjectSummaries = useMemo(
+    () => selectedTalentProjectSummaries.filter(summary => summary.marketingAssignments.length),
+    [selectedTalentProjectSummaries]
+  );
   const talentTargetProject = useMemo(
     () => projects.find(project => project.id === talentTargetProjectId) || null,
     [projects, talentTargetProjectId]
@@ -10724,7 +10779,7 @@ Requirements:
                     {selectedTalentProfile.talentTypes.map(type => (
                       <span key={type} style={{ ...mkP(true, C.ac, C.al), cursor: "default" }}>{type}</span>
                     ))}
-                    <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{selectedTalentProfile.projectMemberships.length} project{selectedTalentProfile.projectMemberships.length === 1 ? "" : "s"}</span>
+                    <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{selectedTalentProjectSummaries.length} project{selectedTalentProjectSummaries.length === 1 ? "" : "s"}</span>
                     <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{selectedTalentProfile.marketingAssignments.length} marketing assignment{selectedTalentProfile.marketingAssignments.length === 1 ? "" : "s"}</span>
                     <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{selectedTalentProfile.arRecords.length} A&R record{selectedTalentProfile.arRecords.length === 1 ? "" : "s"}</span>
                   </div>
@@ -10788,25 +10843,50 @@ Requirements:
                 </div>
 
                 <div style={{ ...cS, padding: "18px 20px" }}>
-                  <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>Projects</div>
+                  <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>Active in Projects</div>
+                  <div style={{ fontSize: 12, color: C.ts, marginBottom: 12 }}>
+                    Shared identity stays merged here, but each workspace keeps its own owners, stages, campaigns, and notes.
+                  </div>
                   <div style={{ display: "grid", gap: 10 }}>
-                    {selectedTalentProfile.projectMemberships.length ? selectedTalentProfile.projectMemberships.map((item, index) => (
-                      <div key={`${item.projectId}:${item.kind}:${index}`} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "10px 12px", borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sa }}>
-                        <div>
-                          <div style={{ fontSize: 13, fontWeight: 700, color: C.tx }}>{item.projectName}</div>
-                          <div style={{ fontSize: 11, color: C.tt }}>{item.projectType === "marketing" ? "Marketing workspace" : "A&R workspace"} · {item.kind === "marketing" ? "campaign assignments" : "pipeline record"}</div>
+                    {selectedTalentProjectSummaries.length ? selectedTalentProjectSummaries.map(summary => (
+                      <div key={summary.projectId} style={{ padding: "12px 14px", borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sa }}>
+                        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, marginBottom: 10 }}>
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ fontSize: 13, fontWeight: 700, color: C.tx, marginBottom: 4 }}>{summary.projectName}</div>
+                            <div style={{ fontSize: 11, color: C.tt }}>
+                              {summary.projectType === "marketing" ? "Marketing workspace" : "A&R workspace"}
+                              {" · "}
+                              {summary.arRecords.length ? `${summary.arRecords.length} A&R record${summary.arRecords.length === 1 ? "" : "s"}` : "No A&R record"}
+                              {" · "}
+                              {summary.marketingAssignments.length ? `${summary.marketingAssignments.length} marketing assignment${summary.marketingAssignments.length === 1 ? "" : "s"}` : "No marketing assignments"}
+                            </div>
+                          </div>
+                          <button
+                            onClick={() => {
+                              closeTalentProfileModal();
+                              setApId(summary.projectId);
+                              setScreen("project");
+                              if (summary.projectType === "marketing") setProjectMode("work");
+                            }}
+                            style={actionBtn(false, "neutral")}
+                          >
+                            Open project
+                          </button>
                         </div>
-                        <button
-                          onClick={() => {
-                            closeTalentProfileModal();
-                            setApId(item.projectId);
-                            setScreen("project");
-                            if (item.projectType === "marketing") setProjectMode("work");
-                          }}
-                          style={actionBtn(false, "neutral")}
-                        >
-                          Open project
-                        </button>
+                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                          {summary.owners.map(owner => (
+                            <span key={`${summary.projectId}:owner:${owner}`} style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>Owner: {owner}</span>
+                          ))}
+                          {summary.arStages.map(stage => (
+                            <span key={`${summary.projectId}:stage:${stage}`} style={{ ...mkP(true, sc(stage, C), sb(stage, C)), cursor: "default" }}>{SM[stage]?.label || "Prospect"}</span>
+                          ))}
+                          {summary.marketingStatuses.map(status => {
+                            const tone = marketingStatusTone(status, C);
+                            return (
+                              <span key={`${summary.projectId}:status:${status}`} style={{ ...mkP(true, tone.tone, tone.bg), cursor: "default" }}>{MM[status]?.label || "Prospect"}</span>
+                            );
+                          })}
+                        </div>
                       </div>
                     )) : (
                       <div style={{ fontSize: 12, color: C.tt }}>No linked projects yet.</div>
@@ -10938,22 +11018,28 @@ Requirements:
               </div>
 
               <div style={{ ...cS, padding: "18px 20px", marginBottom: 16 }}>
-                <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>A&R placements</div>
+                <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>A&R placements by project</div>
                 <div style={{ display: "grid", gap: 10 }}>
-                  {selectedTalentProfile.arRecords.length ? selectedTalentProfile.arRecords.map(record => (
-                    <div key={`${record.projectId}:${record.artistName}`} style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", padding: "12px 14px", borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sa }}>
-                      <div style={{ minWidth: 0 }}>
-                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 6 }}>
-                          <div style={{ fontSize: 14, fontWeight: 700, color: C.tx }}>{record.artistName}</div>
-                          <span style={{ ...mkP(true, sc(record.stage, C), sb(record.stage, C)), cursor: "default" }}>{SM[record.stage]?.label || "Prospect"}</span>
-                          {record.owner && <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{record.owner}</span>}
-                        </div>
-                        <div style={{ fontSize: 12, color: C.ts, marginBottom: 4 }}>{record.projectName}</div>
-                        <div style={{ fontSize: 11, color: C.tt }}>
-                          {[record.genre, record.monthlyListeners ? `${record.monthlyListeners} listeners` : "", record.location].filter(Boolean).join(" · ") || "Working A&R record"}
-                        </div>
+                  {selectedTalentArProjectSummaries.length ? selectedTalentArProjectSummaries.map(summary => (
+                    <div key={`ar:${summary.projectId}`} style={{ padding: "12px 14px", borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sa }}>
+                      <div style={{ fontSize: 12, color: C.tt, marginBottom: 10 }}>{summary.projectName}</div>
+                      <div style={{ display: "grid", gap: 10 }}>
+                        {summary.arRecords.map(record => (
+                          <div key={`${record.projectId}:${record.artistName}`} style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", padding: "12px 14px", borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sf }}>
+                            <div style={{ minWidth: 0 }}>
+                              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 6 }}>
+                                <div style={{ fontSize: 14, fontWeight: 700, color: C.tx }}>{record.artistName}</div>
+                                <span style={{ ...mkP(true, sc(record.stage, C), sb(record.stage, C)), cursor: "default" }}>{SM[record.stage]?.label || "Prospect"}</span>
+                                {record.owner && <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{record.owner}</span>}
+                              </div>
+                              <div style={{ fontSize: 11, color: C.tt }}>
+                                {[record.genre, record.monthlyListeners ? `${record.monthlyListeners} listeners` : "", record.location].filter(Boolean).join(" · ") || "Working A&R record"}
+                              </div>
+                            </div>
+                            <button onClick={() => openTalentArRecord(record)} style={actionBtn(false, "accent")}>Open artist</button>
+                          </div>
+                        ))}
                       </div>
-                      <button onClick={() => openTalentArRecord(record)} style={actionBtn(false, "accent")}>Open artist</button>
                     </div>
                   )) : (
                     <div style={{ fontSize: 12, color: C.tt }}>No A&R placements linked yet.</div>
@@ -10962,25 +11048,31 @@ Requirements:
               </div>
 
               <div style={{ ...cS, padding: "18px 20px" }}>
-                <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>Marketing assignments</div>
+                <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>Marketing assignments by project</div>
                 <div style={{ display: "grid", gap: 10 }}>
-                  {selectedTalentProfile.marketingAssignments.length ? selectedTalentProfile.marketingAssignments.map(assignment => (
-                    <div key={assignment.assignmentId} style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", padding: "12px 14px", borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sa }}>
-                      <div style={{ minWidth: 0 }}>
-                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 6 }}>
-                          <div style={{ fontSize: 14, fontWeight: 700, color: C.tx }}>{assignment.campaign || "No campaign"}</div>
-                          <span style={{ ...mkP(true, marketingStatusTone(assignment.status, C).tone, marketingStatusTone(assignment.status, C).bg), cursor: "default" }}>{MM[assignment.status]?.label || "Prospect"}</span>
-                          {assignment.owner && <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{assignment.owner}</span>}
-                        </div>
-                        <div style={{ fontSize: 12, color: C.ts, marginBottom: 4 }}>{assignment.projectName}</div>
-                        <div style={{ fontSize: 11, color: C.tt }}>
-                          {[assignment.title, assignment.trafficType, assignment.deliverableType, assignment.dueDate ? `Due ${sD(assignment.dueDate)}` : ""].filter(Boolean).join(" · ") || "Marketing assignment"}
-                        </div>
-                      </div>
-                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
-                        {assignment.briefUrl && <a href={assignment.briefUrl} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Brief</a>}
-                        {assignment.contentUrl && <a href={assignment.contentUrl} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Content</a>}
-                        <button onClick={() => openTalentMarketingAssignment(assignment)} style={actionBtn(false, "accent")}>Open assignment</button>
+                  {selectedTalentMarketingProjectSummaries.length ? selectedTalentMarketingProjectSummaries.map(summary => (
+                    <div key={`marketing:${summary.projectId}`} style={{ padding: "12px 14px", borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sa }}>
+                      <div style={{ fontSize: 12, color: C.tt, marginBottom: 10 }}>{summary.projectName}</div>
+                      <div style={{ display: "grid", gap: 10 }}>
+                        {summary.marketingAssignments.map(assignment => (
+                          <div key={assignment.assignmentId} style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", padding: "12px 14px", borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sf }}>
+                            <div style={{ minWidth: 0 }}>
+                              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 6 }}>
+                                <div style={{ fontSize: 14, fontWeight: 700, color: C.tx }}>{assignment.campaign || "No campaign"}</div>
+                                <span style={{ ...mkP(true, marketingStatusTone(assignment.status, C).tone, marketingStatusTone(assignment.status, C).bg), cursor: "default" }}>{MM[assignment.status]?.label || "Prospect"}</span>
+                                {assignment.owner && <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{assignment.owner}</span>}
+                              </div>
+                              <div style={{ fontSize: 11, color: C.tt }}>
+                                {[assignment.title, assignment.trafficType, assignment.deliverableType, assignment.dueDate ? `Due ${sD(assignment.dueDate)}` : ""].filter(Boolean).join(" · ") || "Marketing assignment"}
+                              </div>
+                            </div>
+                            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                              {assignment.briefUrl && <a href={assignment.briefUrl} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Brief</a>}
+                              {assignment.contentUrl && <a href={assignment.contentUrl} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Content</a>}
+                              <button onClick={() => openTalentMarketingAssignment(assignment)} style={actionBtn(false, "accent")}>Open assignment</button>
+                            </div>
+                          </div>
+                        ))}
                       </div>
                     </div>
                   )) : (
