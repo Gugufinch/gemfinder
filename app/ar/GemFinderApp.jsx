@@ -496,6 +496,48 @@ function marketingImportKey(item) {
     String(item.email || "").toLowerCase(),
   ].join("::");
 }
+function marketingDuplicateKey(item) {
+  const normalized = normalizeMarketingItem(item);
+  return [
+    marketingImportKey(normalized),
+    String(normalized.status || "").toLowerCase(),
+    String(normalized.owner || "").trim().toLowerCase(),
+    String(normalized.dueDate || "").trim(),
+    String(normalized.trafficType || "").toLowerCase(),
+    String(normalized.notes || "").trim().toLowerCase(),
+    String(normalized.rejectedReason || "").trim().toLowerCase(),
+    String(normalized.briefUrl || "").trim().toLowerCase(),
+    String(normalized.contentUrl || "").trim().toLowerCase(),
+  ].join("::");
+}
+function marketingItemRichnessScore(item) {
+  const normalized = normalizeMarketingItem(item);
+  const values = [
+    normalized.email,
+    normalized.instagramHandle,
+    normalized.instagramUrl,
+    normalized.instagramFollowers,
+    normalized.tiktokHandle,
+    normalized.tiktokUrl,
+    normalized.tiktokFollowers,
+    normalized.spotifyUrl,
+    normalized.spotifyMonthlyListeners,
+    normalized.briefUrl,
+    normalized.contentUrl,
+    normalized.notes,
+    normalized.rejectedReason,
+    normalized.owner,
+    normalized.dueDate,
+  ];
+  return values.reduce((score, value) => score + (String(value || "").trim() ? 1 : 0), 0);
+}
+function compareMarketingItemStrength(a, b) {
+  const scoreDiff = marketingItemRichnessScore(a) - marketingItemRichnessScore(b);
+  if (scoreDiff !== 0) return scoreDiff;
+  const updatedDiff = new Date(a?.updatedAt || a?.createdAt || 0).getTime() - new Date(b?.updatedAt || b?.createdAt || 0).getTime();
+  if (updatedDiff !== 0) return updatedDiff;
+  return new Date(a?.createdAt || 0).getTime() - new Date(b?.createdAt || 0).getTime();
+}
 function mergeMarketingImportedItem(existingItem, importedItem, teamUsers = DEFAULT_TEAM_USERS) {
   const existing = normalizeMarketingItem(existingItem, teamUsers);
   const incoming = normalizeMarketingItem(importedItem, teamUsers);
@@ -5071,6 +5113,21 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     return (proj.marketingItems || []).map(item => normalizeMarketingItem(item, proj.teamUsers || DEFAULT_TEAM_USERS));
   }, [proj]);
 
+  const marketingDuplicateGroups = useMemo(() => {
+    const groups = new Map();
+    marketingItems.forEach(item => {
+      const key = marketingDuplicateKey(item);
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(item);
+    });
+    return [...groups.values()].filter(group => group.length > 1);
+  }, [marketingItems]);
+
+  const marketingDuplicateRemovalCount = useMemo(
+    () => marketingDuplicateGroups.reduce((sum, group) => sum + Math.max(0, group.length - 1), 0),
+    [marketingDuplicateGroups]
+  );
+
   const marketingItemIds = useMemo(
     () => marketingItems.map(item => String(item.id || "")).filter(Boolean),
     [marketingItems]
@@ -5350,6 +5407,68 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     setSelectedMarketingIds(new Set());
     setMarketingSelectionMode(false);
     flash(`Deleted ${ids.length} assignment${ids.length === 1 ? "" : "s"}`);
+  };
+
+  const removeDuplicateMarketingItems = async () => {
+    if (!requireEditor()) return;
+    if (!proj) return;
+    if (!marketingDuplicateGroups.length) {
+      flash("No duplicate marketing assignments found");
+      return;
+    }
+    const duplicateCount = marketingDuplicateRemovalCount;
+    if (!window.confirm(`Remove ${duplicateCount} duplicate assignment${duplicateCount === 1 ? "" : "s"}? GemFinder will keep the strongest copy of each exact duplicate set.`)) return;
+    const teamUsers = proj.teamUsers || DEFAULT_TEAM_USERS;
+    const keepById = new Map();
+    const removeIds = new Set();
+
+    marketingDuplicateGroups.forEach(group => {
+      const sorted = [...group].sort((a, b) => compareMarketingItemStrength(b, a));
+      let survivor = normalizeMarketingItem(sorted[0], teamUsers);
+      for (const candidate of sorted.slice(1)) {
+        const merged = mergeMarketingImportedItem(survivor, candidate, teamUsers);
+        survivor = merged.merged;
+      }
+      keepById.set(survivor.id, survivor);
+      sorted.slice(1).forEach(item => removeIds.add(item.id));
+    });
+
+    const nextMarketingItems = (proj.marketingItems || []).reduce((acc, rawItem) => {
+      const item = normalizeMarketingItem(rawItem, teamUsers);
+      if (removeIds.has(item.id)) return acc;
+      acc.push(keepById.get(item.id) || item);
+      return acc;
+    }, []);
+    const nextMarketingIds = nextMarketingItems.map(item => item.id);
+    const nextMarketingGroups = normalizeMarketingGroups(
+      (proj.settings?.marketingGroups || []).map(group => ({
+        ...group,
+        assignmentIds: uniqStrings(
+          (group.assignmentIds || [])
+            .map(id => (removeIds.has(id) ? "" : id))
+            .filter(Boolean)
+        ),
+      })),
+      nextMarketingIds
+    ).filter(group => group.assignmentIds.length);
+    const nextProj = {
+      ...proj,
+      marketingItems: nextMarketingItems,
+      settings: {
+        ...(proj.settings || {}),
+        marketingGroups: nextMarketingGroups,
+      },
+    };
+    const ok = await saveProject(nextProj);
+    if (!ok) return;
+    if (marketingForm.id && removeIds.has(marketingForm.id)) {
+      closeMarketingItemModal();
+    }
+    if (marketingGroupFilter !== "all" && !nextMarketingGroups.some(group => group.id === marketingGroupFilter)) {
+      setMarketingGroupFilter("all");
+    }
+    setSelectedMarketingIds(prev => new Set([...prev].filter(id => !removeIds.has(id))));
+    flash(`Removed ${duplicateCount} duplicate assignment${duplicateCount === 1 ? "" : "s"}`);
   };
 
   const batchAssignMarketingOwner = async owner => {
@@ -7714,6 +7833,9 @@ Requirements:
                     <>
                       <button onClick={() => openMarketingItemModal(null)} style={{ ...actionBtn(true, "good"), ...lockStyle(isReadOnly) }}>+ Campaign Assignment</button>
                       <button onClick={openMarketingBulkUpdateModal} style={{ ...actionBtn(false, "accent"), ...lockStyle(isReadOnly) }}>Bulk Update</button>
+                      <button onClick={removeDuplicateMarketingItems} style={{ ...actionBtn(false, "warn"), ...lockStyle(isReadOnly || !marketingDuplicateRemovalCount) }}>
+                        Clean Duplicates{marketingDuplicateRemovalCount ? ` (${marketingDuplicateRemovalCount})` : ""}
+                      </button>
                       <button onClick={() => setMarketingSelectionMode(prev => !prev)} style={{ ...actionBtn(marketingSelectionMode, "neutral"), ...lockStyle(isReadOnly) }}>
                         {marketingSelectionMode ? "Done Selecting" : "Select Assignments"}
                       </button>
