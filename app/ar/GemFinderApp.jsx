@@ -773,6 +773,34 @@ function normalizeMarketingItem(item, teamUsers = DEFAULT_TEAM_USERS) {
     updatedAt: String(item?.updatedAt || item?.createdAt || new Date().toISOString()),
   };
 }
+function marketingFormSnapshot(source) {
+  const normalizedStatus = normalizeMarketingStatus(source?.status || "prospect");
+  return JSON.stringify({
+    talentName: String(source?.talentName || "").trim(),
+    talentType: String(source?.talentType || "Internal Artist"),
+    title: String(source?.title || "").trim(),
+    campaign: String(source?.newCampaign || source?.campaign || source?.campaigns?.[0] || "").trim(),
+    trafficType: String(source?.trafficType || "Organic"),
+    channels: normalizeMarketingChannels(source?.channels?.length ? source.channels : source?.channel || "").sort(),
+    deliverableType: String(source?.deliverableType || "UGC").trim().toUpperCase(),
+    status: normalizedStatus,
+    owner: String(source?.owner || ""),
+    dueDate: String(source?.dueDate || ""),
+    email: String(source?.email || "").trim().toLowerCase(),
+    instagramHandle: normalizeSocialHandle(source?.instagramHandle || source?.instagramUrl || ""),
+    instagramUrl: String(source?.instagramUrl || "").trim(),
+    instagramFollowers: normalizeFollowerCount(source?.instagramFollowers || ""),
+    tiktokHandle: normalizeSocialHandle(source?.tiktokHandle || source?.tiktokUrl || ""),
+    tiktokUrl: String(source?.tiktokUrl || "").trim(),
+    tiktokFollowers: normalizeFollowerCount(source?.tiktokFollowers || ""),
+    spotifyUrl: String(source?.spotifyUrl || "").trim(),
+    spotifyMonthlyListeners: normalizeFollowerCount(source?.spotifyMonthlyListeners || ""),
+    briefUrl: String(source?.briefUrl || "").trim(),
+    contentUrl: String(source?.contentUrl || "").trim(),
+    notes: String(source?.notes || "").trim(),
+    rejectedReason: normalizedStatus === "rejected" ? String(source?.rejectedReason || "").trim() : "",
+  });
+}
 function marketingItemPrimaryLabel(item) {
   return String(item?.talentName || item?.title || "").trim() || "Untitled assignment";
 }
@@ -5808,6 +5836,74 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     };
   }, [showMarketingItemModal, marketingForm.status, editingMarketingItem, C]);
 
+  const relatedMarketingAssignments = useMemo(() => {
+    if (!showMarketingItemModal) return [];
+    const emailKey = canonicalEmail(marketingForm.email || editingMarketingItem?.email || "");
+    const nameKey = canonicalArtistName(marketingForm.talentName || editingMarketingItem?.talentName || "");
+    if (!emailKey && !nameKey) return [];
+    return marketingItems
+      .filter(item => {
+        const sameEmail = emailKey && canonicalEmail(item.email) === emailKey;
+        const sameName = nameKey && canonicalArtistName(item.talentName) === nameKey;
+        return sameEmail || sameName;
+      })
+      .sort((a, b) => {
+        if (String(a.id || "") === String(marketingForm.id || "")) return -1;
+        if (String(b.id || "") === String(marketingForm.id || "")) return 1;
+        const campaignA = String(a.campaign || a.campaigns?.[0] || "No campaign");
+        const campaignB = String(b.campaign || b.campaigns?.[0] || "No campaign");
+        return campaignA.localeCompare(campaignB) || String(a.title || "").localeCompare(String(b.title || ""));
+      });
+  }, [showMarketingItemModal, marketingItems, marketingForm.id, marketingForm.email, marketingForm.talentName, editingMarketingItem]);
+
+  const marketingFormHasUnsavedChanges = useMemo(() => {
+    if (!showMarketingItemModal) return false;
+    if (editingMarketingItem) {
+      return marketingFormSnapshot(marketingForm) !== marketingFormSnapshot(editingMarketingItem);
+    }
+    return marketingFormSnapshot(marketingForm) !== marketingFormSnapshot(emptyMarketingForm());
+  }, [showMarketingItemModal, marketingForm, editingMarketingItem]);
+
+  const confirmMarketingModalDiscard = useCallback((nextActionLabel = "continue") => {
+    if (!marketingFormHasUnsavedChanges) return true;
+    return window.confirm(`Discard unsaved changes and ${nextActionLabel}?`);
+  }, [marketingFormHasUnsavedChanges]);
+
+  const openRelatedMarketingAssignment = useCallback((assignmentId) => {
+    const target = marketingItems.find(item => String(item.id || "") === String(assignmentId || ""));
+    if (!target) return;
+    if (!confirmMarketingModalDiscard("open another campaign assignment")) return;
+    openMarketingItemModal(target);
+  }, [marketingItems, confirmMarketingModalDiscard]);
+
+  const startNewCampaignFromMarketingForm = useCallback(() => {
+    if (!marketingForm.talentName.trim()) {
+      flash("Talent name is required first", "err");
+      return;
+    }
+    if (!confirmMarketingModalDiscard("start a new campaign assignment")) return;
+    setMarketingForm({
+      ...emptyMarketingForm(),
+      talentName: marketingForm.talentName.trim(),
+      talentType: marketingForm.talentType || "Internal Artist",
+      title: "",
+      trafficType: marketingForm.trafficType || "Organic",
+      channels: normalizeMarketingChannels(marketingForm.channels),
+      deliverableType: marketingForm.deliverableType || "UGC",
+      status: "prospect",
+      owner: marketingForm.owner || "",
+      email: marketingForm.email || "",
+      instagramHandle: marketingForm.instagramHandle || normalizeSocialHandle(marketingForm.instagramUrl),
+      instagramUrl: marketingForm.instagramUrl || "",
+      instagramFollowers: marketingForm.instagramFollowers || "",
+      tiktokHandle: marketingForm.tiktokHandle || normalizeSocialHandle(marketingForm.tiktokUrl),
+      tiktokUrl: marketingForm.tiktokUrl || "",
+      tiktokFollowers: marketingForm.tiktokFollowers || "",
+      spotifyUrl: marketingForm.spotifyUrl || "",
+      spotifyMonthlyListeners: marketingForm.spotifyMonthlyListeners || "",
+    });
+  }, [marketingForm, confirmMarketingModalDiscard, flash]);
+
   const marketingGroupOptions = useMemo(
     () => normalizeMarketingGroups(proj?.settings?.marketingGroups || [], marketingItemIds),
     [proj?.settings?.marketingGroups, marketingItemIds]
@@ -10421,6 +10517,45 @@ Requirements:
                 </div>
                 <button onClick={closeMarketingItemModal} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: C.ts }}>✕</button>
               </div>
+
+              {(relatedMarketingAssignments.length > 1 || marketingForm.talentName.trim()) && (
+                <div style={{ display: "flex", gap: 10, alignItems: "end", justifyContent: "space-between", flexWrap: "wrap", marginBottom: 14 }}>
+                  <div style={{ display: "grid", gap: 4, minWidth: 280, flex: "1 1 320px" }}>
+                    <span style={{ fontSize: 12, color: C.ts }}>
+                      {relatedMarketingAssignments.length > 1
+                        ? `This talent already has ${relatedMarketingAssignments.length} campaign assignments in this project.`
+                        : "Create a fresh campaign assignment for this same talent without retyping their profile details."}
+                    </span>
+                    {relatedMarketingAssignments.length > 1 && (
+                      <select
+                        value={marketingForm.id || ""}
+                        onChange={e => openRelatedMarketingAssignment(e.target.value)}
+                        style={{ ...iS, width: "100%" }}
+                      >
+                        {!marketingForm.id && (
+                          <option value="">New campaign draft</option>
+                        )}
+                        {relatedMarketingAssignments.map(item => {
+                          const campaignLabel = item.campaigns?.length ? item.campaigns.join(", ") : "No campaign";
+                          const statusLabel = MM[item.status]?.label || "Prospect";
+                          return (
+                            <option key={item.id} value={item.id}>
+                              {`${campaignLabel} · ${statusLabel}`}
+                            </option>
+                          );
+                        })}
+                      </select>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={startNewCampaignFromMarketingForm}
+                    style={{ ...actionBtn(true, "accent"), whiteSpace: "nowrap" }}
+                  >
+                    + New Campaign
+                  </button>
+                </div>
+              )}
 
               <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr", gap: 10 }}>
                 <input value={marketingForm.talentName} onChange={e => setMarketingForm({ ...marketingForm, talentName: e.target.value })} placeholder="Talent name*" autoFocus style={{ ...iS, width: "100%" }} />
