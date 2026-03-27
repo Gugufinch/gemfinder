@@ -1406,6 +1406,282 @@ function normalizeProject(p) {
   };
 }
 
+function normalizeTalentTypeLabel(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const known = MARKETING_TALENT_TYPES.find(type => type.toLowerCase() === raw.toLowerCase());
+  if (known) return known;
+  if (raw.toLowerCase() === "artist") return "Internal Artist";
+  return titleCaseWords(raw);
+}
+
+function canonicalEmail(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  return /@/.test(raw) ? raw : "";
+}
+
+function canonicalSpotifyValue(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, "")
+    .replace(/^open\.spotify\.com\//, "")
+    .replace(/^spotify\.com\//, "")
+    .replace(/\/+$/, "");
+}
+
+function toNumberString(value) {
+  const raw = normalizeFollowerCount(value);
+  return raw ? String(Number(raw)) : "";
+}
+
+function betterNumericString(a, b) {
+  const na = Number(a || 0);
+  const nb = Number(b || 0);
+  return nb > na ? String(nb) : String(na || "");
+}
+
+function preferLongerString(currentValue, nextValue) {
+  const current = String(currentValue || "").trim();
+  const next = String(nextValue || "").trim();
+  if (!current) return next;
+  if (!next) return current;
+  return next.length > current.length ? next : current;
+}
+
+function buildTalentIdentity(input = {}) {
+  return {
+    name: canonicalArtistName(input.displayName || input.talentName || input.name || input.artistName || input.n || ""),
+    email: canonicalEmail(input.primaryEmail || input.email || input.e || ""),
+    spotify: canonicalSpotifyValue(input.spotifyUrl || input.spotify || ""),
+    instagram: normalizeSocialHandle(input.instagramHandle || input.instagramUrl || input.instagram || input.ig || input.soc || ""),
+    tiktok: normalizeSocialHandle(input.tiktokHandle || input.tiktokUrl || input.tiktok || ""),
+  };
+}
+
+function preferredTalentProfileId(identity) {
+  if (identity.email) return `talent:email:${identity.email}`;
+  if (identity.spotify) return `talent:spotify:${identity.spotify}`;
+  if (identity.instagram) return `talent:instagram:${identity.instagram}`;
+  if (identity.tiktok) return `talent:tiktok:${identity.tiktok}`;
+  if (identity.name) return `talent:name:${identity.name}`;
+  return "";
+}
+
+function createEmptyTalentProfile(id, identity = {}, seed = {}) {
+  return {
+    id,
+    displayName: seed.displayName || seed.talentName || seed.name || seed.artistName || seed.n || "Unknown talent",
+    aliases: [],
+    primaryEmail: identity.email || canonicalEmail(seed.primaryEmail || seed.email || seed.e || ""),
+    emails: identity.email ? [identity.email] : [],
+    instagramHandle: identity.instagram || "",
+    instagramHandles: identity.instagram ? [identity.instagram] : [],
+    instagramUrl: String(seed.instagramUrl || seed.instagram || "").trim(),
+    instagramFollowers: toNumberString(seed.instagramFollowers || ""),
+    tiktokHandle: identity.tiktok || "",
+    tiktokHandles: identity.tiktok ? [identity.tiktok] : [],
+    tiktokUrl: String(seed.tiktokUrl || seed.tiktok || "").trim(),
+    tiktokFollowers: toNumberString(seed.tiktokFollowers || ""),
+    spotifyUrl: String(seed.spotifyUrl || "").trim(),
+    spotifyMonthlyListeners: toNumberString(seed.spotifyMonthlyListeners || seed.listeners || seed.l || ""),
+    talentTypes: uniqStrings([normalizeTalentTypeLabel(seed.talentType || seed.type || "Artist")].filter(Boolean)),
+    projectMemberships: [],
+    arRecords: [],
+    marketingAssignments: [],
+  };
+}
+
+function registerTalentIdentity(index, profile, identity = {}) {
+  if (identity.email) index.byEmail.set(identity.email, profile.id);
+  if (identity.spotify) index.bySpotify.set(identity.spotify, profile.id);
+  if (identity.instagram) index.byInstagram.set(identity.instagram, profile.id);
+  if (identity.tiktok) index.byTiktok.set(identity.tiktok, profile.id);
+  if (identity.name) {
+    const existing = index.byName.get(identity.name) || new Set();
+    existing.add(profile.id);
+    index.byName.set(identity.name, existing);
+  }
+  uniqStrings([canonicalArtistName(profile.displayName), ...profile.aliases.map(alias => canonicalArtistName(alias))].filter(Boolean)).forEach(nameKey => {
+    const existing = index.byName.get(nameKey) || new Set();
+    existing.add(profile.id);
+    index.byName.set(nameKey, existing);
+  });
+}
+
+function resolveTalentProfileId(index, identity = {}) {
+  if (identity.email && index.byEmail.has(identity.email)) return index.byEmail.get(identity.email);
+  if (identity.spotify && index.bySpotify.has(identity.spotify)) return index.bySpotify.get(identity.spotify);
+  if (identity.instagram && index.byInstagram.has(identity.instagram)) return index.byInstagram.get(identity.instagram);
+  if (identity.tiktok && index.byTiktok.has(identity.tiktok)) return index.byTiktok.get(identity.tiktok);
+  if (identity.name && index.byName.has(identity.name)) {
+    const match = [...(index.byName.get(identity.name) || [])][0];
+    if (match) return match;
+  }
+  return preferredTalentProfileId(identity);
+}
+
+function upsertTalentProfile(store, identity, seed = {}) {
+  const profileId = resolveTalentProfileId(store.index, identity);
+  if (!profileId) return null;
+  const existing = store.byId.get(profileId) || createEmptyTalentProfile(profileId, identity, seed);
+  const nextProfile = {
+    ...existing,
+    displayName: preferLongerString(existing.displayName, seed.displayName || seed.talentName || seed.name || seed.artistName || seed.n || ""),
+    aliases: uniqStrings([
+      ...existing.aliases,
+      ...(seed.displayName && canonicalArtistName(seed.displayName) !== canonicalArtistName(existing.displayName) ? [seed.displayName] : []),
+      ...(seed.talentName && canonicalArtistName(seed.talentName) !== canonicalArtistName(existing.displayName) ? [seed.talentName] : []),
+      ...(seed.name && canonicalArtistName(seed.name) !== canonicalArtistName(existing.displayName) ? [seed.name] : []),
+    ].filter(Boolean)),
+    primaryEmail: existing.primaryEmail || identity.email || canonicalEmail(seed.primaryEmail || seed.email || seed.e || ""),
+    emails: uniqStrings([...existing.emails, identity.email, canonicalEmail(seed.primaryEmail || seed.email || seed.e || "")].filter(Boolean)),
+    instagramHandle: existing.instagramHandle || identity.instagram || "",
+    instagramHandles: uniqStrings([...existing.instagramHandles, identity.instagram].filter(Boolean)),
+    instagramUrl: existing.instagramUrl || String(seed.instagramUrl || seed.instagram || "").trim(),
+    instagramFollowers: betterNumericString(existing.instagramFollowers, seed.instagramFollowers || ""),
+    tiktokHandle: existing.tiktokHandle || identity.tiktok || "",
+    tiktokHandles: uniqStrings([...existing.tiktokHandles, identity.tiktok].filter(Boolean)),
+    tiktokUrl: existing.tiktokUrl || String(seed.tiktokUrl || seed.tiktok || "").trim(),
+    tiktokFollowers: betterNumericString(existing.tiktokFollowers, seed.tiktokFollowers || ""),
+    spotifyUrl: existing.spotifyUrl || String(seed.spotifyUrl || "").trim(),
+    spotifyMonthlyListeners: betterNumericString(existing.spotifyMonthlyListeners, seed.spotifyMonthlyListeners || seed.listeners || seed.l || ""),
+    talentTypes: uniqStrings([...existing.talentTypes, normalizeTalentTypeLabel(seed.talentType || seed.type || "")].filter(Boolean)),
+  };
+  store.byId.set(profileId, nextProfile);
+  registerTalentIdentity(store.index, nextProfile, identity);
+  return nextProfile;
+}
+
+function collectWorkspaceTalentProfiles(projects = []) {
+  const store = {
+    byId: new Map(),
+    index: {
+      byEmail: new Map(),
+      bySpotify: new Map(),
+      byInstagram: new Map(),
+      byTiktok: new Map(),
+      byName: new Map(),
+    },
+  };
+  const artistTalentIds = new Map();
+  const marketingTalentIds = new Map();
+
+  projects.forEach(project => {
+    const normalizedProject = normalizeProject(project);
+
+    (normalizedProject.artists || []).forEach(artist => {
+      const identity = buildTalentIdentity({
+        name: artist.n,
+        email: artist.e,
+        instagramHandle: artist.soc || artist.ig,
+        listeners: artist.l,
+      });
+      const profile = upsertTalentProfile(store, identity, {
+        displayName: artist.n,
+        email: artist.e,
+        instagramUrl: /instagram\.com/i.test(String(artist.ig || "")) ? artist.ig : "",
+        instagramHandle: artist.soc || artist.ig,
+        spotifyMonthlyListeners: artist.l,
+        talentType: "Internal Artist",
+      });
+      if (!profile) return;
+
+      artistTalentIds.set(`${normalizedProject.id}::${artist.n}`, profile.id);
+      profile.projectMemberships.push({
+        projectId: normalizedProject.id,
+        projectName: normalizedProject.name,
+        projectType: normalizedProject.type,
+        kind: "ar",
+      });
+      profile.arRecords.push({
+        projectId: normalizedProject.id,
+        projectName: normalizedProject.name,
+        artistName: artist.n,
+        stage: normalizeStageId(normalizedProject.pipeline?.[artist.n]?.stage),
+        owner: normalizedProject.assignments?.[artist.n] || "",
+        genre: artist.g || "",
+        monthlyListeners: artist.l || "",
+        hitTrack: artist.h || "",
+        location: artist.loc || "",
+        onPlatform: !!artist.onPlatform,
+        social: artist.soc || "",
+        email: artist.e || "",
+      });
+    });
+
+    (normalizedProject.marketingItems || []).forEach(rawItem => {
+      const item = normalizeMarketingItem(rawItem, normalizedProject.teamUsers || DEFAULT_TEAM_USERS);
+      const identity = buildTalentIdentity({
+        talentName: item.talentName,
+        email: item.email,
+        instagramHandle: item.instagramHandle,
+        instagramUrl: item.instagramUrl,
+        tiktokHandle: item.tiktokHandle,
+        tiktokUrl: item.tiktokUrl,
+        spotifyUrl: item.spotifyUrl,
+      });
+      const profile = upsertTalentProfile(store, identity, {
+        displayName: item.talentName,
+        email: item.email,
+        instagramUrl: item.instagramUrl,
+        instagramHandle: item.instagramHandle,
+        instagramFollowers: item.instagramFollowers,
+        tiktokUrl: item.tiktokUrl,
+        tiktokHandle: item.tiktokHandle,
+        tiktokFollowers: item.tiktokFollowers,
+        spotifyUrl: item.spotifyUrl,
+        spotifyMonthlyListeners: item.spotifyMonthlyListeners,
+        talentType: item.talentType,
+      });
+      if (!profile) return;
+
+      marketingTalentIds.set(String(item.id || ""), profile.id);
+      profile.projectMemberships.push({
+        projectId: normalizedProject.id,
+        projectName: normalizedProject.name,
+        projectType: normalizedProject.type,
+        kind: "marketing",
+      });
+      profile.marketingAssignments.push({
+        assignmentId: item.id,
+        projectId: normalizedProject.id,
+        projectName: normalizedProject.name,
+        talentName: item.talentName,
+        campaign: item.campaign || "",
+        campaigns: item.campaigns || [],
+        title: item.title || "",
+        status: item.status,
+        owner: item.owner || "",
+        trafficType: item.trafficType || "",
+        deliverableType: item.deliverableType || "",
+        email: item.email || "",
+        dueDate: item.dueDate || "",
+        briefUrl: item.briefUrl || "",
+        contentUrl: item.contentUrl || "",
+      });
+    });
+  });
+
+  const profiles = [...store.byId.values()]
+    .map(profile => ({
+      ...profile,
+      projectMemberships: uniqStrings(profile.projectMemberships.map(item => `${item.projectId}::${item.kind}`))
+        .map(key => profile.projectMemberships.find(item => `${item.projectId}::${item.kind}` === key))
+        .filter(Boolean),
+      arRecords: [...profile.arRecords].sort((a, b) => a.projectName.localeCompare(b.projectName)),
+      marketingAssignments: [...profile.marketingAssignments].sort((a, b) => a.projectName.localeCompare(b.projectName) || a.talentName.localeCompare(b.talentName)),
+      talentTypes: uniqStrings(profile.talentTypes),
+    }))
+    .sort((a, b) => a.displayName.localeCompare(b.displayName));
+
+  return {
+    profiles,
+    artistTalentIds,
+    marketingTalentIds,
+  };
+}
+
 const AI_KEY_STORAGE = {
   anthropic: "gemfinder-anthropic-key",
   openai: "gemfinder-openai-key",
@@ -2607,6 +2883,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [marketingBulkDefaultCampaign, setMarketingBulkDefaultCampaign] = useState("");
   const [marketingBulkDefaultStatus, setMarketingBulkDefaultStatus] = useState("prospect");
   const [marketingBulkDefaultOwner, setMarketingBulkDefaultOwner] = useState("");
+  const [showTalentProfileModal, setShowTalentProfileModal] = useState(false);
+  const [selectedTalentProfileId, setSelectedTalentProfileId] = useState("");
 
   const [batch, setBatch] = useState(false);
   const [bSel, setBSel] = useState(new Set());
@@ -2716,6 +2994,16 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const proj = projects.find(p => p.id === apId);
   const projectType = proj?.type || "ar";
   const isMarketingProject = projectType === "marketing";
+  const workspaceTalentData = useMemo(() => collectWorkspaceTalentProfiles(projects), [projects]);
+  const workspaceTalentProfiles = workspaceTalentData.profiles;
+  const workspaceTalentProfileMap = useMemo(
+    () => new Map(workspaceTalentProfiles.map(profile => [profile.id, profile])),
+    [workspaceTalentProfiles]
+  );
+  const selectedTalentProfile = useMemo(
+    () => workspaceTalentProfileMap.get(selectedTalentProfileId) || null,
+    [workspaceTalentProfileMap, selectedTalentProfileId]
+  );
   const sessionUserName = useMemo(
     () => resolveSessionUserName(authEmail, authUserId, proj?.teamUsers || DEFAULT_TEAM_USERS),
     [authEmail, authUserId, proj?.teamUsers],
@@ -2939,6 +3227,32 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       resetMarketingForm();
     }
     setShowMarketingItemModal(true);
+  };
+  const closeTalentProfileModal = () => {
+    setShowTalentProfileModal(false);
+    setSelectedTalentProfileId("");
+  };
+  const openTalentProfileById = talentId => {
+    if (!talentId) {
+      flash("No shared talent profile found yet", "err");
+      return;
+    }
+    setSelectedTalentProfileId(talentId);
+    setShowTalentProfileModal(true);
+  };
+  const openTalentProfileFromArtist = artist => {
+    if (!proj?.id || !artist?.n) {
+      flash("No shared talent profile found yet", "err");
+      return;
+    }
+    openTalentProfileById(workspaceTalentData.artistTalentIds.get(`${proj.id}::${artist.n}`) || "");
+  };
+  const openTalentProfileFromMarketingItem = item => {
+    if (!item?.id) {
+      flash("No shared talent profile found yet", "err");
+      return;
+    }
+    openTalentProfileById(workspaceTalentData.marketingTalentIds.get(String(item.id || "")) || "");
   };
   const seedArtistEditForm = artist => setArtistEditForm({
     name: artist?.n || "",
@@ -3192,6 +3506,12 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       setProjectMode("work");
     }
   }, [proj?.id, proj?.type, projectMode]);
+
+  useEffect(() => {
+    if (!showTalentProfileModal) return;
+    if (selectedTalentProfileId && workspaceTalentProfileMap.has(selectedTalentProfileId)) return;
+    closeTalentProfileModal();
+  }, [showTalentProfileModal, selectedTalentProfileId, workspaceTalentProfileMap]);
 
   const persist = useCallback(async (np, la, dk, vm, lb, wu, pm) => {
     const nextProjects = np || projects;
@@ -4644,6 +4964,44 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     primeArtistContext(a);
     setShowQuickDrawer(false);
     setScreen("detail");
+  };
+
+  const openTalentArRecord = record => {
+    const targetProject = projects.find(project => project.id === record.projectId);
+    if (!targetProject) {
+      flash("Could not find that project", "err");
+      return;
+    }
+    const targetArtist = (targetProject.artists || []).find(item => item.n === record.artistName);
+    if (!targetArtist) {
+      flash("Could not find that artist in the project", "err");
+      return;
+    }
+    closeTalentProfileModal();
+    setApId(targetProject.id);
+    setShowQuickDrawer(false);
+    primeArtistContext(targetArtist);
+    setScreen("detail");
+    setDetailTab("overview");
+  };
+
+  const openTalentMarketingAssignment = assignment => {
+    const targetProject = projects.find(project => project.id === assignment.projectId);
+    if (!targetProject) {
+      flash("Could not find that project", "err");
+      return;
+    }
+    const targetItem = (targetProject.marketingItems || []).find(item => String(item?.id || "") === String(assignment.assignmentId || ""));
+    if (!targetItem) {
+      flash("Could not find that assignment in the project", "err");
+      return;
+    }
+    closeTalentProfileModal();
+    setApId(targetProject.id);
+    setShowQuickDrawer(false);
+    setProjectMode("work");
+    openMarketingItemModal(targetItem);
+    setScreen("project");
   };
 
   const runIntel = async a => {
@@ -6718,6 +7076,12 @@ Requirements:
                 <div style={{ fontSize: 11, color: C.tt }}>Update the working profile here without losing notes, ownership, or pipeline history.</div>
               </div>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <button
+                  onClick={() => openTalentProfileFromArtist(a)}
+                  style={{ padding: "6px 12px", borderRadius: 10, border: `1px solid ${C.bd}`, background: "transparent", color: C.ts, cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: ft }}
+                >
+                  Open Talent Profile
+                </button>
                 <button
                   disabled={artistEditSaving}
                   onClick={() => seedArtistEditForm(a)}
@@ -9850,6 +10214,15 @@ Requirements:
 
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginTop: 18 }}>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  {marketingForm.id && workspaceTalentData.marketingTalentIds.get(String(marketingForm.id || "")) && (
+                    <button
+                      type="button"
+                      onClick={() => openTalentProfileFromMarketingItem({ id: marketingForm.id })}
+                      style={{ ...actionBtn(false, "accent") }}
+                    >
+                      Open Talent Profile
+                    </button>
+                  )}
                   {marketingForm.email && <a href={`mailto:${marketingForm.email}`} style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Email Talent</a>}
                   {(marketingForm.instagramUrl || marketingForm.instagramHandle) && <a href={marketingForm.instagramUrl || `https://instagram.com/${marketingForm.instagramHandle}`} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Instagram</a>}
                   {(marketingForm.tiktokUrl || marketingForm.tiktokHandle) && <a href={marketingForm.tiktokUrl || `https://www.tiktok.com/@${marketingForm.tiktokHandle}`} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>TikTok</a>}
@@ -9867,6 +10240,162 @@ Requirements:
                   <button disabled={!marketingForm.talentName.trim() || marketingItemSaving} onClick={saveMarketingItem} style={{ padding: "8px 24px", borderRadius: 10, border: "none", background: C.ac, color: "#fff", cursor: !marketingForm.talentName.trim() || marketingItemSaving ? "not-allowed" : "pointer", fontSize: 13, fontWeight: 600, fontFamily: ft, opacity: marketingForm.talentName.trim() && !marketingItemSaving ? 1 : 0.45 }}>
                     {marketingItemSaving ? (marketingForm.id ? "Saving..." : "Adding...") : (marketingForm.id ? "Save Changes" : "Add Assignment")}
                   </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+        {showTalentProfileModal && selectedTalentProfile && (
+          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.38)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 126 }} onClick={e => { if (e.target === e.currentTarget) closeTalentProfileModal(); }}>
+            <div style={{ background: C.sf, borderRadius: 18, padding: "24px 28px", width: 960, maxWidth: "calc(100vw - 32px)", boxShadow: "0 25px 70px rgba(0,0,0,0.2)", maxHeight: "88vh", overflowY: "auto" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "flex-start", marginBottom: 16 }}>
+                <div>
+                  <div style={{ fontSize: 11, letterSpacing: 2, textTransform: "uppercase", color: C.ac, fontWeight: 700, marginBottom: 8 }}>Shared Talent Profile</div>
+                  <div style={{ fontSize: 28, fontWeight: 800, letterSpacing: "-0.04em", color: C.tx, marginBottom: 8 }}>{selectedTalentProfile.displayName}</div>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    {selectedTalentProfile.talentTypes.map(type => (
+                      <span key={type} style={{ ...mkP(true, C.ac, C.al), cursor: "default" }}>{type}</span>
+                    ))}
+                    <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{selectedTalentProfile.projectMemberships.length} project{selectedTalentProfile.projectMemberships.length === 1 ? "" : "s"}</span>
+                    <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{selectedTalentProfile.marketingAssignments.length} marketing assignment{selectedTalentProfile.marketingAssignments.length === 1 ? "" : "s"}</span>
+                    <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{selectedTalentProfile.arRecords.length} A&R record{selectedTalentProfile.arRecords.length === 1 ? "" : "s"}</span>
+                  </div>
+                </div>
+                <button onClick={closeTalentProfileModal} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 20, color: C.ts }}>✕</button>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 18 }}>
+                <div style={{ ...cS, padding: "18px 20px" }}>
+                  <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>Identity</div>
+                  <div style={{ display: "grid", gap: 10, fontSize: 13 }}>
+                    <div className="gf-rail-kv">
+                      <span className="gf-rail-kv-label">Primary email</span>
+                      <span className="gf-rail-kv-value">{selectedTalentProfile.primaryEmail || "No email yet"}</span>
+                    </div>
+                    <div className="gf-rail-kv">
+                      <span className="gf-rail-kv-label">Instagram</span>
+                      <span className="gf-rail-kv-value">
+                        {selectedTalentProfile.instagramHandle
+                          ? `@${selectedTalentProfile.instagramHandle}${selectedTalentProfile.instagramFollowers ? ` · ${selectedTalentProfile.instagramFollowers}` : ""}`
+                          : "Not linked yet"}
+                      </span>
+                    </div>
+                    <div className="gf-rail-kv">
+                      <span className="gf-rail-kv-label">TikTok</span>
+                      <span className="gf-rail-kv-value">
+                        {selectedTalentProfile.tiktokHandle
+                          ? `@${selectedTalentProfile.tiktokHandle}${selectedTalentProfile.tiktokFollowers ? ` · ${selectedTalentProfile.tiktokFollowers}` : ""}`
+                          : "Not linked yet"}
+                      </span>
+                    </div>
+                    <div className="gf-rail-kv">
+                      <span className="gf-rail-kv-label">Spotify</span>
+                      <span className="gf-rail-kv-value">
+                        {selectedTalentProfile.spotifyUrl
+                          ? `${selectedTalentProfile.spotifyMonthlyListeners || "Linked"}`
+                          : "Not linked yet"}
+                      </span>
+                    </div>
+                    {selectedTalentProfile.aliases.length > 0 && (
+                      <div className="gf-rail-kv">
+                        <span className="gf-rail-kv-label">Aliases</span>
+                        <span className="gf-rail-kv-value">{selectedTalentProfile.aliases.join(" · ")}</span>
+                      </div>
+                    )}
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 4 }}>
+                      {selectedTalentProfile.primaryEmail && (
+                        <a href={`mailto:${selectedTalentProfile.primaryEmail}`} style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Email</a>
+                      )}
+                      {selectedTalentProfile.instagramHandle && (
+                        <a href={selectedTalentProfile.instagramUrl || `https://instagram.com/${selectedTalentProfile.instagramHandle}`} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Instagram</a>
+                      )}
+                      {selectedTalentProfile.tiktokHandle && (
+                        <a href={selectedTalentProfile.tiktokUrl || `https://www.tiktok.com/@${selectedTalentProfile.tiktokHandle}`} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>TikTok</a>
+                      )}
+                      {selectedTalentProfile.spotifyUrl && (
+                        <a href={selectedTalentProfile.spotifyUrl} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Spotify</a>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div style={{ ...cS, padding: "18px 20px" }}>
+                  <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>Projects</div>
+                  <div style={{ display: "grid", gap: 10 }}>
+                    {selectedTalentProfile.projectMemberships.length ? selectedTalentProfile.projectMemberships.map((item, index) => (
+                      <div key={`${item.projectId}:${item.kind}:${index}`} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "10px 12px", borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sa }}>
+                        <div>
+                          <div style={{ fontSize: 13, fontWeight: 700, color: C.tx }}>{item.projectName}</div>
+                          <div style={{ fontSize: 11, color: C.tt }}>{item.projectType === "marketing" ? "Marketing workspace" : "A&R workspace"} · {item.kind === "marketing" ? "campaign assignments" : "pipeline record"}</div>
+                        </div>
+                        <button
+                          onClick={() => {
+                            closeTalentProfileModal();
+                            setApId(item.projectId);
+                            setScreen("project");
+                            if (item.projectType === "marketing") setProjectMode("work");
+                          }}
+                          style={actionBtn(false, "neutral")}
+                        >
+                          Open project
+                        </button>
+                      </div>
+                    )) : (
+                      <div style={{ fontSize: 12, color: C.tt }}>No linked projects yet.</div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ ...cS, padding: "18px 20px", marginBottom: 16 }}>
+                <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>A&R placements</div>
+                <div style={{ display: "grid", gap: 10 }}>
+                  {selectedTalentProfile.arRecords.length ? selectedTalentProfile.arRecords.map(record => (
+                    <div key={`${record.projectId}:${record.artistName}`} style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", padding: "12px 14px", borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sa }}>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 6 }}>
+                          <div style={{ fontSize: 14, fontWeight: 700, color: C.tx }}>{record.artistName}</div>
+                          <span style={{ ...mkP(true, sc(record.stage, C), sb(record.stage, C)), cursor: "default" }}>{SM[record.stage]?.label || "Prospect"}</span>
+                          {record.owner && <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{record.owner}</span>}
+                        </div>
+                        <div style={{ fontSize: 12, color: C.ts, marginBottom: 4 }}>{record.projectName}</div>
+                        <div style={{ fontSize: 11, color: C.tt }}>
+                          {[record.genre, record.monthlyListeners ? `${record.monthlyListeners} listeners` : "", record.location].filter(Boolean).join(" · ") || "Working A&R record"}
+                        </div>
+                      </div>
+                      <button onClick={() => openTalentArRecord(record)} style={actionBtn(false, "accent")}>Open artist</button>
+                    </div>
+                  )) : (
+                    <div style={{ fontSize: 12, color: C.tt }}>No A&R placements linked yet.</div>
+                  )}
+                </div>
+              </div>
+
+              <div style={{ ...cS, padding: "18px 20px" }}>
+                <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>Marketing assignments</div>
+                <div style={{ display: "grid", gap: 10 }}>
+                  {selectedTalentProfile.marketingAssignments.length ? selectedTalentProfile.marketingAssignments.map(assignment => (
+                    <div key={assignment.assignmentId} style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", padding: "12px 14px", borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sa }}>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 6 }}>
+                          <div style={{ fontSize: 14, fontWeight: 700, color: C.tx }}>{assignment.campaign || "No campaign"}</div>
+                          <span style={{ ...mkP(true, marketingStatusTone(assignment.status, C).tone, marketingStatusTone(assignment.status, C).bg), cursor: "default" }}>{MM[assignment.status]?.label || "Prospect"}</span>
+                          {assignment.owner && <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{assignment.owner}</span>}
+                        </div>
+                        <div style={{ fontSize: 12, color: C.ts, marginBottom: 4 }}>{assignment.projectName}</div>
+                        <div style={{ fontSize: 11, color: C.tt }}>
+                          {[assignment.title, assignment.trafficType, assignment.deliverableType, assignment.dueDate ? `Due ${sD(assignment.dueDate)}` : ""].filter(Boolean).join(" · ") || "Marketing assignment"}
+                        </div>
+                      </div>
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                        {assignment.briefUrl && <a href={assignment.briefUrl} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Brief</a>}
+                        {assignment.contentUrl && <a href={assignment.contentUrl} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Content</a>}
+                        <button onClick={() => openTalentMarketingAssignment(assignment)} style={actionBtn(false, "accent")}>Open assignment</button>
+                      </div>
+                    </div>
+                  )) : (
+                    <div style={{ fontSize: 12, color: C.tt }}>No marketing assignments linked yet.</div>
+                  )}
                 </div>
               </div>
             </div>
