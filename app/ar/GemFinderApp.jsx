@@ -2885,6 +2885,12 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [marketingBulkDefaultOwner, setMarketingBulkDefaultOwner] = useState("");
   const [showTalentProfileModal, setShowTalentProfileModal] = useState(false);
   const [selectedTalentProfileId, setSelectedTalentProfileId] = useState("");
+  const [talentTargetProjectId, setTalentTargetProjectId] = useState("");
+  const [talentTargetCampaign, setTalentTargetCampaign] = useState("");
+  const [talentTargetNewCampaign, setTalentTargetNewCampaign] = useState("");
+  const [talentTargetOwner, setTalentTargetOwner] = useState("");
+  const [talentTargetStatus, setTalentTargetStatus] = useState("prospect");
+  const [talentTargetSaving, setTalentTargetSaving] = useState(false);
 
   const [batch, setBatch] = useState(false);
   const [bSel, setBSel] = useState(new Set());
@@ -3004,6 +3010,47 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     () => workspaceTalentProfileMap.get(selectedTalentProfileId) || null,
     [workspaceTalentProfileMap, selectedTalentProfileId]
   );
+  const talentTargetProject = useMemo(
+    () => projects.find(project => project.id === talentTargetProjectId) || null,
+    [projects, talentTargetProjectId]
+  );
+  const talentTargetProjectType = normalizeProjectType(talentTargetProject?.type);
+  const talentTargetTeamUsers = talentTargetProject?.teamUsers || DEFAULT_TEAM_USERS;
+  const talentTargetProjectOptions = useMemo(
+    () => projects.map(project => ({
+      id: project.id,
+      label: `${project.name} · ${normalizeProjectType(project.type) === "marketing" ? "Marketing" : "A&R"}`,
+      type: normalizeProjectType(project.type),
+    })),
+    [projects]
+  );
+  const talentTargetCampaignOptions = useMemo(() => {
+    if (!talentTargetProject || talentTargetProjectType !== "marketing") return [];
+    const normalizedProject = normalizeProject(talentTargetProject);
+    return normalizeMarketingCampaignBank([
+      ...(normalizedProject.settings?.marketingCampaignBank || []),
+      ...normalizedProject.marketingItems.flatMap(item => item.campaigns || []),
+    ]);
+  }, [talentTargetProject, talentTargetProjectType]);
+  const talentTargetExistingArRecord = useMemo(
+    () => selectedTalentProfile?.arRecords.find(record => record.projectId === talentTargetProjectId) || null,
+    [selectedTalentProfile, talentTargetProjectId]
+  );
+  const talentTargetMarketingAssignments = useMemo(
+    () => selectedTalentProfile?.marketingAssignments.filter(record => record.projectId === talentTargetProjectId) || [],
+    [selectedTalentProfile, talentTargetProjectId]
+  );
+  const talentTargetCampaignName = useMemo(
+    () => String(talentTargetNewCampaign || talentTargetCampaign || "").trim(),
+    [talentTargetCampaign, talentTargetNewCampaign]
+  );
+  const talentTargetExistingMarketingAssignment = useMemo(() => {
+    if (!talentTargetCampaignName) return null;
+    const targetKey = canonicalArtistName(talentTargetCampaignName);
+    return talentTargetMarketingAssignments.find(record =>
+      (record.campaigns?.length ? record.campaigns : [record.campaign || ""]).some(campaign => canonicalArtistName(campaign) === targetKey)
+    ) || null;
+  }, [talentTargetMarketingAssignments, talentTargetCampaignName]);
   const sessionUserName = useMemo(
     () => resolveSessionUserName(authEmail, authUserId, proj?.teamUsers || DEFAULT_TEAM_USERS),
     [authEmail, authUserId, proj?.teamUsers],
@@ -3228,9 +3275,31 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     }
     setShowMarketingItemModal(true);
   };
+  const resetTalentTargetDraft = useCallback((talentId = "", explicitProjectId = "") => {
+    const profile = workspaceTalentProfileMap.get(talentId) || null;
+    const projectMemberships = new Set((profile?.projectMemberships || []).map(item => item.projectId));
+    const preferredProject = (explicitProjectId && projects.find(project => project.id === explicitProjectId))
+      || projects.find(project => project.id !== apId && !projectMemberships.has(project.id))
+      || projects.find(project => !projectMemberships.has(project.id))
+      || projects.find(project => project.id !== apId)
+      || projects[0]
+      || null;
+    setTalentTargetProjectId(preferredProject?.id || "");
+    setTalentTargetCampaign("");
+    setTalentTargetNewCampaign("");
+    setTalentTargetOwner("");
+    setTalentTargetStatus("prospect");
+    setTalentTargetSaving(false);
+  }, [workspaceTalentProfileMap, projects, apId]);
   const closeTalentProfileModal = () => {
     setShowTalentProfileModal(false);
     setSelectedTalentProfileId("");
+    setTalentTargetProjectId("");
+    setTalentTargetCampaign("");
+    setTalentTargetNewCampaign("");
+    setTalentTargetOwner("");
+    setTalentTargetStatus("prospect");
+    setTalentTargetSaving(false);
   };
   const openTalentProfileById = talentId => {
     if (!talentId) {
@@ -3238,6 +3307,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       return;
     }
     setSelectedTalentProfileId(talentId);
+    resetTalentTargetDraft(talentId);
     setShowTalentProfileModal(true);
   };
   const openTalentProfileFromArtist = artist => {
@@ -3512,6 +3582,26 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     if (selectedTalentProfileId && workspaceTalentProfileMap.has(selectedTalentProfileId)) return;
     closeTalentProfileModal();
   }, [showTalentProfileModal, selectedTalentProfileId, workspaceTalentProfileMap]);
+
+  useEffect(() => {
+    if (!showTalentProfileModal || !selectedTalentProfileId) return;
+    if (talentTargetProjectId && projects.some(project => project.id === talentTargetProjectId)) return;
+    resetTalentTargetDraft(selectedTalentProfileId);
+  }, [showTalentProfileModal, selectedTalentProfileId, talentTargetProjectId, projects, resetTalentTargetDraft]);
+
+  useEffect(() => {
+    const validStatusIds = new Set((talentTargetProjectType === "marketing" ? MARKETING_STATUSES : STAGES).map(item => item.id));
+    if (!validStatusIds.has(talentTargetStatus)) {
+      setTalentTargetStatus("prospect");
+    }
+    if (talentTargetOwner && !talentTargetTeamUsers.includes(talentTargetOwner)) {
+      setTalentTargetOwner("");
+    }
+    if (talentTargetProjectType !== "marketing") {
+      if (talentTargetCampaign) setTalentTargetCampaign("");
+      if (talentTargetNewCampaign) setTalentTargetNewCampaign("");
+    }
+  }, [talentTargetProjectType, talentTargetStatus, talentTargetOwner, talentTargetTeamUsers, talentTargetCampaign, talentTargetNewCampaign]);
 
   const persist = useCallback(async (np, la, dk, vm, lb, wu, pm) => {
     const nextProjects = np || projects;
@@ -4066,6 +4156,12 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     return updated;
   };
 
+  const saveProjectsList = async nextProjects => {
+    setProjects(nextProjects);
+    await persist(nextProjects);
+    return nextProjects;
+  };
+
   const saveProjectFast = nextProj => {
     const updated = projects.map(p => p.id === nextProj.id ? nextProj : p);
     setProjects(updated);
@@ -4575,6 +4671,160 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       marketingItemSubmitRef.current = false;
       setMarketingItemSaving(false);
     }, 350);
+  };
+
+  const addTalentProfileToProject = async () => {
+    if (!requireEditor()) return;
+    if (!selectedTalentProfile) return;
+    if (!talentTargetProject) {
+      flash("Choose a target project first", "err");
+      return;
+    }
+    if (talentTargetSaving) return;
+
+    setTalentTargetSaving(true);
+    const now = new Date().toISOString();
+    const profile = selectedTalentProfile;
+    const targetTeamUsers = talentTargetProject.teamUsers || DEFAULT_TEAM_USERS;
+    const primaryEmail = profile.primaryEmail || profile.emails?.[0] || "";
+    const emailKey = canonicalEmail(primaryEmail);
+
+    try {
+      if (talentTargetProjectType === "marketing") {
+        const selectedCampaign = String(talentTargetNewCampaign || talentTargetCampaign || "").trim();
+        const normalizedCampaigns = normalizeMarketingCampaigns(selectedCampaign);
+        const campaignKey = canonicalArtistName(normalizedCampaigns[0] || "");
+        const existingItems = (talentTargetProject.marketingItems || []).map(item => normalizeMarketingItem(item, targetTeamUsers));
+        const existingAssignment = existingItems.find(item => {
+          const hasCampaign = campaignKey
+            ? (item.campaigns?.length ? item.campaigns : [item.campaign || ""]).some(campaign => canonicalArtistName(campaign) === campaignKey)
+            : !(item.campaigns || []).length;
+          if (!hasCampaign) return false;
+          const sameEmail = emailKey && canonicalEmail(item.email) === emailKey;
+          const sameName = canonicalArtistName(item.talentName) === canonicalArtistName(profile.displayName);
+          return sameEmail || sameName;
+        });
+
+        if (existingAssignment) {
+          closeTalentProfileModal();
+          updateWorkspaceUrl(talentTargetProject.id, "", "", existingAssignment.id);
+          setApId(talentTargetProject.id);
+          setProjectMode("work");
+          setScreen("project");
+          flash(`${profile.displayName} is already in ${talentTargetProject.name}`);
+          return;
+        }
+
+        const leadMarketing = profile.marketingAssignments[0] || null;
+        const leadAr = profile.arRecords[0] || null;
+        const nextItem = normalizeMarketingItem({
+          id: `mkt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+          talentName: profile.displayName,
+          talentType: profile.talentTypes[0] || "Internal Artist",
+          title: [profile.displayName, normalizedCampaigns[0] || leadMarketing?.deliverableType || "UGC"].filter(Boolean).join(" · "),
+          campaign: normalizedCampaigns[0] || "",
+          campaigns: normalizedCampaigns,
+          trafficType: leadMarketing?.trafficType || "Organic",
+          channels: leadMarketing?.channels || [],
+          deliverableType: leadMarketing?.deliverableType || "UGC",
+          status: normalizeMarketingStatus(talentTargetStatus),
+          owner: talentTargetOwner || "",
+          dueDate: "",
+          email: primaryEmail,
+          instagramHandle: profile.instagramHandle || "",
+          instagramUrl: profile.instagramUrl || "",
+          instagramFollowers: profile.instagramFollowers || "",
+          tiktokHandle: profile.tiktokHandle || "",
+          tiktokUrl: profile.tiktokUrl || "",
+          tiktokFollowers: profile.tiktokFollowers || "",
+          spotifyUrl: profile.spotifyUrl || "",
+          spotifyMonthlyListeners: profile.spotifyMonthlyListeners || leadAr?.monthlyListeners || "",
+          briefUrl: "",
+          contentUrl: "",
+          notes: "",
+          rejectedReason: "",
+          createdAt: now,
+          updatedAt: now,
+        }, targetTeamUsers);
+
+        const nextTargetProject = {
+          ...talentTargetProject,
+          marketingItems: [nextItem, ...(talentTargetProject.marketingItems || [])],
+          settings: {
+            ...(talentTargetProject.settings || {}),
+            marketingCampaignBank: normalizeMarketingCampaignBank([
+              ...(talentTargetProject.settings?.marketingCampaignBank || []),
+              ...normalizedCampaigns,
+            ]),
+          },
+        };
+        const nextProjects = projects.map(project => project.id === nextTargetProject.id ? nextTargetProject : project);
+        await saveProjectsList(nextProjects);
+        closeTalentProfileModal();
+        updateWorkspaceUrl(nextTargetProject.id, "", "", nextItem.id);
+        setApId(nextTargetProject.id);
+        setProjectMode("work");
+        setScreen("project");
+        flash(`Added ${profile.displayName} to ${nextTargetProject.name}`);
+        return;
+      }
+
+      const targetStage = normalizeStageId(talentTargetStatus);
+      const existingArtist = (talentTargetProject.artists || []).find(artist => {
+        const sameName = canonicalArtistName(artist.n) === canonicalArtistName(profile.displayName);
+        const sameEmail = emailKey && canonicalEmail(artist.e) === emailKey;
+        return sameName || sameEmail;
+      });
+
+      if (existingArtist) {
+        closeTalentProfileModal();
+        updateWorkspaceUrl(talentTargetProject.id, existingArtist.n, "overview", "");
+        setApId(talentTargetProject.id);
+        setProjectMode("work");
+        setScreen("project");
+        flash(`${profile.displayName} is already in ${talentTargetProject.name}`);
+        return;
+      }
+
+      const leadAr = profile.arRecords[0] || null;
+      const nextArtist = {
+        n: profile.displayName,
+        g: leadAr?.genre || "",
+        l: profile.spotifyMonthlyListeners || leadAr?.monthlyListeners || "",
+        h: leadAr?.hitTrack || "",
+        ig: profile.instagramHandle ? `@${profile.instagramHandle}` : "",
+        soc: profile.instagramHandle || "",
+        e: primaryEmail,
+        loc: leadAr?.location || "",
+        s: false,
+        o: "Shared Talent Profile",
+      };
+      const nextPipeline = { ...(talentTargetProject.pipeline || {}) };
+      if (targetStage !== "prospect") {
+        nextPipeline[nextArtist.n] = { stage: targetStage, date: now };
+      }
+      const nextAssignments = talentTargetOwner
+        ? { ...(talentTargetProject.assignments || {}), [nextArtist.n]: talentTargetOwner }
+        : { ...(talentTargetProject.assignments || {}) };
+      const nextActivityLog = logAction(talentTargetProject, nextArtist.n, "Added from shared talent profile");
+      const nextTargetProject = {
+        ...talentTargetProject,
+        artists: [nextArtist, ...(talentTargetProject.artists || [])],
+        pipeline: nextPipeline,
+        assignments: nextAssignments,
+        activityLog: nextActivityLog,
+      };
+      const nextProjects = projects.map(project => project.id === nextTargetProject.id ? nextTargetProject : project);
+      await saveProjectsList(nextProjects);
+      closeTalentProfileModal();
+      updateWorkspaceUrl(nextTargetProject.id, nextArtist.n, "overview", "");
+      setApId(nextTargetProject.id);
+      setProjectMode("work");
+      setScreen("project");
+      flash(`Added ${profile.displayName} to ${nextTargetProject.name}`);
+    } finally {
+      setTalentTargetSaving(false);
+    }
   };
 
   const deleteMarketingItem = async itemId => {
@@ -10344,6 +10594,128 @@ Requirements:
                       <div style={{ fontSize: 12, color: C.tt }}>No linked projects yet.</div>
                     )}
                   </div>
+                </div>
+              </div>
+
+              <div style={{ ...cS, padding: "18px 20px", marginBottom: 16 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, marginBottom: 14 }}>
+                  <div>
+                    <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>Add to project</div>
+                    <div style={{ fontSize: 12, color: C.ts }}>
+                      Reuse this shared talent in another workspace without retyping their profile details.
+                    </div>
+                  </div>
+                  <button
+                    onClick={addTalentProfileToProject}
+                    disabled={!talentTargetProjectId || talentTargetSaving}
+                    style={{
+                      ...actionBtn(false, "accent"),
+                      opacity: talentTargetProjectId && !talentTargetSaving ? 1 : 0.45,
+                      cursor: talentTargetProjectId && !talentTargetSaving ? "pointer" : "not-allowed",
+                    }}
+                  >
+                    {talentTargetSaving
+                      ? "Adding..."
+                      : talentTargetProjectType === "marketing" && talentTargetExistingMarketingAssignment
+                        ? "Open Existing Assignment"
+                        : talentTargetProjectType === "ar" && talentTargetExistingArRecord
+                          ? "Open Existing Artist"
+                          : "Add to Project"}
+                  </button>
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: talentTargetProjectType === "marketing" ? "1.2fr 1fr 1fr 1fr" : "1.4fr 1fr 1fr", gap: 12, alignItems: "end", marginBottom: 12 }}>
+                  <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 6 }}>
+                    <span>Target project</span>
+                    <select
+                      value={talentTargetProjectId}
+                      onChange={e => setTalentTargetProjectId(e.target.value)}
+                      style={{ ...iS, width: "100%" }}
+                    >
+                      <option value="">Choose a project…</option>
+                      {talentTargetProjectOptions.map(option => (
+                        <option key={option.id} value={option.id}>{option.label}</option>
+                      ))}
+                    </select>
+                  </label>
+
+                  {talentTargetProjectType === "marketing" && (
+                    <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 6 }}>
+                      <span>Campaign</span>
+                      <select
+                        value={talentTargetCampaign}
+                        onChange={e => setTalentTargetCampaign(e.target.value)}
+                        style={{ ...iS, width: "100%" }}
+                      >
+                        <option value="">No campaign</option>
+                        {talentTargetCampaignOptions.map(campaign => (
+                          <option key={campaign} value={campaign}>{campaign}</option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
+
+                  <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 6 }}>
+                    <span>{talentTargetProjectType === "marketing" ? "Assignment status" : "Pipeline stage"}</span>
+                    <select
+                      value={talentTargetStatus}
+                      onChange={e => setTalentTargetStatus(e.target.value)}
+                      style={{ ...iS, width: "100%" }}
+                    >
+                      {(talentTargetProjectType === "marketing" ? MARKETING_STATUSES : STAGES).map(status => (
+                        <option key={status.id} value={status.id}>{status.label}</option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 6 }}>
+                    <span>Owner</span>
+                    <select
+                      value={talentTargetOwner}
+                      onChange={e => setTalentTargetOwner(e.target.value)}
+                      style={{ ...iS, width: "100%" }}
+                    >
+                      <option value="">Unassigned</option>
+                      {talentTargetTeamUsers.map(user => (
+                        <option key={user} value={user}>{user}</option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+
+                {talentTargetProjectType === "marketing" && (
+                  <div style={{ display: "grid", gap: 6, marginBottom: 12 }}>
+                    <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 6 }}>
+                      <span>Or create a new campaign</span>
+                      <input
+                        value={talentTargetNewCampaign}
+                        onChange={e => setTalentTargetNewCampaign(e.target.value)}
+                        placeholder="Type a new campaign name"
+                        style={{ ...iS, width: "100%" }}
+                      />
+                    </label>
+                    <div style={{ fontSize: 11, color: C.tt }}>
+                      {talentTargetNewCampaign.trim()
+                        ? `New assignment will use "${talentTargetNewCampaign.trim()}".`
+                        : talentTargetCampaign
+                          ? `New assignment will use "${talentTargetCampaign}".`
+                          : "Leave both blank if this belongs in the project without a campaign yet."}
+                    </div>
+                  </div>
+                )}
+
+                <div style={{ fontSize: 12, color: C.ts, background: C.sa, border: `1px solid ${C.bd}`, borderRadius: 14, padding: "10px 12px" }}>
+                  {!talentTargetProjectId
+                    ? "Choose a destination project to prepare the new placement."
+                    : talentTargetProjectType === "marketing" && talentTargetExistingMarketingAssignment
+                      ? `This talent already has an assignment in ${talentTargetProject?.name} for ${talentTargetExistingMarketingAssignment.campaign || "No campaign"}. Clicking the button will open it.`
+                      : talentTargetProjectType === "marketing" && talentTargetMarketingAssignments.length
+                        ? `This talent is already in ${talentTargetProject?.name} on ${talentTargetMarketingAssignments.length} other marketing assignment${talentTargetMarketingAssignments.length === 1 ? "" : "s"}.`
+                        : talentTargetProjectType === "ar" && talentTargetExistingArRecord
+                          ? `This talent is already in ${talentTargetProject?.name} as an A&R artist. Clicking the button will open that record.`
+                          : talentTargetProjectType === "marketing"
+                            ? "We’ll create a new campaign assignment and keep the shared talent profile intact."
+                            : "We’ll add this talent into the A&R roster for that project and keep their shared profile linked here."}
                 </div>
               </div>
 
