@@ -5253,7 +5253,43 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       return;
     }
     setSelectedMarketingIds(new Set(visibleIds));
-    flash(`Selected ${visibleIds.length} assignment${visibleIds.length === 1 ? "" : "s"}`);
+    flash(`Selected ${visibleIds.length} filtered assignment${visibleIds.length === 1 ? "" : "s"}`);
+  };
+
+  const deleteSelectedMarketingItems = async () => {
+    if (!requireEditor()) return;
+    if (!proj) return;
+    const ids = marketingSelectedItems.map(item => item.id).filter(Boolean);
+    if (!ids.length) {
+      flash("Select assignments first", "err");
+      return;
+    }
+    if (!window.confirm(`Delete ${ids.length} selected assignment${ids.length === 1 ? "" : "s"} from this marketing project? This cannot be undone.`)) return;
+    const deleteSet = new Set(ids);
+    const nextMarketingItems = (proj.marketingItems || []).filter(item => !deleteSet.has(item.id));
+    const nextMarketingIds = nextMarketingItems.map(item => item.id);
+    const nextMarketingGroups = normalizeMarketingGroups(
+      proj.settings?.marketingGroups || [],
+      nextMarketingIds
+    ).filter(group => group.assignmentIds.length);
+    const ok = await saveProject({
+      ...proj,
+      marketingItems: nextMarketingItems,
+      settings: {
+        ...(proj.settings || {}),
+        marketingGroups: nextMarketingGroups,
+      },
+    });
+    if (!ok) return;
+    if (marketingForm.id && deleteSet.has(marketingForm.id)) {
+      closeMarketingItemModal();
+    }
+    if (marketingGroupFilter !== "all" && !nextMarketingGroups.some(group => group.id === marketingGroupFilter)) {
+      setMarketingGroupFilter("all");
+    }
+    setSelectedMarketingIds(new Set());
+    setMarketingSelectionMode(false);
+    flash(`Deleted ${ids.length} assignment${ids.length === 1 ? "" : "s"}`);
   };
 
   const saveMarketingGroupSelection = async () => {
@@ -7591,11 +7627,12 @@ Requirements:
                       </button>
                       {(marketingSelectionMode || selectedMarketingIds.size > 0) && (
                         <>
-                          <button onClick={selectVisibleMarketingItems} style={{ ...actionBtn(false, "neutral"), ...lockStyle(isReadOnly) }}>Select Visible</button>
+                          <button onClick={selectVisibleMarketingItems} style={{ ...actionBtn(false, "neutral"), ...lockStyle(isReadOnly) }}>Select All Filtered</button>
                           <button onClick={clearMarketingSelection} style={{ ...actionBtn(false, "neutral"), ...lockStyle(isReadOnly) }}>Clear Selection</button>
                           <button onClick={saveMarketingGroupSelection} style={{ ...actionBtn(false, "accent"), ...lockStyle(isReadOnly || !selectedMarketingIds.size) }}>Save Group</button>
                           <button onClick={copyMarketingBccEmails} style={{ ...actionBtn(false, "neutral"), ...lockStyle(isReadOnly || !marketingSelectedEmails.length) }}>Copy BCC</button>
                           <button onClick={openMarketingBccDraft} style={{ ...actionBtn(false, "neutral"), ...lockStyle(isReadOnly || !marketingSelectedEmails.length) }}>Open Gmail Draft</button>
+                          <button onClick={deleteSelectedMarketingItems} style={{ ...actionBtn(false, "danger"), ...lockStyle(isReadOnly || !selectedMarketingIds.size) }}>Delete Selected</button>
                         </>
                       )}
                       <label style={{ ...actionBtn(false, "neutral"), ...lockStyle(isReadOnly) }}>
