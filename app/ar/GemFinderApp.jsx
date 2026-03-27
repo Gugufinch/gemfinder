@@ -620,7 +620,7 @@ function parseMarketingCSV(text, teamUsers = DEFAULT_TEAM_USERS) {
   }
   return records;
 }
-function parseMarketingBulkUpdateText(text, defaultCampaign = "", defaultStatus = "prospect") {
+function parseMarketingBulkUpdateText(text, defaultCampaign = "", defaultStatus = "prospect", defaultOwner = "", teamUsers = DEFAULT_TEAM_USERS) {
   const raw = String(text || "").trim();
   if (!raw) return [];
   const lines = raw.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
@@ -646,12 +646,14 @@ function parseMarketingBulkUpdateText(text, defaultCampaign = "", defaultStatus 
     const parsedTalent = parseMarketingBulkTalent(get(["name", "talentname", "artistname", "artist", "talent"]) || positional(0));
     if (!parsedTalent.talentName) return null;
     const parsedEmail = (get(["email", "contactemail", "contact_email", "primaryemail", "primary_email"]) || "").trim().toLowerCase();
+    const parsedOwner = (get(["owner", "assignee", "internaluser", "internal_user"]) || positional(3) || defaultOwner || "").trim();
     return {
       lineNumber,
       talentName: parsedTalent.talentName,
       email: parsedEmail || parsedTalent.email,
       campaign: (get(["campaign", "campaignname"]) || positional(1) || defaultCampaign || "").trim(),
       status: normalizeMarketingStatus(get(["status", "stage"]) || positional(2) || defaultStatus || "prospect"),
+      owner: teamUsers.includes(parsedOwner) ? parsedOwner : parsedOwner,
       raw: cells.map(col => String(col || "").trim()).join(" | "),
     };
   };
@@ -2559,6 +2561,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [marketingBulkText, setMarketingBulkText] = useState("");
   const [marketingBulkDefaultCampaign, setMarketingBulkDefaultCampaign] = useState("");
   const [marketingBulkDefaultStatus, setMarketingBulkDefaultStatus] = useState("prospect");
+  const [marketingBulkDefaultOwner, setMarketingBulkDefaultOwner] = useState("");
 
   const [batch, setBatch] = useState(false);
   const [bSel, setBSel] = useState(new Set());
@@ -5042,8 +5045,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   }, [marketingGroupFilter, marketingGroupOptions]);
 
   const marketingBulkRows = useMemo(
-    () => parseMarketingBulkUpdateText(marketingBulkText, marketingBulkDefaultCampaign, marketingBulkDefaultStatus),
-    [marketingBulkText, marketingBulkDefaultCampaign, marketingBulkDefaultStatus]
+    () => parseMarketingBulkUpdateText(marketingBulkText, marketingBulkDefaultCampaign, marketingBulkDefaultStatus, marketingBulkDefaultOwner, proj?.teamUsers || DEFAULT_TEAM_USERS),
+    [marketingBulkText, marketingBulkDefaultCampaign, marketingBulkDefaultStatus, marketingBulkDefaultOwner, proj?.teamUsers]
   );
 
   const marketingBulkPreview = useMemo(() => {
@@ -5399,6 +5402,13 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     setMarketingBulkText("");
     setMarketingBulkDefaultCampaign(marketingCampaignFilter !== "all" ? marketingCampaignFilter : "");
     setMarketingBulkDefaultStatus(marketingStatusFilter !== "all" && marketingStatusFilter !== "active" ? marketingStatusFilter : "prospect");
+    setMarketingBulkDefaultOwner(
+      effectiveMarketingOwnerFilter && effectiveMarketingOwnerFilter !== "all"
+        ? effectiveMarketingOwnerFilter
+        : workspaceUser !== ALL_USER_VIEW && workspaceUser !== UNASSIGNED_USER_VIEW
+          ? workspaceUser
+          : ""
+    );
     setShowMarketingBulkUpdateModal(true);
   };
 
@@ -5407,6 +5417,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     setMarketingBulkText("");
     setMarketingBulkDefaultCampaign("");
     setMarketingBulkDefaultStatus("prospect");
+    setMarketingBulkDefaultOwner("");
   };
 
   const applyMarketingBulkUpdate = async () => {
@@ -5449,6 +5460,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         const updatedItem = normalizeMarketingItem({
           ...current,
           status: entry.status,
+          owner: entry.owner || current.owner || "",
           campaigns: nextCampaigns,
           campaign: normalizedCampaign || current.campaign || "",
           updatedAt: now,
@@ -5513,6 +5525,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
           campaign: normalizedCampaign,
           campaigns: normalizedCampaign ? [normalizedCampaign] : [],
           status: entry.status,
+          owner: entry.owner || base.owner || "",
           createdAt: now,
           updatedAt: now,
         }, teamUsers);
@@ -9399,20 +9412,20 @@ Requirements:
                 <div>
                   <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 6, color: C.tx }}>Bulk Update Assignments</div>
                   <div style={{ fontSize: 12, color: C.ts, lineHeight: 1.6 }}>
-                    Paste a quick list of <code style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>name | campaign | status</code> rows.
+                    Paste a quick list of <code style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>name | campaign | status | owner</code> rows.
                     We will update exact talent + campaign matches, create a new campaign assignment when the talent already exists in the project, and skip unmatched names safely.
                   </div>
                 </div>
                 <button onClick={closeMarketingBulkUpdateModal} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: C.ts }}>✕</button>
               </div>
 
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 220px 220px", gap: 10, alignItems: "end", marginBottom: 12 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 220px 220px 220px", gap: 10, alignItems: "end", marginBottom: 12 }}>
                 <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 4 }}>
                   <span>Paste list</span>
                   <textarea
                     value={marketingBulkText}
                     onChange={e => setMarketingBulkText(e.target.value)}
-                    placeholder={`Patrick James Clark | D2F Paid 1 | Contacted\nTejai Moore | D2F Paid 1 | Interested\nfeeljones | Direct To Fan Focus | Complete`}
+                    placeholder={`Patrick James Clark | D2F Paid 1 | Contacted | Greg\nTejai Moore | D2F Paid 1 | Interested\nfeeljones | Direct To Fan Focus | Complete | Brad`}
                     style={{ ...iS, width: "100%", minHeight: 170, resize: "vertical", fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", lineHeight: 1.5 }}
                   />
                 </label>
@@ -9430,6 +9443,14 @@ Requirements:
                     {MARKETING_STATUSES.map(status => <option key={status.id} value={status.id}>{status.label}</option>)}
                   </select>
                   <div style={{ fontSize: 11, color: C.tt }}>Used when a pasted row omits the status.</div>
+                </label>
+                <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 4 }}>
+                  <span>Default owner</span>
+                  <select value={marketingBulkDefaultOwner} onChange={e => setMarketingBulkDefaultOwner(e.target.value)} style={{ ...iS, width: "100%" }}>
+                    <option value="">Leave unchanged / unassigned</option>
+                    {(proj?.teamUsers || DEFAULT_TEAM_USERS).map(owner => <option key={owner} value={owner}>{owner}</option>)}
+                  </select>
+                  <div style={{ fontSize: 11, color: C.tt }}>Used when a pasted row omits the owner.</div>
                 </label>
               </div>
 
@@ -9465,8 +9486,8 @@ Requirements:
                         <div style={{ color: C.ts }}>{entry.campaign || "No campaign"}</div>
                         <div style={{ color: C.ts }}>{MM[entry.status]?.label || titleCaseWords(entry.status)}</div>
                         <div style={{ color: C.ts, lineHeight: 1.45 }}>
-                          {entry.action === "update" && `Existing assignment match`}
-                          {entry.action === "create" && (entry.source === "existing_talent" ? "Existing talent found · new campaign assignment" : "Matched artist from project roster · new campaign assignment")}
+                          {entry.action === "update" && `Existing assignment match${entry.owner ? ` · Owner → ${entry.owner}` : ""}`}
+                          {entry.action === "create" && `${entry.source === "existing_talent" ? "Existing talent found" : "Matched artist from project roster"} · new campaign assignment${entry.owner ? ` · Owner → ${entry.owner}` : ""}`}
                           {entry.action === "skip" && entry.reason}
                         </div>
                       </div>
@@ -9481,7 +9502,7 @@ Requirements:
 
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
                 <div style={{ fontSize: 11, color: C.tt, lineHeight: 1.5 }}>
-                  Supported formats: pipe-separated, comma-separated, or tab-separated. Header rows like <code style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>name,campaign,status</code> also work.
+                  Supported formats: pipe-separated, comma-separated, or tab-separated. Header rows like <code style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>name,campaign,status,owner</code> also work.
                 </div>
                 <div style={{ display: "flex", gap: 10 }}>
                   <button onClick={closeMarketingBulkUpdateModal} style={{ padding: "8px 18px", borderRadius: 10, border: `1px solid ${C.bd}`, background: "transparent", cursor: "pointer", fontSize: 13, fontFamily: ft, color: C.ts }}>
