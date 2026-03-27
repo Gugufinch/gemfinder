@@ -3698,6 +3698,19 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     return updated;
   };
 
+  const saveProjectFast = nextProj => {
+    const updated = projects.map(p => p.id === nextProj.id ? nextProj : p);
+    setProjects(updated);
+    void persist(updated).catch(err => {
+      console.error("Background project save failed:", err);
+      setToast({
+        m: "Project save failed in the background. Please refresh and try once more.",
+        t: "err",
+      });
+    });
+    return updated;
+  };
+
   const saveProjectType = async nextType => {
     if (!requireEditor()) return;
     if (!proj) return;
@@ -4101,10 +4114,10 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       notes: artistForm.note.trim() ? { ...(proj.notes || {}), [name]: artistForm.note.trim() } : proj.notes,
       activityLog,
     };
-    await saveProject(nextProj);
     const alreadyOnPlatform = (proj.internalRoster?.names || []).some(item => canonicalArtistName(item) === canon);
     resetArtistForm();
     setShowAddArtist(false);
+    saveProjectFast(nextProj);
     flash(alreadyOnPlatform ? `Added ${name} · already found in internal roster` : `Added ${name}`);
   };
 
@@ -4154,8 +4167,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         ]),
       },
     };
-    await saveProject(nextProj);
     closeMarketingItemModal();
+    saveProjectFast(nextProj);
     flash(exists ? `Updated ${talentName}` : `Added ${talentName}`);
   };
 
