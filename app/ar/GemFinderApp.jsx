@@ -2557,6 +2557,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [marketingGroupFilter, setMarketingGroupFilter] = useState("all");
   const [marketingSelectionMode, setMarketingSelectionMode] = useState(false);
   const [selectedMarketingIds, setSelectedMarketingIds] = useState(new Set());
+  const [marketingSelectionOwnerDraft, setMarketingSelectionOwnerDraft] = useState("");
   const [showMarketingBulkUpdateModal, setShowMarketingBulkUpdateModal] = useState(false);
   const [marketingBulkText, setMarketingBulkText] = useState("");
   const [marketingBulkDefaultCampaign, setMarketingBulkDefaultCampaign] = useState("");
@@ -5295,6 +5296,28 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     flash(`Deleted ${ids.length} assignment${ids.length === 1 ? "" : "s"}`);
   };
 
+  const batchAssignMarketingOwner = async owner => {
+    if (!requireEditor()) return;
+    if (!proj) return;
+    const ids = marketingSelectedItems.map(item => item.id).filter(Boolean);
+    if (!ids.length) {
+      flash("Select assignments first", "err");
+      return;
+    }
+    const idSet = new Set(ids);
+    const nextProj = {
+      ...proj,
+      marketingItems: (proj.marketingItems || []).map(item =>
+        idSet.has(item.id)
+          ? { ...item, owner, updatedAt: new Date().toISOString() }
+          : item
+      ),
+    };
+    const ok = await saveProject(nextProj);
+    if (!ok) return;
+    flash(owner ? `${ids.length} assignment${ids.length === 1 ? "" : "s"} assigned to ${owner}` : `${ids.length} assignment${ids.length === 1 ? "" : "s"} unassigned`);
+  };
+
   const saveMarketingGroupSelection = async () => {
     if (!requireEditor()) return;
     if (!proj) return;
@@ -7642,6 +7665,24 @@ Requirements:
                         <>
                           <button onClick={selectVisibleMarketingItems} style={{ ...actionBtn(false, "neutral"), ...lockStyle(isReadOnly) }}>Select All Filtered</button>
                           <button onClick={clearMarketingSelection} style={{ ...actionBtn(false, "neutral"), ...lockStyle(isReadOnly) }}>Clear Selection</button>
+                          <select
+                            value={marketingSelectionOwnerDraft}
+                            onChange={e => setMarketingSelectionOwnerDraft(e.target.value)}
+                            disabled={isReadOnly}
+                            style={{ ...iS, minWidth: 160, opacity: isReadOnly ? 0.5 : 1 }}
+                          >
+                            <option value="">Assign owner…</option>
+                            {(proj.teamUsers || DEFAULT_TEAM_USERS).map(owner => (
+                              <option key={owner} value={owner}>{owner}</option>
+                            ))}
+                            <option value="__clear__">Clear owner</option>
+                          </select>
+                          <button
+                            onClick={() => batchAssignMarketingOwner(marketingSelectionOwnerDraft === "__clear__" ? "" : marketingSelectionOwnerDraft)}
+                            style={{ ...actionBtn(false, "good"), ...lockStyle(isReadOnly || !selectedMarketingIds.size || !marketingSelectionOwnerDraft) }}
+                          >
+                            Apply Owner
+                          </button>
                           <button onClick={saveMarketingGroupSelection} style={{ ...actionBtn(false, "accent"), ...lockStyle(isReadOnly || !selectedMarketingIds.size) }}>Save Group</button>
                           <button onClick={copyMarketingBccEmails} style={{ ...actionBtn(false, "neutral"), ...lockStyle(isReadOnly || !marketingSelectedEmails.length) }}>Copy BCC</button>
                           <button onClick={openMarketingBccDraft} style={{ ...actionBtn(false, "neutral"), ...lockStyle(isReadOnly || !marketingSelectedEmails.length) }}>Open Gmail Draft</button>
