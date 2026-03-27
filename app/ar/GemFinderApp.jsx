@@ -34,6 +34,7 @@ const MARKETING_STATUSES = [
 const MARKETING_DELIVERABLE_TYPES = ["UGC", "VO", "MIXED"];
 const MM = Object.fromEntries(MARKETING_STATUSES.map(s => [s.id, s]));
 const VALID_MARKETING_STATUS_IDS = new Set(MARKETING_STATUSES.map(s => s.id));
+const MARKETING_SLACK_NOTIFY_STATUS_IDS = new Set(["contacted", "interested", "creating", "reviewing", "revising", "complete", "rejected"]);
 const VALID_STAGE_IDS = new Set(STAGES.map(s => s.id));
 const CONTACTED_STAGE_IDS = ["sent", "replied", "engaged", "won", "live"];
 const REPLIED_STAGE_IDS = ["replied", "engaged", "won", "live"];
@@ -5755,6 +5756,58 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     return normalizeMarketingCampaignBank([...fromSettings, ...fromItems]);
   }, [proj?.settings?.marketingCampaignBank, marketingItems]);
 
+  const editingMarketingItem = useMemo(
+    () => marketingForm.id
+      ? marketingItems.find(item => String(item.id || "") === String(marketingForm.id || "")) || null
+      : null,
+    [marketingItems, marketingForm.id]
+  );
+
+  const marketingSlackNotice = useMemo(() => {
+    if (!showMarketingItemModal) return null;
+    const nextStatus = normalizeMarketingStatus(marketingForm.status || "prospect");
+    const previousStatus = editingMarketingItem
+      ? normalizeMarketingStatus(editingMarketingItem.status || "prospect")
+      : "prospect";
+    const isNewAssignment = !editingMarketingItem;
+    const nextLabel = MM[nextStatus]?.label || "Prospect";
+    const previousLabel = MM[previousStatus]?.label || "Prospect";
+    const notifies = MARKETING_SLACK_NOTIFY_STATUS_IDS.has(nextStatus) && (isNewAssignment || previousStatus !== nextStatus);
+
+    if (notifies) {
+      return {
+        notifies: true,
+        tone: C.gn,
+        bg: C.gb,
+        border: C.gbd || C.gn,
+        headline: `Saving will post to #marketing-gems: ${previousLabel} -> ${nextLabel}`,
+        detail: isNewAssignment
+          ? "This is a new marketing assignment entering an active workflow status."
+          : "This is a real status transition, so the marketing Slack notifier will fire.",
+      };
+    }
+
+    if (!MARKETING_SLACK_NOTIFY_STATUS_IDS.has(nextStatus)) {
+      return {
+        notifies: false,
+        tone: C.ts,
+        bg: C.sa,
+        border: C.bd,
+        headline: "Save will not post to Slack yet",
+        detail: "Slack starts once the assignment moves beyond Prospect into an active marketing workflow status.",
+      };
+    }
+
+    return {
+      notifies: false,
+      tone: C.ts,
+      bg: C.sa,
+      border: C.bd,
+      headline: `Slack stays quiet because the status is still ${nextLabel}`,
+      detail: "This save is updating the assignment, but it is not changing the marketing status.",
+    };
+  }, [showMarketingItemModal, marketingForm.status, editingMarketingItem, C]);
+
   const marketingGroupOptions = useMemo(
     () => normalizeMarketingGroups(proj?.settings?.marketingGroups || [], marketingItemIds),
     [proj?.settings?.marketingGroups, marketingItemIds]
@@ -10469,6 +10522,28 @@ Requirements:
 
                 <textarea value={marketingForm.notes} onChange={e => setMarketingForm({ ...marketingForm, notes: e.target.value })} placeholder="Notes, revision context, feedback, deliverable details..." style={{ ...iS, width: "100%", minHeight: 110, resize: "vertical", gridColumn: "1 / span 2" }} />
               </div>
+
+              {marketingSlackNotice && (
+                <div
+                  style={{
+                    marginTop: 14,
+                    padding: "11px 14px",
+                    borderRadius: 12,
+                    border: `1px solid ${marketingSlackNotice.border}`,
+                    background: marketingSlackNotice.bg,
+                  }}
+                >
+                  <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: marketingSlackNotice.tone, marginBottom: 4 }}>
+                    Slack Notice
+                  </div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: marketingSlackNotice.tone, marginBottom: 3 }}>
+                    {marketingSlackNotice.headline}
+                  </div>
+                  <div style={{ fontSize: 12, color: C.ts, lineHeight: 1.5 }}>
+                    {marketingSlackNotice.detail}
+                  </div>
+                </div>
+              )}
 
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginTop: 18 }}>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
