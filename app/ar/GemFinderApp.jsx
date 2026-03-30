@@ -22,6 +22,11 @@ const PROJECT_TYPES = [
   { id: "marketing", label: "Marketing" },
   { id: "curator", label: "Curator" },
 ];
+const DEFAULT_WORKSPACE = {
+  id: "songfinch",
+  name: "Songfinch",
+  slug: "songfinch",
+};
 const MARKETING_STATUSES = [
   { id: "prospect", label: "Prospect", icon: "◎", description: "Talent is identified for the campaign but has not replied yet." },
   { id: "contacted", label: "Contacted", icon: "→", description: "The campaign ask has been sent to the talent." },
@@ -91,6 +96,32 @@ function emptyMarketingForm() {
     notes: "",
     rejectedReason: "",
   };
+}
+
+function workspaceRoleLabel(role = "") {
+  switch (String(role || "").trim()) {
+    case "kickoff_ar":
+      return "Kickoff · Artist";
+    case "kickoff_curator":
+      return "Kickoff · Curator";
+    case "live_marketing":
+      return "Live CRM · Marketing";
+    default:
+      return "Workspace";
+  }
+}
+
+function defaultWorkspaceRoleForProjectType(type = "ar") {
+  const normalized = normalizeProjectType(type);
+  if (normalized === "marketing") return "live_marketing";
+  if (normalized === "curator") return "kickoff_curator";
+  return "kickoff_ar";
+}
+
+function normalizeWorkspaceRole(role = "", type = "ar") {
+  const raw = String(role || "").trim().toLowerCase();
+  if (["kickoff_ar", "kickoff_curator", "live_marketing"].includes(raw)) return raw;
+  return defaultWorkspaceRoleForProjectType(type);
 }
 
 const SEQUENCES = [
@@ -1428,6 +1459,10 @@ function creditABOutcome(project, artistName, nextStage, prevStage) {
 function normalizeProject(p) {
   const legacyModels = p.settings?.aiModels || {};
   const projectType = normalizeProjectType(p.type);
+  const workspaceId = String(p.workspaceId || DEFAULT_WORKSPACE.id).trim() || DEFAULT_WORKSPACE.id;
+  const workspaceName = String(p.workspaceName || DEFAULT_WORKSPACE.name).trim() || DEFAULT_WORKSPACE.name;
+  const workspaceSlug = String(p.workspaceSlug || workspaceName.toLowerCase().replace(/[^a-z0-9]+/g, "-")).trim() || DEFAULT_WORKSPACE.slug;
+  const workspaceRole = normalizeWorkspaceRole(p.workspaceRole, projectType);
   const teamUsers = Array.isArray(p.teamUsers) && p.teamUsers.length ? p.teamUsers : [...DEFAULT_TEAM_USERS];
   const marketingItems = Array.isArray(p.marketingItems) ? p.marketingItems.map(item => normalizeMarketingItem(item, teamUsers)) : [];
   const aiModelsByProvider = {
@@ -1452,6 +1487,10 @@ function normalizeProject(p) {
   return {
     ...p,
     type: projectType,
+    workspaceId,
+    workspaceName,
+    workspaceSlug,
+    workspaceRole,
     artists: p.artists || [],
     pipeline: Object.fromEntries(
       Object.entries(p.pipeline || {}).map(([artistName, state]) => [
@@ -3071,6 +3110,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [showTeam, setShowTeam] = useState(false);
   const [newWorkspaceContact, setNewWorkspaceContact] = useState("");
   const [newTeamUser, setNewTeamUser] = useState("");
+  const [currentWorkspaceId, setCurrentWorkspaceId] = useState(DEFAULT_WORKSPACE.id);
   const [workspaceUser, setWorkspaceUser] = useState(ALL_USER_VIEW);
   const [layoutByUser, setLayoutByUser] = useState({});
   const [focusMode, setFocusMode] = useState(false);
@@ -3138,6 +3178,56 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const isAdmin = roleLabel === "admin";
   const isReadOnly = !canEdit;
   const storageKey = authUserId ? `${STORAGE_PREFIX}:${authUserId}` : STORAGE_PREFIX;
+  const workspaces = useMemo(() => {
+    const byId = new Map();
+    projects.forEach(project => {
+      const normalized = normalizeProject(project);
+      if (!byId.has(normalized.workspaceId)) {
+        byId.set(normalized.workspaceId, {
+          id: normalized.workspaceId,
+          name: normalized.workspaceName || DEFAULT_WORKSPACE.name,
+          slug: normalized.workspaceSlug || DEFAULT_WORKSPACE.slug,
+          roles: new Set(),
+          projects: [],
+        });
+      }
+      const workspace = byId.get(normalized.workspaceId);
+      workspace.roles.add(normalized.workspaceRole);
+      workspace.projects.push(normalized);
+    });
+    return [...byId.values()]
+      .map(workspace => {
+        const roleList = [...workspace.roles];
+        const summary = workspace.projects.reduce((acc, project) => {
+          if (normalizeProjectType(project.type) === "marketing") {
+            const mk = summarizeMarketingItems(project.marketingItems || [], operationalTodayISOFor(clockNow));
+            acc.live += new Set((project.marketingItems || []).map(item => canonicalArtistName(item.talentName))).size;
+            acc.assignments += mk.items;
+            acc.complete += mk.complete;
+            acc.campaigns += mk.campaigns;
+          } else {
+            acc.kickoff += project.artists?.length || 0;
+            if (normalizeProjectType(project.type) === "curator") acc.curators += project.artists?.length || 0;
+          }
+          return acc;
+        }, { kickoff: 0, live: 0, assignments: 0, complete: 0, campaigns: 0, curators: 0 });
+        return {
+          ...workspace,
+          roles: roleList,
+          summary,
+        };
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [projects, clockNow]);
+  const selectedWorkspace = useMemo(
+    () => workspaces.find(workspace => workspace.id === currentWorkspaceId) || workspaces[0] || { ...DEFAULT_WORKSPACE, projects: [], roles: [], summary: { kickoff: 0, live: 0, assignments: 0, complete: 0, campaigns: 0, curators: 0 } },
+    [workspaces, currentWorkspaceId]
+  );
+  const workspaceProjects = selectedWorkspace?.projects || [];
+  const workspaceProjectIds = useMemo(
+    () => new Set(workspaceProjects.map(project => project.id)),
+    [workspaceProjects]
+  );
   const proj = projects.find(p => p.id === apId);
   const projectType = normalizeProjectType(proj?.type);
   const isMarketingProject = projectType === "marketing";
@@ -3153,8 +3243,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const workspaceTalentData = useMemo(() => collectWorkspaceTalentProfiles(projects), [projects]);
   const workspaceTalentProfiles = workspaceTalentData.profiles;
   const liveCrmBaseProfiles = useMemo(
-    () => workspaceTalentProfiles.filter(profile => profile.platformLifecycle === "live"),
-    [workspaceTalentProfiles]
+    () => workspaceTalentProfiles.filter(profile => profile.platformLifecycle === "live" && profile.projectMemberships.some(item => workspaceProjectIds.has(item.projectId))),
+    [workspaceTalentProfiles, workspaceProjectIds]
   );
   const liveCrmTypeOptions = useMemo(
     () => uniqStrings(liveCrmBaseProfiles.flatMap(profile => profile.talentTypes || []).filter(Boolean)).sort((a, b) => a.localeCompare(b)),
@@ -3194,17 +3284,17 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
           return byProject.get(key);
         };
 
-        profile.projectMemberships.forEach(item => {
+        profile.projectMemberships.filter(item => workspaceProjectIds.has(item.projectId)).forEach(item => {
           ensureProjectSummary(item.projectId, item.projectName, item.projectType);
         });
 
-        profile.arRecords.forEach(record => {
+        profile.arRecords.filter(record => workspaceProjectIds.has(record.projectId)).forEach(record => {
           const summary = ensureProjectSummary(record.projectId, record.projectName, record.projectType || "ar");
           if (record.owner) summary.owners.push(record.owner);
           if (record.stage) summary.arStages.push(record.stage);
         });
 
-        profile.marketingAssignments.forEach(item => {
+        profile.marketingAssignments.filter(item => workspaceProjectIds.has(item.projectId)).forEach(item => {
           const summary = ensureProjectSummary(item.projectId, item.projectName, "marketing");
           if (item.owner) summary.owners.push(item.owner);
           if (item.status) summary.marketingStatuses.push(item.status);
@@ -3247,8 +3337,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
 
         const lastTouched = [
           ...projectSummaries.map(item => String(item.lastTouched || "")),
-          ...profile.marketingAssignments.map(item => String(item.updatedAt || "")),
-          ...profile.arRecords.map(item => String(item.updatedAt || "")),
+          ...profile.marketingAssignments.filter(item => workspaceProjectIds.has(item.projectId)).map(item => String(item.updatedAt || "")),
+          ...profile.arRecords.filter(item => workspaceProjectIds.has(item.projectId)).map(item => String(item.updatedAt || "")),
         ].filter(Boolean).sort((a, b) => b.localeCompare(a))[0] || "";
 
         return {
@@ -3275,7 +3365,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         if (timeCompare !== 0) return timeCompare;
         return a.displayName.localeCompare(b.displayName);
       });
-  }, [liveCrmBaseProfiles, liveCrmOwnerFilter, liveCrmQuery, liveCrmSourceFilter, liveCrmTypeFilter]);
+  }, [liveCrmBaseProfiles, liveCrmOwnerFilter, liveCrmQuery, liveCrmSourceFilter, liveCrmTypeFilter, workspaceProjectIds]);
   const liveCrmOverview = useMemo(() => {
     const projectsSeen = new Set();
     const campaignsSeen = new Set();
@@ -3288,7 +3378,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         projectsSeen.add(summary.projectId || summary.projectName);
         summary.campaigns.forEach(campaign => campaignsSeen.add(campaign));
       });
-      marketingAssignments += profile.marketingAssignments.length;
+      marketingAssignments += profile.marketingAssignments.filter(item => workspaceProjectIds.has(item.projectId)).length;
       if (profile.talentTypes.includes("Internal Artist")) internalArtists += 1;
       if (profile.talentTypes.includes("Curator")) curators += 1;
       if (profile.talentTypes.some(type => type === "Content Creator" || type === "AI UGC")) creators += 1;
@@ -3302,10 +3392,14 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       curators,
       creators,
     };
-  }, [liveCrmProfiles]);
+  }, [liveCrmProfiles, workspaceProjectIds]);
   const kickoffBaseProfiles = useMemo(
-    () => workspaceTalentProfiles.filter(profile => profile.platformLifecycle !== "live" && profile.arRecords.length > 0),
-    [workspaceTalentProfiles]
+    () => workspaceTalentProfiles.filter(
+      profile =>
+        profile.platformLifecycle !== "live" &&
+        profile.arRecords.some(record => workspaceProjectIds.has(record.projectId))
+    ),
+    [workspaceTalentProfiles, workspaceProjectIds]
   );
   const kickoffTypeOptions = useMemo(
     () => uniqStrings(kickoffBaseProfiles.flatMap(profile => profile.talentTypes || []).filter(Boolean)).sort((a, b) => a.localeCompare(b)),
@@ -3324,6 +3418,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     return kickoffBaseProfiles
       .map(profile => {
         const projectSummaries = profile.arRecords
+          .filter(record => workspaceProjectIds.has(record.projectId))
           .reduce((map, record) => {
             const key = String(record.projectId || "");
             if (!map.has(key)) {
@@ -3392,7 +3487,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         return true;
       })
       .sort((a, b) => a.displayName.localeCompare(b.displayName));
-  }, [kickoffBaseProfiles, kickoffOwnerFilter, kickoffQuery, kickoffSourceFilter, kickoffStageFilter, kickoffTypeFilter]);
+  }, [kickoffBaseProfiles, kickoffOwnerFilter, kickoffQuery, kickoffSourceFilter, kickoffStageFilter, kickoffTypeFilter, workspaceProjectIds]);
   const kickoffOverview = useMemo(() => {
     const projectsSeen = new Set();
     const ownersSeen = new Set();
@@ -3833,6 +3928,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
           }
         }
         const nextWorkspaceUser = d?.workspaceUser || ALL_USER_VIEW;
+        const nextCurrentWorkspaceId = d?.currentWorkspaceId || DEFAULT_WORKSPACE.id;
         const nextLayouts = d?.layoutByUser || {};
         const localProjects = Array.isArray(d?.projects) ? d.projects : [];
         const lastNonEmptyProjects = Array.isArray(d?.lastNonEmptyProjects) ? d.lastNonEmptyProjects : [];
@@ -3840,6 +3936,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         if (d?.dark) setDark(d.dark);
         if (d?.viewMode) setViewMode(d.viewMode);
         if (d?.projectMode) setProjectMode(d.projectMode);
+        setCurrentWorkspaceId(nextCurrentWorkspaceId);
         setWorkspaceUser(nextWorkspaceUser);
         setLayoutByUser(nextLayouts);
         const initialLayout = normalizeLayout(nextLayouts[nextWorkspaceUser] || DEFAULT_LAYOUT);
@@ -3897,6 +3994,12 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     const watchdog = setTimeout(() => setLoading(false), 3500);
     return () => clearTimeout(watchdog);
   }, [loading]);
+
+  useEffect(() => {
+    if (!workspaces.length) return;
+    if (workspaces.some(workspace => workspace.id === currentWorkspaceId)) return;
+    setCurrentWorkspaceId(workspaces[0].id);
+  }, [workspaces, currentWorkspaceId]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setClockNow(new Date()), 60000);
@@ -4046,7 +4149,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       updateWorkspaceUrl(proj.id, "", "", isMarketingProject && showMarketingItemModal && marketingForm.id ? marketingForm.id : "");
       return;
     }
-    if (screen === "hub") {
+    if (screen === "hub" || screen === "workspace" || screen === "kickoff" || screen === "live-crm") {
       updateWorkspaceUrl("", "", "", "");
     }
   }, [loading, screen, proj?.id, selA?.n, detailTab, isMarketingProject, showMarketingItemModal, marketingForm.id]);
@@ -4084,7 +4187,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     }
   }, [talentTargetProjectType, talentTargetStatus, talentTargetOwner, talentTargetTeamUsers, talentTargetCampaign, talentTargetNewCampaign]);
 
-  const persist = useCallback(async (np, la, dk, vm, lb, wu, pm) => {
+  const persist = useCallback(async (np, la, dk, vm, lb, wu, pm, cw) => {
     const nextProjects = np || projects;
     const previousLocal = await sGet(storageKey);
     const lastNonEmptyProjects = nextProjects.length
@@ -4116,9 +4219,10 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       layoutByUser: lb !== undefined ? lb : layoutByUser,
       workspaceUser: wu !== undefined ? wu : workspaceUser,
       projectMode: pm !== undefined ? pm : projectMode,
+      currentWorkspaceId: cw !== undefined ? cw : currentWorkspaceId,
     });
     return true;
-  }, [storageKey, projects, apId, dark, viewMode, layoutByUser, workspaceUser, projectMode, authUserId, canEdit]);
+  }, [storageKey, projects, apId, dark, viewMode, layoutByUser, workspaceUser, projectMode, currentWorkspaceId, authUserId, canEdit]);
 
   const flash = (m, t = "ok") => { setToast({ m, t }); setTimeout(() => setToast(null), 2500); };
   const togDark = async () => { const nd = !dark; setDark(nd); await persist(undefined, undefined, nd); };
@@ -4272,10 +4376,31 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     setPreFocusLayout(null);
   };
 
+  const openWorkspace = async workspaceId => {
+    const workspace = workspaces.find(item => item.id === workspaceId) || selectedWorkspace;
+    if (!workspace) return;
+    setCurrentWorkspaceId(workspace.id);
+    setScreen("workspace");
+    setSearch("");
+    setGf("All");
+    setSf("all");
+    setPf("all");
+    setOwnerFilter("__view__");
+    setMarketingStatusFilter("all");
+    setMarketingCampaignFilter("all");
+    setMarketingTrafficFilter("all");
+    setMarketingGroupFilter("all");
+    setMarketingOwnerFilter("all");
+    changeWorkspaceUser(ALL_USER_VIEW);
+    updateWorkspaceUrl("", "", "", "");
+    await persist(undefined, undefined, undefined, undefined, undefined, ALL_USER_VIEW, undefined, workspace.id);
+  };
+
   const openProjectWorkspace = async (projectId, { artistName = "", assignmentId = "" } = {}) => {
     const targetProject = projects.find(project => project.id === projectId);
     if (!targetProject) return;
     const nextType = normalizeProjectType(targetProject.type);
+    setCurrentWorkspaceId(targetProject.workspaceId || DEFAULT_WORKSPACE.id);
     setApId(projectId);
     setScreen("project");
     setSearch("");
@@ -4295,7 +4420,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       changeWorkspaceUser(ALL_USER_VIEW);
     }
     updateWorkspaceUrl(projectId, artistName, artistName ? "overview" : "", assignmentId);
-    await persist(projects, projectId);
+    await persist(projects, projectId, undefined, undefined, undefined, undefined, undefined, targetProject.workspaceId || DEFAULT_WORKSPACE.id);
   };
 
   const toggleFocusMode = () => {
@@ -4915,9 +5040,16 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     if (!requireEditor()) return;
     const id = `p_${Date.now()}`;
     const projectType = normalizeProjectType(type);
+    const workspaceId = selectedWorkspace?.id || DEFAULT_WORKSPACE.id;
+    const workspaceName = selectedWorkspace?.name || DEFAULT_WORKSPACE.name;
+    const workspaceSlug = selectedWorkspace?.slug || DEFAULT_WORKSPACE.slug;
     const np = {
       id,
       type: projectType,
+      workspaceId,
+      workspaceName,
+      workspaceSlug,
+      workspaceRole: defaultWorkspaceRoleForProjectType(projectType),
       name,
       desc,
       artists: [],
@@ -4966,7 +5098,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     setNpN("");
     setNpD("");
     setNewProjectType("ar");
-    await persist(u, id);
+    await persist(u, id, undefined, undefined, undefined, undefined, undefined, workspaceId);
     flash(`Created "${name}" ${projectTypeLabel(projectType)} workspace`);
   };
 
@@ -7508,8 +7640,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     </button>
   );
 
-  // ═══ KICKOFF ═══
-  if (screen === "kickoff") return (
+  // ═══ WORKSPACE ═══
+  if (screen === "workspace") return (
     <div style={{ fontFamily: ft, background: C.bg, minHeight: "100vh", color: C.tx }}>
       <Toast /><style>{css}</style>
       <div style={{ borderBottom: `1px solid ${C.bd}`, background: C.sf }}>
@@ -7528,8 +7660,101 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         <div style={{ ...cS, marginBottom: 18, padding: "22px 24px", background: dark ? "linear-gradient(135deg, #111a2b 0%, #162238 100%)" : "linear-gradient(135deg, #ffffff 0%, #eef4ff 100%)" }}>
           <div style={{ display: "grid", gridTemplateColumns: "minmax(320px, 1.3fr) minmax(280px, 1fr)", gap: 18, alignItems: "stretch" }}>
             <div>
+              <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 3, textTransform: "uppercase", color: C.ac, marginBottom: 8 }}>Workspace</div>
+              <div style={{ fontSize: 30, fontWeight: 800, letterSpacing: "-0.04em", marginBottom: 8 }}>{selectedWorkspace.name}</div>
+              <div style={{ fontSize: 13, lineHeight: 1.6, color: C.ts, maxWidth: 560 }}>
+                This is the master workspace shell. Kickoff is the pre-live scout and onboarding layer. Live CRM is the live roster and campaign operating hub. The child projects underneath stay intact while we transition the product model.
+              </div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 14 }}>
+                <span style={{ ...mkP(true, C.ac, C.al), cursor: "default" }}>{selectedWorkspace.projects.length} child projects</span>
+                <span style={{ ...mkP(true, C.bu, C.bb), cursor: "default" }}>{selectedWorkspace.summary.kickoff} kickoff records</span>
+                <span style={{ ...mkP(true, C.lv, C.lvb), cursor: "default" }}>{selectedWorkspace.summary.live} live roster</span>
+                <span style={{ ...mkP(true, C.pr, C.pb), cursor: "default" }}>{selectedWorkspace.summary.assignments} marketing assignments</span>
+              </div>
+            </div>
+            <div style={{ display: "grid", gap: 12, alignContent: "start" }}>
+              <button onClick={() => setScreen("kickoff")} style={{ ...actionBtn(false, "accent"), width: "100%", justifyContent: "space-between" }}>
+                <span>Open Kickoff</span>
+                <span>{kickoffOverview.talents}</span>
+              </button>
+              <button onClick={() => setScreen("live-crm")} style={{ ...actionBtn(false, "neutral"), width: "100%", justifyContent: "space-between" }}>
+                <span>Open Live CRM</span>
+                <span>{liveCrmOverview.liveTalents}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 700 }}>Child Projects</div>
+            <div style={{ fontSize: 12, color: C.tt }}>These are the underlying project records currently powering this workspace.</div>
+          </div>
+          <div style={{ fontSize: 11, color: C.tt }}>{selectedWorkspace.roles.map(role => workspaceRoleLabel(role)).join(" · ") || "No mapped roles yet"}</div>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(300px,1fr))", gap: 16 }}>
+          {selectedWorkspace.projects.map((project, index) => {
+            const summary = summarizeProjectForHub(project, todayISO());
+            const toneColor = normalizeProjectType(project.type) === "marketing" ? C.pr : normalizeProjectType(project.type) === "curator" ? C.gn : C.ac;
+            const toneBg = normalizeProjectType(project.type) === "marketing" ? C.pb : normalizeProjectType(project.type) === "curator" ? C.gb : C.al;
+            return (
+              <div
+                key={project.id}
+                onClick={() => { void openProjectWorkspace(project.id); }}
+                style={{ ...cS, padding: "20px 22px", cursor: "pointer", transition: "all 0.2s", animation: `fu 0.3s ease ${index * 0.05}s both` }}
+                onMouseEnter={e => { e.currentTarget.style.borderColor = C.ac; e.currentTarget.style.boxShadow = C.sm; }}
+                onMouseLeave={e => { e.currentTarget.style.borderColor = C.bd; e.currentTarget.style.boxShadow = C.sw; }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "flex-start", marginBottom: 10 }}>
+                  <div>
+                    <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 4 }}>{project.name}</div>
+                    <div style={{ fontSize: 12, color: C.ts }}>{workspaceRoleLabel(project.workspaceRole)}</div>
+                  </div>
+                  <span style={{ ...mkP(true, toneColor, toneBg), cursor: "default" }}>{projectTypeLabel(project.type)}</span>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10 }}>
+                  {(summary.cards || []).map(([label, value, tone]) => {
+                    const fg = tone === "good" ? C.gn : tone === "live" ? C.lv : tone === "accent" ? C.ac : tone === "warn" ? C.ab : C.tx;
+                    const bg = tone === "good" ? C.gb : tone === "live" ? C.lvb : tone === "accent" ? C.al : tone === "warn" ? C.abb : C.sa;
+                    return (
+                      <div key={`${project.id}:${label}`} style={{ borderRadius: 12, border: `1px solid ${C.bd}`, background: bg, padding: "10px 12px" }}>
+                        <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 1, color: C.tt, marginBottom: 6 }}>{label}</div>
+                        <div style={{ fontSize: 20, fontWeight: 800, color: fg, lineHeight: 1 }}>{value}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+
+  // ═══ KICKOFF ═══
+  if (screen === "kickoff") return (
+    <div style={{ fontFamily: ft, background: C.bg, minHeight: "100vh", color: C.tx }}>
+      <Toast /><style>{css}</style>
+      <div style={{ borderBottom: `1px solid ${C.bd}`, background: C.sf }}>
+        <div style={{ maxWidth: 1180, margin: "0 auto", padding: "16px 24px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <button
+            onClick={() => { setScreen("workspace"); updateWorkspaceUrl("", "", "", ""); }}
+            style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, fontFamily: ft, color: C.ac, fontWeight: 600 }}
+          >
+            ← {selectedWorkspace.name}
+          </button>
+          <DkBtn />
+        </div>
+      </div>
+
+      <div style={{ maxWidth: 1180, margin: "0 auto", padding: "24px" }}>
+        <div style={{ ...cS, marginBottom: 18, padding: "22px 24px", background: dark ? "linear-gradient(135deg, #111a2b 0%, #162238 100%)" : "linear-gradient(135deg, #ffffff 0%, #eef4ff 100%)" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(320px, 1.3fr) minmax(280px, 1fr)", gap: 18, alignItems: "stretch" }}>
+            <div>
               <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 3, textTransform: "uppercase", color: C.ac, marginBottom: 8 }}>Kickoff</div>
-              <div style={{ fontSize: 30, fontWeight: 800, letterSpacing: "-0.04em", marginBottom: 8 }}>Scout + Onboarding</div>
+              <div style={{ fontSize: 30, fontWeight: 800, letterSpacing: "-0.04em", marginBottom: 8 }}>{selectedWorkspace.name} · Kickoff</div>
               <div style={{ fontSize: 13, lineHeight: 1.6, color: C.ts, maxWidth: 560 }}>
                 This is the pre-live operating view for artist scouting, curator advocacy, and onboarding. Everyone here is still in motion. Once they go live, the same shared talent profile shows up inside Live CRM with the full history intact.
               </div>
@@ -7738,10 +7963,10 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       <div style={{ borderBottom: `1px solid ${C.bd}`, background: C.sf }}>
         <div style={{ maxWidth: 1180, margin: "0 auto", padding: "16px 24px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <button
-            onClick={() => { setScreen("hub"); updateWorkspaceUrl("", "", "", ""); }}
+            onClick={() => { setScreen("workspace"); updateWorkspaceUrl("", "", "", ""); }}
             style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, fontFamily: ft, color: C.ac, fontWeight: 600 }}
           >
-            ← Project Home
+            ← {selectedWorkspace.name}
           </button>
           <DkBtn />
         </div>
@@ -7752,7 +7977,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
           <div style={{ display: "grid", gridTemplateColumns: "minmax(320px, 1.3fr) minmax(280px, 1fr)", gap: 18, alignItems: "stretch" }}>
             <div>
               <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 3, textTransform: "uppercase", color: C.lv, marginBottom: 8 }}>Live CRM</div>
-              <div style={{ fontSize: 30, fontWeight: 800, letterSpacing: "-0.04em", marginBottom: 8 }}>Master Roster</div>
+              <div style={{ fontSize: 30, fontWeight: 800, letterSpacing: "-0.04em", marginBottom: 8 }}>{selectedWorkspace.name} · Live CRM</div>
               <div style={{ fontSize: 13, lineHeight: 1.6, color: C.ts, maxWidth: 560 }}>
                 This is the shared live hub. Legacy roster talent already lives here, and pre-live artists or curators can graduate into this view without losing their notes, project history, or marketing context.
               </div>
@@ -8028,8 +8253,59 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
 
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
           <div>
+            <div style={{ fontSize: 15, fontWeight: 700 }}>Workspaces</div>
+            <div style={{ fontSize: 12, color: C.tt }}>Use a workspace as the master shell for kickoff, live CRM, and reporting.</div>
+          </div>
+          <div style={{ fontSize: 11, color: C.tt }}>{workspaces.length} workspace{workspaces.length === 1 ? "" : "s"}</div>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(320px,1fr))", gap: 16, marginBottom: 26 }}>
+          {workspaces.map((workspace, index) => (
+            <div
+              key={workspace.id}
+              onClick={() => { void openWorkspace(workspace.id); }}
+              style={{ ...cS, padding: "22px 24px", cursor: "pointer", transition: "all 0.2s", animation: `fu 0.3s ease ${index * 0.04}s both`, background: dark ? "linear-gradient(180deg, #111a2b 0%, #0f1729 100%)" : "linear-gradient(180deg, #ffffff 0%, #f8fbff 100%)" }}
+              onMouseEnter={e => { e.currentTarget.style.borderColor = C.ac; e.currentTarget.style.boxShadow = C.sm; }}
+              onMouseLeave={e => { e.currentTarget.style.borderColor = C.bd; e.currentTarget.style.boxShadow = C.sw; }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", marginBottom: 12 }}>
+                <div>
+                  <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 3, textTransform: "uppercase", color: C.ac, marginBottom: 6 }}>Workspace</div>
+                  <div style={{ fontSize: 24, fontWeight: 800, letterSpacing: "-0.03em", marginBottom: 6 }}>{workspace.name}</div>
+                  <div style={{ fontSize: 12, color: C.ts, lineHeight: 1.5 }}>
+                    Kickoff and Live CRM both live here, while the child projects stay intact underneath.
+                  </div>
+                </div>
+                {workspace.id === currentWorkspaceId && (
+                  <span style={{ ...mkP(true, C.gn, C.gb), cursor: "default" }}>Current</span>
+                )}
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10, marginBottom: 12 }}>
+                {[
+                  ["Child Projects", workspace.projects.length, C.ac, C.al],
+                  ["Kickoff", workspace.summary.kickoff, C.bu, C.bb],
+                  ["Live", workspace.summary.live, C.lv, C.lvb],
+                  ["Assignments", workspace.summary.assignments, C.pr, C.pb],
+                ].map(([label, value, tone, bg]) => (
+                  <div key={`${workspace.id}:${label}`} style={{ borderRadius: 12, border: `1px solid ${C.bd}`, background: bg, padding: "10px 12px" }}>
+                    <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 1, color: C.tt, marginBottom: 6 }}>{label}</div>
+                    <div style={{ fontSize: 20, fontWeight: 800, color: tone, lineHeight: 1 }}>{value}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                {workspace.roles.map(role => (
+                  <span key={`${workspace.id}:${role}`} style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{workspaceRoleLabel(role)}</span>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
+          <div>
             <div style={{ fontSize: 15, fontWeight: 700 }}>Projects</div>
-            <div style={{ fontSize: 12, color: C.tt }}>Open an existing workspace or create a new one.</div>
+            <div style={{ fontSize: 12, color: C.tt }}>Open an underlying project record directly or create a new child project.</div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             <button onClick={() => setScreen("kickoff")} style={actionBtn(false, "neutral")}>
