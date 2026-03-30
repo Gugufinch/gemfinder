@@ -1061,9 +1061,40 @@ function parseMl(s) { if (!s) return 0; const m = s.replace(/[\,\s]/g, "").match
 function fmtCompact(n) { if (!n || Number.isNaN(n)) return "0"; if (n >= 1e6) return `${(n / 1e6).toFixed(1).replace(/\.0$/, "")}M`; if (n >= 1e3) return `${Math.round(n / 1e3)}K`; return `${Math.round(n)}`; }
 function pS(a) { let s = 0; const ml = parseMl(a.l); if (ml >= 5e5) s += 3; else if (ml >= 1e5) s += 2; else if (ml >= 1e4) s += 1; if (a.e) s += 2; if (a.soc) s += 1; if (/high|known/i.test(a.h)) s += 1; return s; }
 function pT(score, C) { if (score >= 5) return { label: "HOT", color: C.rd, bg: C.rb, border: C.rbd }; if (score >= 3) return { label: "WARM", color: C.ab, bg: C.abb, border: C.abd }; return { label: "COOL", color: C.tt, bg: C.sa, border: C.bd }; }
-function rD(iso) { if (!iso) return ""; const d = Math.floor((new Date() - new Date(iso)) / 864e5); if (d === 0) return "today"; if (d === 1) return "yesterday"; if (d < 7) return `${d}d ago`; if (d < 30) return `${Math.floor(d / 7)}w ago`; return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric" }); }
-function sD(iso) { if (!iso) return ""; return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "2-digit" }); }
-function daysBetween(a, b) { return Math.floor((new Date(b) - new Date(a)) / 864e5); }
+function parseDateValue(value) {
+  if (!value) return null;
+  const raw = String(value).trim();
+  if (!raw) return null;
+  const dateOnly = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (dateOnly) {
+    const [, year, month, day] = dateOnly;
+    const dt = new Date(Number(year), Number(month) - 1, Number(day));
+    return Number.isNaN(dt.getTime()) ? null : dt;
+  }
+  const dt = new Date(raw);
+  return Number.isNaN(dt.getTime()) ? null : dt;
+}
+function rD(iso) {
+  const dt = parseDateValue(iso);
+  if (!dt) return "";
+  const d = Math.floor((Date.now() - dt.getTime()) / 864e5);
+  if (d === 0) return "today";
+  if (d === 1) return "yesterday";
+  if (d < 7) return `${d}d ago`;
+  if (d < 30) return `${Math.floor(d / 7)}w ago`;
+  return dt.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+function sD(iso) {
+  const dt = parseDateValue(iso);
+  if (!dt) return "";
+  return dt.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "2-digit" });
+}
+function daysBetween(a, b) {
+  const start = parseDateValue(a);
+  const end = parseDateValue(b);
+  if (!start || !end) return 0;
+  return Math.floor((end - start) / 864e5);
+}
 function todayISO() { return new Date().toISOString().slice(0, 10); }
 function addDaysISO(iso, days) { const d = new Date(`${iso}T00:00:00`); d.setDate(d.getDate() + days); return d.toISOString().slice(0, 10); }
 function operationalDate(now = new Date()) {
@@ -3084,11 +3115,13 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [liveCrmTypeFilter, setLiveCrmTypeFilter] = useState("all");
   const [liveCrmSourceFilter, setLiveCrmSourceFilter] = useState("all");
   const [liveCrmOwnerFilter, setLiveCrmOwnerFilter] = useState("all");
+  const [liveRosterViewMode, setLiveRosterViewMode] = useState("cards");
   const [kickoffQuery, setKickoffQuery] = useState("");
   const [kickoffTypeFilter, setKickoffTypeFilter] = useState("all");
   const [kickoffSourceFilter, setKickoffSourceFilter] = useState("all");
   const [kickoffOwnerFilter, setKickoffOwnerFilter] = useState("all");
   const [kickoffStageFilter, setKickoffStageFilter] = useState("all");
+  const [kickoffViewMode, setKickoffViewMode] = useState("cards");
 
   const [batch, setBatch] = useState(false);
   const [bSel, setBSel] = useState(new Set());
@@ -3547,6 +3580,34 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       stages,
     };
   }, [kickoffProfiles]);
+  const kickoffBoardColumns = useMemo(
+    () => KICKOFF_STAGE_ACTIONS
+      .filter(stage => stage.id !== "live")
+      .map(stage => ({
+        ...stage,
+        profiles: kickoffProfiles.filter(profile => kickoffStageBucket(profile.stages) === stage.id),
+      })),
+    [kickoffProfiles]
+  );
+  const summarizeWorkspaceValues = useCallback((values, limit = 2, mapValue = value => value) => {
+    const uniq = uniqStrings((values || []).filter(Boolean));
+    if (!uniq.length) return "—";
+    const rendered = uniq.map(mapValue).filter(Boolean);
+    if (!rendered.length) return "—";
+    if (rendered.length > limit) return `${rendered.slice(0, limit).join(", ")} +${rendered.length - limit}`;
+    return rendered.join(", ");
+  }, []);
+  const kickoffStageSummaryLabel = useCallback(
+    profile => SM[kickoffStageBucket(profile.stages)]?.label || "Prospect",
+    []
+  );
+  const liveStatusSummaryLabel = useCallback(profile => {
+    const statuses = uniqStrings(profile.projectSummaries.flatMap(summary => summary.marketingStatuses || []).filter(Boolean));
+    if (!statuses.length) return "No campaign status";
+    const labels = statuses.map(status => MM[status]?.label || titleCaseWords(status));
+    if (labels.length > 2) return `${labels.slice(0, 2).join(", ")} +${labels.length - 2}`;
+    return labels.join(", ");
+  }, []);
   const exportKickoffView = () => {
     if (!kickoffProfiles.length) {
       flash("No kickoff talent in the current view yet", "err");
@@ -4112,6 +4173,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         if (d?.lastActive) setApId(d.lastActive);
         if (d?.dark) setDark(d.dark);
         if (d?.viewMode) setViewMode(d.viewMode);
+        if (d?.kickoffViewMode) setKickoffViewMode(d.kickoffViewMode);
+        if (d?.liveRosterViewMode) setLiveRosterViewMode(d.liveRosterViewMode);
         if (d?.projectMode) setProjectMode(d.projectMode);
         setCurrentWorkspaceId(nextCurrentWorkspaceId);
         setWorkspaceUser(nextWorkspaceUser);
@@ -4390,7 +4453,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     }
   }, [talentTargetProjectType, talentTargetStatus, talentTargetOwner, talentTargetTeamUsers, talentTargetCampaign, talentTargetNewCampaign]);
 
-  const persist = useCallback(async (np, la, dk, vm, lb, wu, pm, cw) => {
+  const persist = useCallback(async (np, la, dk, vm, lb, wu, pm, cw, kvm, lvm) => {
     const nextProjects = np || projects;
     const previousLocal = await sGet(storageKey);
     const lastNonEmptyProjects = nextProjects.length
@@ -4419,17 +4482,21 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       lastActive: la !== undefined ? la : apId,
       dark: dk !== undefined ? dk : dark,
       viewMode: vm !== undefined ? vm : viewMode,
+      kickoffViewMode: kvm !== undefined ? kvm : kickoffViewMode,
+      liveRosterViewMode: lvm !== undefined ? lvm : liveRosterViewMode,
       layoutByUser: lb !== undefined ? lb : layoutByUser,
       workspaceUser: wu !== undefined ? wu : workspaceUser,
       projectMode: pm !== undefined ? pm : projectMode,
       currentWorkspaceId: cw !== undefined ? cw : currentWorkspaceId,
     });
     return true;
-  }, [storageKey, projects, apId, dark, viewMode, layoutByUser, workspaceUser, projectMode, currentWorkspaceId, authUserId, canEdit]);
+  }, [storageKey, projects, apId, dark, viewMode, kickoffViewMode, liveRosterViewMode, layoutByUser, workspaceUser, projectMode, currentWorkspaceId, authUserId, canEdit]);
 
   const flash = (m, t = "ok") => { setToast({ m, t }); setTimeout(() => setToast(null), 2500); };
   const togDark = async () => { const nd = !dark; setDark(nd); await persist(undefined, undefined, nd); };
   const setView = async v => { setViewMode(v); await persist(undefined, undefined, undefined, v); };
+  const setKickoffView = async v => { setKickoffViewMode(v); await persist(undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, v); };
+  const setLiveRosterView = async v => { setLiveRosterViewMode(v); await persist(undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, v); };
   const aiProvider = () => proj?.settings?.aiProvider || "anthropic";
   const currentAiProvider = aiProvider();
   const aiOptions = AI_MODEL_OPTIONS[currentAiProvider] || [];
@@ -8115,7 +8182,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
               </div>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 14 }}>
                 <span style={{ ...mkP(true, C.ac, C.al), cursor: "default" }}>{kickoffOverview.talents} pre-live talent</span>
-                <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{kickoffOverview.projects} kickoff records</span>
+                <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{kickoffOverview.projects} source records</span>
                 <span style={{ ...mkP(true, C.bu, C.bb), cursor: "default" }}>{kickoffOverview.stages.contacted} contacted</span>
                 <span style={{ ...mkP(true, C.pr, C.pb), cursor: "default" }}>{kickoffOverview.stages.engaged} engaged</span>
                 <span style={{ ...mkP(true, C.ac, C.al), cursor: "default" }}>{kickoffOverview.stages.won} onboarding</span>
@@ -8126,7 +8193,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
             <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(120px, 1fr))", gap: 10 }}>
               {[
                 ["Pre-Live", kickoffOverview.talents, C.ac, C.al],
-                ["Records", kickoffOverview.projects, C.ts, C.sa],
+                ["Source Records", kickoffOverview.projects, C.ts, C.sa],
                 ["Artists", kickoffOverview.artists, C.bu, C.bb],
                 ["Curators", kickoffOverview.curators, C.gn, C.gb],
                 ["Contacted", kickoffOverview.stages.contacted, C.bu, C.bb],
@@ -8242,6 +8309,27 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         </div>
 
         <div style={{ ...cS, padding: "18px 20px", marginBottom: 16 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+            <div style={{ fontSize: 12, color: C.tt }}>
+              {kickoffProfiles.length} kickoff talent shown
+              {kickoffSelectionMode || selectedKickoffIds.size ? ` · ${selectedKickoffIds.size} selected` : ""}
+            </div>
+            <div style={{ display: "flex", gap: 2, background: C.sa, borderRadius: 10, padding: 3, border: `1px solid ${C.bd}` }}>
+              {[
+                ["cards", "Cards"],
+                ["board", "Pipeline"],
+                ["table", "Table"],
+              ].map(([mode, label]) => (
+                <button
+                  key={`kickoff-view-${mode}`}
+                  onClick={() => { void setKickoffView(mode); }}
+                  style={{ padding: "5px 12px", borderRadius: 8, border: "none", background: kickoffViewMode === mode ? C.ac : "transparent", color: kickoffViewMode === mode ? "#fff" : C.ts, cursor: "pointer", fontSize: 12, fontFamily: ft, fontWeight: 600 }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
           <div style={{ display: "grid", gridTemplateColumns: "minmax(260px, 1.2fr) repeat(4, minmax(150px, 0.8fr))", gap: 12, alignItems: "end" }}>
             <label style={{ display: "grid", gap: 6, fontSize: 12, color: C.ts }}>
               <span>Search kickoff talent</span>
@@ -8297,6 +8385,136 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
             <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 6 }}>No kickoff talent matches this view yet</div>
             <div style={{ fontSize: 12, color: C.ts, maxWidth: 520, margin: "0 auto" }}>
               Try widening the filters. This view is meant to be the shared scout and onboarding layer for new artists and curators before they become live.
+            </div>
+          </div>
+        ) : kickoffViewMode === "board" ? (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", gap: 12, alignItems: "start" }}>
+            {kickoffBoardColumns.map(stage => {
+              const tone = { tone: sc(stage.id, C), bg: sb(stage.id, C) };
+              return (
+                <div key={`kickoff-board-${stage.id}`} style={{ minWidth: 0 }}>
+                  <div style={{ padding: "10px 12px", borderRadius: 12, border: `1px solid ${tone.tone}`, background: tone.bg, fontSize: 12, fontWeight: 700, color: tone.tone, marginBottom: 8 }}>
+                    {stage.icon} {stage.label} ({stage.profiles.length})
+                  </div>
+                  <div style={{ display: "grid", gap: 8 }}>
+                    {stage.profiles.length ? stage.profiles.map(profile => (
+                      <div
+                        key={`kickoff-board-card-${profile.id}`}
+                        style={{
+                          ...cS,
+                          padding: "12px 14px",
+                          borderColor: selectedKickoffIds.has(profile.id) ? C.ac : C.bd,
+                          background: selectedKickoffIds.has(profile.id) ? C.al : C.sf,
+                        }}
+                      >
+                        <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "flex-start", marginBottom: 6 }}>
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ fontSize: 14, fontWeight: 800, color: C.tx }}>{profile.displayName}</div>
+                            <div style={{ fontSize: 11, color: C.ts, marginTop: 4 }}>
+                              {summarizeWorkspaceValues(profile.talentTypes, 2)} · {summarizeWorkspaceValues(profile.owners, 1)}
+                            </div>
+                          </div>
+                          {kickoffSelectionMode && (
+                            <button onClick={() => toggleKickoffSelection(profile.id)} style={actionBtn(selectedKickoffIds.has(profile.id), "accent")}>
+                              {selectedKickoffIds.has(profile.id) ? "Selected" : "Select"}
+                            </button>
+                          )}
+                        </div>
+                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
+                          {profile.sources.map(source => (
+                            <span key={`${profile.id}:board-source:${source}`} style={{ ...mkP(true, C.pr, C.pb), cursor: "default" }}>
+                              {TALENT_SOURCE_LABELS[source] || source}
+                            </span>
+                          ))}
+                        </div>
+                        <div style={{ fontSize: 11, color: C.tt, lineHeight: 1.5, marginBottom: 8 }}>
+                          {profile.primaryEmail || "No email yet"}
+                          {profile.instagramHandle ? ` · @${profile.instagramHandle}` : ""}
+                          {profile.spotifyMonthlyListeners ? ` · ${profile.spotifyMonthlyListeners} listeners` : ""}
+                        </div>
+                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                          {profile.primaryProjectId && (
+                            <button
+                              onClick={() => void openProjectWorkspace(profile.primaryProjectId, { artistName: profile.primaryArtistName })}
+                              style={actionBtn(false, "neutral")}
+                            >
+                              Open kickoff record
+                            </button>
+                          )}
+                          <button onClick={() => openTalentProfileFromWorkspaceProfile(profile)} style={actionBtn(false, "accent")}>
+                            Open Shared Profile
+                          </button>
+                        </div>
+                      </div>
+                    )) : (
+                      <div style={{ ...cS, padding: "16px 14px", color: C.tt, fontSize: 12 }}>
+                        No talent in this stage for the current view.
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : kickoffViewMode === "table" ? (
+          <div style={{ ...cS, overflow: "hidden" }}>
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                <thead style={{ background: C.sa }}>
+                  <tr>
+                    {["Talent", "Type", "Source", "Stage", "Owners", "Social / Contact", "Records", "Actions"].map(h => (
+                      <th key={`kickoff-table-${h}`} style={{ textAlign: "left", padding: "10px 12px", color: C.ts, fontSize: 11, borderBottom: `1px solid ${C.bd}` }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {kickoffProfiles.map(profile => {
+                    const stageId = kickoffStageBucket(profile.stages);
+                    return (
+                      <tr key={`kickoff-row-${profile.id}`} style={{ background: selectedKickoffIds.has(profile.id) ? C.al : "transparent" }}>
+                        <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}` }}>
+                          <div style={{ fontWeight: 700 }}>{profile.displayName}</div>
+                          <div style={{ fontSize: 11, color: C.tt, marginTop: 4 }}>{profile.primaryEmail || "No email yet"}</div>
+                        </td>
+                        <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>{summarizeWorkspaceValues(profile.talentTypes, 2)}</td>
+                        <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>{summarizeWorkspaceValues(profile.sources, 2, source => TALENT_SOURCE_LABELS[source] || source)}</td>
+                        <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}` }}>
+                          <span style={{ ...mkP(true, sc(stageId, C), sb(stageId, C)), cursor: "default" }}>{kickoffStageSummaryLabel(profile)}</span>
+                        </td>
+                        <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>{summarizeWorkspaceValues(profile.owners, 2)}</td>
+                        <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>
+                          {[
+                            profile.instagramHandle ? `IG @${profile.instagramHandle}` : "",
+                            profile.tiktokHandle ? `TikTok @${profile.tiktokHandle}` : "",
+                            profile.spotifyMonthlyListeners ? `${profile.spotifyMonthlyListeners} listeners` : "",
+                          ].filter(Boolean).join(" · ") || "No social details yet"}
+                        </td>
+                        <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>{profile.projectSummaries.length}</td>
+                        <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}` }}>
+                          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                            {kickoffSelectionMode && (
+                              <button onClick={() => toggleKickoffSelection(profile.id)} style={actionBtn(selectedKickoffIds.has(profile.id), "accent")}>
+                                {selectedKickoffIds.has(profile.id) ? "Selected" : "Select"}
+                              </button>
+                            )}
+                            {profile.primaryProjectId && (
+                              <button
+                                onClick={() => void openProjectWorkspace(profile.primaryProjectId, { artistName: profile.primaryArtistName })}
+                                style={actionBtn(false, "neutral")}
+                              >
+                                Open kickoff record
+                              </button>
+                            )}
+                            <button onClick={() => openTalentProfileFromWorkspaceProfile(profile)} style={actionBtn(false, "accent")}>
+                              Open Shared Profile
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
           </div>
         ) : (
@@ -8454,7 +8672,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
               </div>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 14 }}>
                 <span style={{ ...mkP(true, C.lv, C.lvb), cursor: "default" }}>{liveCrmOverview.liveTalents} live talent</span>
-                <span style={{ ...mkP(true, C.ac, C.al), cursor: "default" }}>{liveCrmOverview.projects} active projects</span>
+                <span style={{ ...mkP(true, C.ac, C.al), cursor: "default" }}>{liveCrmOverview.projects} source records</span>
                 <span style={{ ...mkP(true, C.pr, C.pb), cursor: "default" }}>{liveCrmOverview.assignments} campaign assignments</span>
                 <span style={{ ...mkP(true, C.bu, C.bb), cursor: "default" }}>{liveCrmOverview.campaigns} campaigns</span>
                 {liveCrmOverview.internalArtists > 0 && <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{liveCrmOverview.internalArtists} internal artists</span>}
@@ -8466,7 +8684,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
             <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(120px, 1fr))", gap: 10 }}>
               {[
                 ["Live Talent", liveCrmOverview.liveTalents, C.lv, C.lvb],
-                ["Records", liveCrmOverview.projects, C.ac, C.al],
+                ["Source Records", liveCrmOverview.projects, C.ac, C.al],
                 ["Campaigns", liveCrmOverview.campaigns, C.bu, C.bb],
                 ["Assignments", liveCrmOverview.assignments, C.pr, C.pb],
               ].map(([label, value, tone, bg]) => (
@@ -8522,6 +8740,25 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         </div>
 
         <div style={{ ...cS, padding: "18px 20px", marginBottom: 16 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+            <div style={{ fontSize: 12, color: C.tt }}>
+              {liveCrmProfiles.length} live talent shown
+            </div>
+            <div style={{ display: "flex", gap: 2, background: C.sa, borderRadius: 10, padding: 3, border: `1px solid ${C.bd}` }}>
+              {[
+                ["cards", "Cards"],
+                ["table", "Table"],
+              ].map(([mode, label]) => (
+                <button
+                  key={`live-view-${mode}`}
+                  onClick={() => { void setLiveRosterView(mode); }}
+                  style={{ padding: "5px 12px", borderRadius: 8, border: "none", background: liveRosterViewMode === mode ? C.lv : "transparent", color: liveRosterViewMode === mode ? "#fff" : C.ts, cursor: "pointer", fontSize: 12, fontFamily: ft, fontWeight: 600 }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
           <div style={{ display: "grid", gridTemplateColumns: "minmax(260px, 1.2fr) repeat(3, minmax(170px, 0.8fr))", gap: 12, alignItems: "end" }}>
             <label style={{ display: "grid", gap: 6, fontSize: 12, color: C.ts }}>
               <span>Search live talent</span>
@@ -8568,6 +8805,70 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
             <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 6 }}>No live talent matches this view yet</div>
             <div style={{ fontSize: 12, color: C.ts, maxWidth: 520, margin: "0 auto" }}>
               Try widening the filters, or keep seeding the shared talent layer. Legacy roster talent and any pre-live artist or curator who becomes live will show up here.
+            </div>
+          </div>
+        ) : liveRosterViewMode === "table" ? (
+          <div style={{ ...cS, overflow: "hidden" }}>
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                <thead style={{ background: C.sa }}>
+                  <tr>
+                    {["Talent", "Type", "Sources", "Owners", "Campaigns", "Assignments", "Status Mix", "Last Updated", "Actions"].map(h => (
+                      <th key={`live-table-${h}`} style={{ textAlign: "left", padding: "10px 12px", color: C.ts, fontSize: 11, borderBottom: `1px solid ${C.bd}` }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {liveCrmProfiles.map(profile => (
+                    <tr key={`live-row-${profile.id}`}>
+                      <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}` }}>
+                        <div style={{ fontWeight: 700 }}>{profile.displayName}</div>
+                        <div style={{ fontSize: 11, color: C.tt, marginTop: 4 }}>
+                          {profile.primaryEmail || "No email yet"}
+                          {profile.instagramHandle ? ` · @${profile.instagramHandle}` : ""}
+                        </div>
+                      </td>
+                      <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>{summarizeWorkspaceValues(profile.talentTypes, 2)}</td>
+                      <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>{summarizeWorkspaceValues(profile.sources, 2, source => TALENT_SOURCE_LABELS[source] || source)}</td>
+                      <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>{summarizeWorkspaceValues(profile.owners, 2)}</td>
+                      <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>{summarizeWorkspaceValues(profile.campaigns, 2)}</td>
+                      <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>{profile.marketingAssignments.length}</td>
+                      <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>{liveStatusSummaryLabel(profile)}</td>
+                      <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.tt }}>{profile.lastTouched ? rD(profile.lastTouched) : "—"}</td>
+                      <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}` }}>
+                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                          {defaultLiveMarketingProject && (
+                            <button
+                              onClick={() => {
+                                void launchWorkspaceProjectAction(
+                                  defaultLiveMarketingProject.id,
+                                  "show-marketing-item",
+                                  "No live campaign record is mapped in this workspace yet",
+                                  { profileId: profile.id }
+                                );
+                              }}
+                              style={{ ...actionBtn(true, "good"), ...lockStyle(isReadOnly) }}
+                            >
+                              + Campaign
+                            </button>
+                          )}
+                          {profile.primaryProjectId && (
+                            <button
+                              onClick={() => void openProjectWorkspace(profile.primaryProjectId, { assignmentId: profile.primaryAssignmentId })}
+                              style={actionBtn(false, "neutral")}
+                            >
+                              Open live record
+                            </button>
+                          )}
+                          <button onClick={() => openTalentProfileFromWorkspaceProfile(profile)} style={actionBtn(false, "accent")}>
+                            Open Shared Profile
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
         ) : (
