@@ -20,6 +20,7 @@ const SM = Object.fromEntries(STAGES.map(s => [s.id, s]));
 const PROJECT_TYPES = [
   { id: "ar", label: "A&R" },
   { id: "marketing", label: "Marketing" },
+  { id: "curator", label: "Curator" },
 ];
 const MARKETING_STATUSES = [
   { id: "prospect", label: "Prospect", icon: "◎", description: "Talent is identified for the campaign but has not replied yet." },
@@ -43,9 +44,11 @@ const WON_STAGE_IDS = ["won", "live"];
 const CLOSED_STAGE_IDS = ["won", "live", "dead"];
 const OPEN_STAGE_IDS = STAGES.map(s => s.id).filter(id => !CLOSED_STAGE_IDS.includes(id));
 const DETAIL_TAB_IDS = new Set(["overview", "outreach", "inbox", "activity"]);
+const CURATOR_DETAIL_TAB_IDS = new Set(["overview", "activity"]);
 const MARKETING_TRAFFIC_TYPES = ["Paid", "Organic"];
 const MARKETING_CHANNELS = ["Instagram", "TikTok", "YouTube", "Meta", "X", "Email", "Other"];
 const MARKETING_TALENT_TYPES = ["Internal Artist", "External Artist", "Content Creator", "AI UGC"];
+const EMPTY_CURATED_ARTIST_SLOTS = Array.from({ length: 10 }, () => "");
 
 function emptyMarketingForm() {
   return {
@@ -323,7 +326,20 @@ function normalizeStageId(stage) {
   return "prospect";
 }
 function normalizeProjectType(type) {
-  return String(type || "").toLowerCase() === "marketing" ? "marketing" : "ar";
+  const normalized = String(type || "").toLowerCase();
+  if (normalized === "marketing") return "marketing";
+  if (normalized === "curator") return "curator";
+  return "ar";
+}
+function projectTypeLabel(type) {
+  switch (normalizeProjectType(type)) {
+    case "marketing":
+      return "Marketing";
+    case "curator":
+      return "Curator";
+    default:
+      return "A&R";
+  }
 }
 function normalizeMarketingStatus(status) {
   const normalized = String(status || "").toLowerCase();
@@ -377,6 +393,13 @@ function splitMultiValueField(value) {
     .split(/\s*(?:\n|;|\|)\s*|\s*,\s*/g)
     .map(item => item.trim())
     .filter(Boolean);
+}
+function normalizeCuratedArtists(value) {
+  return splitMultiValueField(value).slice(0, 10);
+}
+function curatedArtistSlots(value) {
+  const normalized = normalizeCuratedArtists(value);
+  return EMPTY_CURATED_ARTIST_SLOTS.map((_, index) => normalized[index] || "");
 }
 function uniqStrings(values = []) {
   return Array.from(new Set(values.filter(Boolean)));
@@ -911,6 +934,20 @@ function summarizeProjectForHub(project, today = todayISO()) {
         `${mk.campaigns} campaigns`,
         `${mk.overdue} overdue`,
       ],
+    };
+  }
+  if (type === "curator") {
+    const pipeline = project?.pipeline || {};
+    return {
+      type,
+      title: "Curator",
+      cards: [
+        ["Curators", project?.artists?.length || 0, "neutral"],
+        ["Contacted", Object.values(pipeline).filter(v => isContactedStage(v?.stage)).length, "accent"],
+        ["Engaged", Object.values(pipeline).filter(v => v?.stage === "engaged").length, "good"],
+        ["Live", Object.values(pipeline).filter(v => v?.stage === "live").length, "live"],
+      ],
+      badges: [],
     };
   }
   const pipeline = project?.pipeline || {};
@@ -2882,6 +2919,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     social: "",
     email: "",
     location: "",
+    curatorPageUrl: "",
+    curatedArtists: [...EMPTY_CURATED_ARTIST_SLOTS],
     note: "",
   });
   const [manualArtistSaving, setManualArtistSaving] = useState(false);
@@ -2893,6 +2932,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     social: "",
     email: "",
     location: "",
+    curatorPageUrl: "",
+    curatedArtists: [...EMPTY_CURATED_ARTIST_SLOTS],
   });
   const [artistEditSaving, setArtistEditSaving] = useState(false);
   const [showMarketingItemModal, setShowMarketingItemModal] = useState(false);
@@ -3027,8 +3068,10 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const isReadOnly = !canEdit;
   const storageKey = authUserId ? `${STORAGE_PREFIX}:${authUserId}` : STORAGE_PREFIX;
   const proj = projects.find(p => p.id === apId);
-  const projectType = proj?.type || "ar";
+  const projectType = normalizeProjectType(proj?.type);
   const isMarketingProject = projectType === "marketing";
+  const isCuratorProject = projectType === "curator";
+  const isArProject = projectType === "ar";
   const workspaceTalentData = useMemo(() => collectWorkspaceTalentProfiles(projects), [projects]);
   const workspaceTalentProfiles = workspaceTalentData.profiles;
   const workspaceTalentProfileMap = useMemo(
@@ -3103,7 +3146,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const talentTargetProjectOptions = useMemo(
     () => projects.map(project => ({
       id: project.id,
-      label: `${project.name} · ${normalizeProjectType(project.type) === "marketing" ? "Marketing" : "A&R"}`,
+      label: `${project.name} · ${projectTypeLabel(project.type)}`,
       type: normalizeProjectType(project.type),
     })),
     [projects]
@@ -3316,6 +3359,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     social: "",
     email: "",
     location: "",
+    curatorPageUrl: "",
+    curatedArtists: [...EMPTY_CURATED_ARTIST_SLOTS],
     note: "",
   });
   const resetMarketingForm = () => setMarketingForm(emptyMarketingForm());
@@ -3416,6 +3461,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     social: artist?.soc ? `@${artist.soc}` : (artist?.ig || ""),
     email: artist?.e || "",
     location: artist?.loc || "",
+    curatorPageUrl: artist?.curatorPageUrl || "",
+    curatedArtists: curatedArtistSlots(artist?.curatedArtists),
   });
 
   useEffect(() => {
@@ -3608,9 +3655,10 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     handledArtistLinkRef.current = linkKey;
     if (!targetArtist) return;
 
+    const validDetailTabs = normalizeProjectType(proj?.type) === "curator" ? CURATOR_DETAIL_TAB_IDS : DETAIL_TAB_IDS;
     primeArtistContext(targetArtist);
     setScreen("detail");
-    setDetailTab(DETAIL_TAB_IDS.has(tab) ? tab : "overview");
+    setDetailTab(validDetailTabs.has(tab) ? tab : "overview");
   }, [loading, apId, proj?.id, projects.length]);
 
   useEffect(() => {
@@ -3642,7 +3690,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   useEffect(() => {
     if (loading) return;
     if (screen === "detail" && proj?.id && selA?.n) {
-      updateWorkspaceUrl(proj.id, selA.n, DETAIL_TAB_IDS.has(detailTab) ? detailTab : "overview", "");
+      const validDetailTabs = normalizeProjectType(proj?.type) === "curator" ? CURATOR_DETAIL_TAB_IDS : DETAIL_TAB_IDS;
+      updateWorkspaceUrl(proj.id, selA.n, validDetailTabs.has(detailTab) ? detailTab : "overview", "");
       return;
     }
     if (screen === "project" && proj?.id) {
@@ -3656,7 +3705,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
 
   useEffect(() => {
     if (!proj) return;
-    if (proj.type === "marketing" && projectMode === "inbox") {
+    if (normalizeProjectType(proj.type) !== "ar" && projectMode === "inbox") {
       setProjectMode("work");
     }
   }, [proj?.id, proj?.type, projectMode]);
@@ -4276,6 +4325,9 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     }
     const nextProj = { ...proj, type: normalized };
     await saveProject(nextProj);
+    if (normalized !== "ar" && projectMode === "inbox") {
+      setProjectMode("work");
+    }
     if (normalized === "marketing") {
       if (projectMode === "inbox") setProjectMode("work");
       setMarketingStatusFilter("all");
@@ -4287,7 +4339,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       setMarketingSelectionMode(false);
       changeWorkspaceUser(ALL_USER_VIEW);
     }
-    flash(`Project set to ${normalized === "marketing" ? "Marketing" : "A&R"}`);
+    flash(`Project set to ${projectTypeLabel(normalized)}`);
   };
 
   const saveSendPrefs = async (provider, autoLog) => {
@@ -4520,7 +4572,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     setNpD("");
     setNewProjectType("ar");
     await persist(u, id);
-    flash(`Created "${name}"${projectType === "marketing" ? " marketing workspace" : ""}`);
+    flash(`Created "${name}" ${projectTypeLabel(projectType)} workspace`);
   };
 
   const importCSV = async e => {
@@ -4655,6 +4707,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       soc: socialHandle,
       e: artistForm.email.trim(),
       loc: artistForm.location.trim(),
+      curatorPageUrl: String(artistForm.curatorPageUrl || "").trim(),
+      curatedArtists: normalizeCuratedArtists(artistForm.curatedArtists),
       s: false,
       o: "Manual Add",
     };
@@ -4669,7 +4723,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     resetArtistForm();
     setShowAddArtist(false);
     saveProjectFast(nextProj);
-    flash(alreadyOnPlatform ? `Added ${name} · already found in internal roster` : `Added ${name}`);
+    flash(alreadyOnPlatform ? `Added ${name} · already found in internal roster` : `Added ${isCuratorProject ? "curator" : "artist"} ${name}`);
     setTimeout(() => {
       manualArtistSubmitRef.current = false;
       setManualArtistSaving(false);
@@ -4861,6 +4915,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         return;
       }
 
+      const targetProjectType = normalizeProjectType(talentTargetProject.type);
       const targetStage = normalizeStageId(talentTargetStatus);
       const existingArtist = (talentTargetProject.artists || []).find(artist => {
         const sameName = canonicalArtistName(artist.n) === canonicalArtistName(profile.displayName);
@@ -4886,8 +4941,10 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         h: leadAr?.hitTrack || "",
         ig: profile.instagramHandle ? `@${profile.instagramHandle}` : "",
         soc: profile.instagramHandle || "",
-        e: primaryEmail,
+        e: targetProjectType === "curator" ? "" : primaryEmail,
         loc: leadAr?.location || "",
+        curatorPageUrl: "",
+        curatedArtists: [],
         s: false,
         o: "Shared Talent Profile",
       };
@@ -4995,6 +5052,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       soc: socialHandle,
       e: artistEditForm.email.trim(),
       loc: artistEditForm.location.trim(),
+      curatorPageUrl: String(artistEditForm.curatorPageUrl || "").trim(),
+      curatedArtists: normalizeCuratedArtists(artistEditForm.curatedArtists),
     };
 
     setArtistEditSaving(true);
@@ -5271,7 +5330,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     const bucket = bucketGenre(a.g);
     const plan = buildABPlan(proj?.abStats || {}, a, bucket);
     const defaultPlatform = a.e ? "email" : "instagram_dm";
-    setDetailTab(a.e ? "outreach" : "overview");
+    setDetailTab(isCuratorProject ? "overview" : (a.e ? "outreach" : "overview"));
     setDraftPlatform(defaultPlatform);
     setSelA(a);
     setDrafts(genQuickDrafts(a, bucket, plan, defaultPlatform));
@@ -7004,7 +7063,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     if (screen === "detail" && detailTab === "inbox" && selA?.e && activeArtistInboxThread?.senderUserId) {
       pollArtist = selA;
       pollSenderUserId = activeArtistInboxThread.senderUserId;
-    } else if (projectMode === "inbox" && selectedProjectThread?.artist?.e && selectedProjectThread?.senderUserId) {
+    } else if (isArProject && projectMode === "inbox" && selectedProjectThread?.artist?.e && selectedProjectThread?.senderUserId) {
       pollArtist = selectedProjectThread.artist;
       pollSenderUserId = selectedProjectThread.senderUserId;
     }
@@ -7100,7 +7159,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
               <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 3, textTransform: "uppercase", color: C.ac, marginBottom: 8 }}>Workspace</div>
               <div style={{ fontSize: 30, fontWeight: 800, letterSpacing: "-0.04em", marginBottom: 8 }}>Project Home</div>
               <div style={{ fontSize: 13, lineHeight: 1.6, color: C.ts, maxWidth: 520 }}>
-                Shared workspaces for artist outreach, paid and organic campaigns, live pipeline counts, and team visibility in one place.
+                Shared workspaces for A&R pipeline management, curator advocacy, paid and organic campaigns, and team visibility in one place.
               </div>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 14 }}>
                 <span style={{ ...mkP(true, C.ac, C.al) }}>{workspaceOverview.projects} projects</span>
@@ -7142,7 +7201,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(300px,1fr))", gap: 16 }}>
           {projects.map((p, i) => {
-            const projectTypeLabel = normalizeProjectType(p.type) === "marketing" ? "Marketing" : "A&R";
+            const projectTypeName = projectTypeLabel(p.type);
             const summary = summarizeProjectForHub(p, todayISO());
             const hubTone = tone => {
               switch (tone) {
@@ -7175,8 +7234,10 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                 setMarketingCampaignFilter("all");
                 setMarketingTrafficFilter("all");
                 setMarketingOwnerFilter(nextType === "marketing" ? "all" : "__view__");
-                if (nextType === "marketing") {
+                if (nextType !== "ar") {
                   setProjectMode("work");
+                }
+                if (nextType === "marketing") {
                   changeWorkspaceUser(ALL_USER_VIEW);
                 }
                 persist(projects, p.id);
@@ -7190,7 +7251,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                     {p.desc && <div style={{ fontSize: 12, color: C.ts, lineHeight: 1.5 }}>{p.desc}</div>}
                   </div>
                   <div style={{ display: "grid", gap: 6, justifyItems: "end" }}>
-                    <span style={{ ...mkP(true, projectTypeLabel === "Marketing" ? C.pr : C.ac, projectTypeLabel === "Marketing" ? C.pb : C.al), cursor: "default" }}>{projectTypeLabel}</span>
+                    <span style={{ ...mkP(true, projectTypeName === "Marketing" ? C.pr : C.ac, projectTypeName === "Marketing" ? C.pb : C.al), cursor: "default" }}>{projectTypeName}</span>
                     {seqDue > 0 && <span style={{ ...mkP(true, C.ab, C.abb), cursor: "default" }}>{seqDue} due</span>}
                   </div>
                 </div>
@@ -7309,6 +7370,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       latestArtistInboundMessage?.bodyText || latestArtistInboundMessage?.snippet || latestInboundThread?.snippet || "",
       160,
     );
+    const curatorPageUrl = String(a.curatorPageUrl || "").trim();
+    const activeCuratedArtists = normalizeCuratedArtists(a.curatedArtists);
     const currentStageMeta = SM[stage] || SM.prospect;
     const currentOwner = proj?.assignments?.[a.n] || "Unassigned";
     const mailboxSummary = selectedMailbox
@@ -7316,12 +7379,30 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       : gmailConnected
         ? (gmailConnectionMeta?.provider_email || gmailStatus.currentUserGmail)
         : "Not connected";
-    const railStats = [
-      { label: "Stage", value: currentStageMeta.label, tone: sc(stage, C) },
-      { label: "Owner", value: currentOwner, tone: C.tx },
-      { label: "Next Follow-up", value: aFU ? sD(aFU) : "Not set", tone: aFU ? C.tx : C.ts },
-      { label: "Latest Reply", value: latestReplyAt ? rD(latestReplyAt) : "No synced reply", tone: latestReplyAt ? C.tx : C.ts },
-    ];
+    const railStats = isCuratorProject
+      ? [
+        { label: "Stage", value: currentStageMeta.label, tone: sc(stage, C) },
+        { label: "Owner", value: currentOwner, tone: C.tx },
+        { label: "Curated Artists", value: activeCuratedArtists.length || "None yet", tone: activeCuratedArtists.length ? C.ac : C.ts },
+        { label: "Curator Page", value: curatorPageUrl ? "Linked" : "Not added", tone: curatorPageUrl ? C.gn : C.ts },
+      ]
+      : [
+        { label: "Stage", value: currentStageMeta.label, tone: sc(stage, C) },
+        { label: "Owner", value: currentOwner, tone: C.tx },
+        { label: "Next Follow-up", value: aFU ? sD(aFU) : "Not set", tone: aFU ? C.tx : C.ts },
+        { label: "Latest Reply", value: latestReplyAt ? rD(latestReplyAt) : "No synced reply", tone: latestReplyAt ? C.tx : C.ts },
+      ];
+    const detailTabs = isCuratorProject
+      ? [
+        ["overview", "Overview"],
+        ["activity", "Activity"],
+      ]
+      : [
+        ["overview", "Overview"],
+        ["outreach", "Outreach"],
+        ["inbox", `Inbox${artistInboxActionableCount ? ` (${artistInboxActionableCount})` : ""}`],
+        ["activity", "Activity"],
+      ];
 
     const d = drafts[draftTab] || null;
     const savedTemplates = sanitizeSavedTemplates(proj?.settings?.savedTemplates || []);
@@ -7419,9 +7500,24 @@ Requirements:
                 {a.loc && <span>📍 {a.loc}</span>}
                 <a href={spotifyUrl(a.n)} target="_blank" rel="noopener" style={{ color: C.gn, textDecoration: "none", fontWeight: 600, fontSize: 11, padding: "2px 10px", background: C.gb, borderRadius: 12, border: `1px solid ${C.gd}` }}>🎵 Spotify</a>
                 {a.soc && <a href={`https://instagram.com/${a.soc}`} target="_blank" rel="noopener" style={{ color: C.pr, textDecoration: "none", fontSize: 11, fontWeight: 600, padding: "2px 10px", background: C.pb, borderRadius: 12, border: `1px solid ${C.pbd}` }}>📷 @{a.soc}</a>}
+                {isCuratorProject && curatorPageUrl && (
+                  <a href={curatorPageUrl} target="_blank" rel="noopener" style={{ color: C.ac, textDecoration: "none", fontSize: 11, fontWeight: 600, padding: "2px 10px", background: C.al, borderRadius: 12, border: `1px solid ${C.ac}35` }}>
+                    ↗ Curator Page
+                  </a>
+                )}
               </div>
               {a.h && <div style={{ fontSize: 12, color: C.ts, marginTop: 6 }}>🎵 {a.h}</div>}
-              {a.e && <div style={{ fontSize: 12, color: C.ts, marginTop: 3 }}>✉ {a.e}</div>}
+              {!isCuratorProject && a.e && <div style={{ fontSize: 12, color: C.ts, marginTop: 3 }}>✉ {a.e}</div>}
+              {isCuratorProject && activeCuratedArtists.length > 0 && (
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
+                  {activeCuratedArtists.slice(0, 5).map(name => (
+                    <span key={name} style={{ ...mkP(true, C.ac, C.al), cursor: "default", fontSize: 10, padding: "2px 8px" }}>{name}</span>
+                  ))}
+                  {activeCuratedArtists.length > 5 && (
+                    <span style={{ fontSize: 11, color: C.tt }}>+{activeCuratedArtists.length - 5} more curated artists</span>
+                  )}
+                </div>
+              )}
             </div>
           </div>
 
@@ -7439,12 +7535,7 @@ Requirements:
           <div className="gf-detail-shell">
             <div className="gf-detail-main">
               <div className="gf-detail-tabs">
-                {[
-                  ["overview", "Overview"],
-                  ["outreach", "Outreach"],
-                  ["inbox", `Inbox${artistInboxActionableCount ? ` (${artistInboxActionableCount})` : ""}`],
-                  ["activity", "Activity"],
-                ].map(([id, label]) => (
+                {detailTabs.map(([id, label]) => (
                   <button
                     key={id}
                     onClick={() => setDetailTab(id)}
@@ -7465,7 +7556,7 @@ Requirements:
                 ))}
               </div>
 
-          {detailTab === "outreach" && <div style={{ ...cS, padding: "18px 22px", marginBottom: 16 }}>
+          {!isCuratorProject && detailTab === "outreach" && <div style={{ ...cS, padding: "18px 22px", marginBottom: 16 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
               <div style={{ fontSize: 14, fontWeight: 700 }}>🧭 Follow-up Plan</div>
               {postSendUnlocked && (
@@ -7534,8 +7625,12 @@ Requirements:
           {detailTab === "overview" && <div style={{ ...cS, padding: "20px 24px", marginBottom: 16 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
               <div>
-                <div style={{ fontSize: 14, fontWeight: 700 }}>Artist profile</div>
-                <div style={{ fontSize: 11, color: C.tt }}>Update the working profile here without losing notes, ownership, or pipeline history.</div>
+                <div style={{ fontSize: 14, fontWeight: 700 }}>{isCuratorProject ? "Curator profile" : "Artist profile"}</div>
+                <div style={{ fontSize: 11, color: C.tt }}>
+                  {isCuratorProject
+                    ? "Track the curator profile, their showcase page, and the artists they vouch for without touching email workflows."
+                    : "Update the working profile here without losing notes, ownership, or pipeline history."}
+                </div>
               </div>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                 <button
@@ -7581,14 +7676,43 @@ Requirements:
                 <div style={{ fontSize: 11, color: C.tt, marginBottom: 6 }}>Social handle</div>
                 <input value={artistEditForm.social} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, social: e.target.value }))} style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
               </div>
-              <div>
-                <div style={{ fontSize: 11, color: C.tt, marginBottom: 6 }}>Email</div>
-                <input value={artistEditForm.email} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, email: e.target.value }))} style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
-              </div>
+              {!isCuratorProject && (
+                <div>
+                  <div style={{ fontSize: 11, color: C.tt, marginBottom: 6 }}>Email</div>
+                  <input value={artistEditForm.email} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, email: e.target.value }))} style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
+                </div>
+              )}
+              {isCuratorProject && (
+                <div>
+                  <div style={{ fontSize: 11, color: C.tt, marginBottom: 6 }}>Curator page link</div>
+                  <input value={artistEditForm.curatorPageUrl} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, curatorPageUrl: e.target.value }))} placeholder="https://..." style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
+                </div>
+              )}
               <div style={{ gridColumn: "1 / -1" }}>
                 <div style={{ fontSize: 11, color: C.tt, marginBottom: 6 }}>Location</div>
                 <input value={artistEditForm.location} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, location: e.target.value }))} style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
               </div>
+              {isCuratorProject && (
+                <div style={{ gridColumn: "1 / -1" }}>
+                  <div style={{ fontSize: 11, color: C.tt, marginBottom: 8 }}>Curated artists they vouch for</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10 }}>
+                    {artistEditForm.curatedArtists.map((value, index) => (
+                      <input
+                        key={`curated-${index}`}
+                        value={value}
+                        readOnly={isReadOnly}
+                        onChange={e => setArtistEditForm(prev => {
+                          const next = [...prev.curatedArtists];
+                          next[index] = e.target.value;
+                          return { ...prev, curatedArtists: next };
+                        })}
+                        placeholder={`Curated artist ${index + 1}`}
+                        style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
             {artistEditForm.name.trim() && proj?.artists?.some(item => item.n !== a.n && canonicalArtistName(item.n) === canonicalArtistName(artistEditForm.name)) && (
               <div style={{ marginTop: 10, fontSize: 12, color: C.rd }}>Another artist in this project already uses that name.</div>
@@ -7630,12 +7754,14 @@ Requirements:
             )}
             {!intel && !intelLoading && (
               <div style={{ fontSize: 12, color: C.ts, paddingTop: 10 }}>
-                Use AI Intel when you need fit analysis and tailored talking points. Keep daily workflow in Outreach and Inbox.
+                {isCuratorProject
+                  ? "Use AI Intel when you need fit analysis, curator positioning, and sharper talking points for who they should champion."
+                  : "Use AI Intel when you need fit analysis and tailored talking points. Keep daily workflow in Outreach and Inbox."}
               </div>
             )}
           </div>}
 
-          {detailTab === "outreach" && <div style={{ ...cS, padding: "20px 24px", marginBottom: 16 }}>
+          {!isCuratorProject && detailTab === "outreach" && <div style={{ ...cS, padding: "20px 24px", marginBottom: 16 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
               <div>
                 <div style={{ fontSize: 14, fontWeight: 700 }}>✉ Outreach Drafts</div>
@@ -7809,7 +7935,7 @@ Requirements:
             )}
           </div>}
 
-          {detailTab === "inbox" && (
+          {!isCuratorProject && detailTab === "inbox" && (
             <div style={{ ...cS, padding: "20px 24px", marginBottom: 16 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
                 <div>
@@ -8117,7 +8243,7 @@ Requirements:
             </div>
           </div>}
 
-          {detailTab === "activity" && <div style={{ ...cS, padding: "16px 20px", marginBottom: 16 }}>
+          {!isCuratorProject && detailTab === "activity" && <div style={{ ...cS, padding: "16px 20px", marginBottom: 16 }}>
             <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>📨 Send Log ({sendHistory.length})</div>
             {sendHistory.length ? (
               <div style={{ display: "grid", gap: 6 }}>
@@ -8221,7 +8347,7 @@ Requirements:
             <aside className="gf-detail-rail">
               <div className="gf-detail-rail-sticky">
                 <div style={{ ...cS, padding: "16px 18px" }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12 }}>Artist Summary</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12 }}>{isCuratorProject ? "Curator Summary" : "Artist Summary"}</div>
                   <div style={{ display: "grid", gap: 12 }}>
                     {railStats.map((item) => (
                       <div key={item.label} className="gf-rail-kv">
@@ -8229,19 +8355,35 @@ Requirements:
                         <div className="gf-rail-kv-value" style={{ color: item.tone }}>{item.value}</div>
                       </div>
                     ))}
-                    <div className="gf-rail-kv">
-                      <div className="gf-rail-kv-label">Mailbox</div>
-                      <div className="gf-rail-kv-value">{mailboxSummary}</div>
-                      <div style={{ fontSize: 11, color: C.tt }}>
-                        {gmailConnected
-                          ? `Current user connected as ${gmailConnectionMeta?.provider_email || gmailStatus.currentUserGmail}`
-                          : "Current user is not connected yet"}
+                    {!isCuratorProject && (
+                      <>
+                        <div className="gf-rail-kv">
+                          <div className="gf-rail-kv-label">Mailbox</div>
+                          <div className="gf-rail-kv-value">{mailboxSummary}</div>
+                          <div style={{ fontSize: 11, color: C.tt }}>
+                            {gmailConnected
+                              ? `Current user connected as ${gmailConnectionMeta?.provider_email || gmailStatus.currentUserGmail}`
+                              : "Current user is not connected yet"}
+                          </div>
+                        </div>
+                        <div className="gf-rail-kv">
+                          <div className="gf-rail-kv-label">Shared Inbox</div>
+                          <div className="gf-rail-kv-value">{inboxThreads.length} thread{inboxThreads.length === 1 ? "" : "s"}</div>
+                        </div>
+                      </>
+                    )}
+                    {isCuratorProject && curatorPageUrl && (
+                      <a href={curatorPageUrl} target="_blank" rel="noopener" style={{ ...actionBtn(true, "accent"), textDecoration: "none", justifyContent: "center" }}>
+                        Open Curator Page
+                      </a>
+                    )}
+                    {isCuratorProject && activeCuratedArtists.length > 0 && (
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        {activeCuratedArtists.map(name => (
+                          <span key={name} style={{ ...mkP(true, C.ac, C.al), cursor: "default", fontSize: 10, padding: "2px 8px" }}>{name}</span>
+                        ))}
                       </div>
-                    </div>
-                    <div className="gf-rail-kv">
-                      <div className="gf-rail-kv-label">Shared Inbox</div>
-                      <div className="gf-rail-kv-value">{inboxThreads.length} thread{inboxThreads.length === 1 ? "" : "s"}</div>
-                    </div>
+                    )}
                     {a.onPlatform && (
                       <div style={{ ...mkP(true, C.pr, C.pb), cursor: "default", width: "fit-content" }}>
                         Already on platform
@@ -8257,7 +8399,7 @@ Requirements:
                   </div>
                 </div>
 
-                <div style={{ ...cS, padding: "16px 18px" }}>
+                {!isCuratorProject && <div style={{ ...cS, padding: "16px 18px" }}>
                   <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>Mailboxes</div>
                   <div style={{ fontSize: 11, color: C.ts, lineHeight: 1.6, marginBottom: 12 }}>
                     This is where to verify direct Gmail sending. If a mailbox is connected here, GEMFINDER can send from it in Outreach and Inbox.
@@ -8324,9 +8466,9 @@ Requirements:
                       </button>
                     )}
                   </div>
-                </div>
+                </div>}
 
-                <div style={{ ...cS, padding: "16px 18px" }}>
+                {!isCuratorProject && <div style={{ ...cS, padding: "16px 18px" }}>
                   <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>Latest Reply</div>
                   {latestReplyAt ? (
                     <>
@@ -8346,7 +8488,7 @@ Requirements:
                       </button>
                     )}
                   </div>
-                </div>
+                </div>}
 
                 {!isReadOnly && (
                   <details style={{ ...cS, padding: "14px 16px", borderColor: C.rbd }}>
@@ -8398,6 +8540,19 @@ Requirements:
         title: "Campaign reporting",
         helper: "Status mix, talent coverage, and campaign visibility for paid and organic work.",
       },
+    } : isCuratorProject ? {
+      work: {
+        nav: "Pipeline",
+        eyebrow: "Curator",
+        title: proj.name,
+        helper: `${operationalDayLabel} · updated ${queueUpdatedLabel} · resets 6:00 AM`,
+      },
+      report: {
+        nav: "Reports",
+        eyebrow: "Reporting",
+        title: "Curator reporting",
+        helper: "Curator pipeline movement, live advocates, and roster visibility without inbox dependencies.",
+      },
     } : {
       work: {
         nav: "Pipeline",
@@ -8426,6 +8581,10 @@ Requirements:
       ? projectMode === "work"
         ? `${marketingQueue.length} priority assignments in scope. ${marketingSummary.overdue} overdue and ${marketingSummary.dueSoon} due soon.`
         : `${marketingSummary.items} talent assignments across ${marketingSummary.campaigns} campaign${marketingSummary.campaigns === 1 ? "" : "s"}.`
+      : isCuratorProject
+        ? projectMode === "work"
+          ? `${queue.length} curator actions in scope. ${(stCounts.engaged || 0)} engaged and ${(stCounts.live || 0)} live advocates in the current view.`
+          : `${enriched.length} curators tracked with ${(stCounts.contacted || 0) + (stCounts.sent || 0) + (stCounts.replied || 0)} contacted or later in the current scope.`
       : projectMode === "work"
         ? `${queue.length} priority actions in scope. ${dueSeqCount} follow-ups due by 6:00 AM.`
         : projectMode === "inbox"
@@ -8434,6 +8593,10 @@ Requirements:
     const sidebarModeItems = isMarketingProject ? [
       { id: "work", label: projectModeMeta.work.nav, icon: "◫", hint: "talent + campaign pipeline" },
       { id: "report", label: projectModeMeta.report.nav, icon: "↗", hint: "status + campaign view" },
+      { id: "settings", label: "Settings", icon: "⚙", hint: "models + links + tools", action: () => setShowProjectMenu(true) },
+    ] : isCuratorProject ? [
+      { id: "work", label: projectModeMeta.work.nav, icon: "◫", hint: "curator pipeline view" },
+      { id: "report", label: projectModeMeta.report.nav, icon: "↗", hint: "status + curator view" },
       { id: "settings", label: "Settings", icon: "⚙", hint: "models + links + tools", action: () => setShowProjectMenu(true) },
     ] : [
       { id: "work", label: projectModeMeta.work.nav, icon: "◫", hint: "daily operating view" },
@@ -8446,6 +8609,11 @@ Requirements:
       { label: "Prospect", value: marketingSummary.prospect, tone: C.tt, accent: C.tt, helper: "uploaded or queued" },
       { label: "In Progress", value: marketingSummary.creating + marketingSummary.reviewing + marketingSummary.revising, tone: C.pr, accent: C.pr, helper: "creating, reviewing, revising" },
       { label: "Complete", value: marketingSummary.complete, tone: C.gn, accent: C.gn, helper: operationalDayLabel },
+    ] : isCuratorProject ? [
+      { label: "Curators", value: enriched.length, tone: C.tx, accent: C.ac, helper: "in this project" },
+      { label: "Contacted", value: (stCounts.sent || 0) + (stCounts.replied || 0) + (stCounts.contacted || 0), tone: C.bu, accent: C.bu, helper: "contacted or beyond" },
+      { label: "Engaged", value: stCounts.engaged || 0, tone: C.pr, accent: C.pr, helper: "vouching and active" },
+      { label: "Live", value: stCounts.live || 0, tone: C.lv, accent: C.lv, helper: "fully active" },
     ] : [
       { label: "Artists", value: enriched.length, tone: C.tx, accent: C.ac, helper: "in this project" },
       { label: "Contacted", value: contactedCount, tone: C.bu, accent: C.bu, helper: "sent or beyond" },
@@ -8456,6 +8624,10 @@ Requirements:
       { label: "Assignments", value: marketingSummary.items },
       { label: "Prospect", value: marketingSummary.prospect },
       { label: "Complete", value: marketingSummary.complete },
+    ] : isCuratorProject ? [
+      { label: "Curators", value: enriched.length },
+      { label: "Contacted", value: (stCounts.sent || 0) + (stCounts.replied || 0) + (stCounts.contacted || 0) },
+      { label: "Live", value: stCounts.live || 0 },
     ] : [
       { label: "Artists", value: enriched.length },
       { label: "Contacted", value: contactedCount },
@@ -8473,6 +8645,11 @@ Requirements:
       { label: "Campaigns", value: marketingSummary.campaigns, tone: C.tx },
       { label: "Due soon", value: marketingSummary.dueSoon, tone: marketingSummary.dueSoon ? C.ab : C.tx },
       { label: "Scope", value: marketingScopeLabel },
+      { label: "Updated", value: queueUpdatedLabel, tone: C.tx },
+    ] : isCuratorProject ? [
+      { label: "Curator pages", value: enriched.filter(item => String(item.curatorPageUrl || "").trim()).length, tone: C.tx },
+      { label: "Curated artists", value: enriched.reduce((sum, item) => sum + normalizeCuratedArtists(item.curatedArtists).length, 0), tone: C.ac },
+      { label: "Scope", value: workspaceUser === ALL_USER_VIEW ? "All" : workspaceUser === UNASSIGNED_USER_VIEW ? "Unassigned" : workspaceUser },
       { label: "Updated", value: queueUpdatedLabel, tone: C.tx },
     ] : [
       { label: "Mailbox", value: connectedMailboxText, tone: gmailConnected ? C.gn : C.rd },
@@ -8505,7 +8682,9 @@ Requirements:
               <div style={{ fontSize: 13, color: C.ts, lineHeight: 1.7, marginBottom: 16 }}>
                 {proj.desc || (isMarketingProject
                   ? "Shared talent workspace for campaigns, briefs, review cycles, and deliverable tracking."
-                  : "Shared outreach workspace for pipeline movement, inbox handling, and reporting.")}
+                  : isCuratorProject
+                    ? "Shared curator workspace for championing artists, tracking advocacy, and keeping curated rosters visible."
+                    : "Shared outreach workspace for pipeline movement, inbox handling, and reporting.")}
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 8, marginBottom: 12 }}>
                 {sidebarQuickStats.map(({ label, value }) => (
@@ -8640,13 +8819,19 @@ Requirements:
                   <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>
                     {isMarketingProject
                       ? (projectMode === "work" ? "Talent workflow" : "Campaign reporting")
-                      : (projectMode === "work" ? "Pipeline execution" : projectMode === "inbox" ? "Inbox handling" : "Reporting cadence")}
+                      : isCuratorProject
+                        ? (projectMode === "work" ? "Curator workflow" : "Curator reporting")
+                        : (projectMode === "work" ? "Pipeline execution" : projectMode === "inbox" ? "Inbox handling" : "Reporting cadence")}
                   </div>
                   <div style={{ fontSize: 12, color: C.ts, lineHeight: 1.6 }}>
                     {isMarketingProject
                       ? (projectMode === "work"
                         ? "Track talent from prospect to completion, keep briefs organized, and keep campaign assets attached to the assignment."
                         : "Review campaign mix, completion rate, and overdue work without leaving the project.")
+                      : isCuratorProject
+                        ? (projectMode === "work"
+                          ? "Track curator outreach, the artists they vouch for, and the pages you want the team to keep in rotation."
+                          : "Review curator pipeline movement, live advocates, and stage health without inbox dependencies.")
                       : (projectMode === "work"
                         ? "Keep the core moves high-signal. Add artists, import CSVs, and move the pipeline forward from here."
                         : projectMode === "inbox"
@@ -8701,7 +8886,7 @@ Requirements:
                   ) : (
                     <>
                       <button onClick={() => setShowDiscover(true)} style={{ ...actionBtn(true, "accent"), ...lockStyle(isReadOnly) }}>AI Discover</button>
-                      <button onClick={() => setShowAddArtist(true)} style={{ ...actionBtn(true, "good"), ...lockStyle(isReadOnly) }}>+ Artist</button>
+                      <button onClick={() => setShowAddArtist(true)} style={{ ...actionBtn(true, "good"), ...lockStyle(isReadOnly) }}>{isCuratorProject ? "+ Curator" : "+ Artist"}</button>
                       <label style={{ ...actionBtn(false, "neutral"), ...lockStyle(isReadOnly) }}>
                         Import + Merge CSV
                         <input type="file" accept=".csv" ref={fr} onChange={importCSV} disabled={isReadOnly} />
@@ -8721,7 +8906,7 @@ Requirements:
                     <input type="date" value={reportEnd} onChange={e => setReportEnd(e.target.value)} style={{ ...iS, padding: "8px 10px", fontSize: 12 }} />
                   </>
                 )}
-                {!isMarketingProject && projectMode === "inbox" && (
+                {isArProject && projectMode === "inbox" && (
                   <>
                     {!gmailConnected ? (
                       <button onClick={connectGmail} disabled={gmailStatusLoading || isReadOnly} style={{ ...actionBtn(true, "accent"), ...lockStyle(gmailStatusLoading || isReadOnly) }}>
@@ -8745,7 +8930,7 @@ Requirements:
             Viewer mode is active for this workspace. Editing, importing, and follow-up plan actions are disabled.
           </div>
         )}
-        {!isMarketingProject && !!proj.internalRoster?.names?.length && (
+        {isArProject && !!proj.internalRoster?.names?.length && (
           <div style={{ ...cS, padding: "10px 14px", marginBottom: 12, fontSize: 12, color: C.ts, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
             <div>
               Internal roster loaded from <strong style={{ color: C.tx }}>{proj.internalRoster.fileName || "CSV"}</strong>
@@ -8757,7 +8942,9 @@ Requirements:
         )}
         {!isMarketingProject && projectMode === "report" && (
           <div style={{ ...cS, padding: "14px 18px", marginBottom: 12, animation: "si 0.18s ease" }}>
-            <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>🚨 Pipeline Health · {reportViewLabel}</div>
+            <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>
+              {isCuratorProject ? `🧭 Curator Health · ${reportViewLabel}` : `🚨 Pipeline Health · ${reportViewLabel}`}
+            </div>
             {healthAlerts.length > 0 ? (
               <div style={{ display: "grid", gap: 6 }}>
                 {healthAlerts.map((h, i) => (
@@ -8769,7 +8956,7 @@ Requirements:
               </div>
             ) : (
               <div style={{ fontSize: 12, color: C.ts, padding: "8px 10px", background: C.sa, borderRadius: 8, border: `1px solid ${C.bd}` }}>
-                No urgent health alerts right now.
+                {isCuratorProject ? "No urgent curator health alerts right now." : "No urgent health alerts right now."}
               </div>
             )}
           </div>
@@ -9369,9 +9556,9 @@ Requirements:
           <div style={{ ...cS, padding: "12px 14px", marginBottom: 12 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: showQueue ? 10 : 0, flexWrap: "wrap" }}>
               <div>
-                <div style={{ fontSize: 13, fontWeight: 700 }}>Today Queue</div>
+                <div style={{ fontSize: 13, fontWeight: 700 }}>{isCuratorProject ? "Curator Queue" : "Today Queue"}</div>
                 <div style={{ fontSize: 11, color: C.tt }}>
-                  {operationalDayLabel} · highest-priority actions for the current scope · resets at 6:00 AM
+                  {operationalDayLabel} · {isCuratorProject ? "highest-priority curator actions for the current scope" : "highest-priority actions for the current scope"} · resets at 6:00 AM
                 </div>
               </div>
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -9404,7 +9591,7 @@ Requirements:
                   ))}
                 </div>
               ) : (
-                <div style={{ fontSize: 12, color: C.ts }}>No queued actions for this scope right now. Last refreshed {queueUpdatedLabel}.</div>
+                <div style={{ fontSize: 12, color: C.ts }}>No queued {isCuratorProject ? "curator " : ""}actions for this scope right now. Last refreshed {queueUpdatedLabel}.</div>
               )
             )}
           </div>
@@ -9414,8 +9601,8 @@ Requirements:
           <div style={{ ...cS, padding: "12px 14px", marginBottom: 14 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" }}>
               <div>
-                <div style={{ fontSize: 13, fontWeight: 700 }}>Status Board</div>
-                <div style={{ fontSize: 11, color: C.tt }}>Quick filter by stage.</div>
+                <div style={{ fontSize: 13, fontWeight: 700 }}>{isCuratorProject ? "Curator Board" : "Status Board"}</div>
+                <div style={{ fontSize: 11, color: C.tt }}>{isCuratorProject ? "Quick filter by curator stage." : "Quick filter by stage."}</div>
               </div>
               {sf !== "all" && <button onClick={() => setSf("all")} style={actionBtn(false, "neutral")}>Clear Status Filter</button>}
             </div>
@@ -9434,7 +9621,7 @@ Requirements:
           </div>
         )}
 
-        {!isMarketingProject && projectMode === "report" && (
+        {isArProject && projectMode === "report" && (
           <div style={{ ...cS, padding: "16px 20px", marginBottom: 16, animation: "si 0.2s ease" }}>
             <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>🧪 A/B Performance by Genre</div>
             {abRows.length > 0 ? (
@@ -9473,7 +9660,9 @@ Requirements:
 
         {!isMarketingProject && projectMode === "report" && (
           <div style={{ ...cS, padding: "16px 20px", marginBottom: 16, animation: "si 0.2s ease" }}>
-            <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>🎯 Smart Queue - Top Actions · {reportViewLabel}</div>
+            <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>
+              {isCuratorProject ? `🎯 Curator Queue · ${reportViewLabel}` : `🎯 Smart Queue - Top Actions · ${reportViewLabel}`}
+            </div>
             {queue.length > 0 ? (
               <div style={{ display: "grid", gap: 6 }}>
                 {queue.slice(0, 12).map((q, i) => (
@@ -9491,7 +9680,7 @@ Requirements:
           </div>
         )}
 
-        {!isMarketingProject && projectMode === "inbox" && (
+        {isArProject && projectMode === "inbox" && (
           <div style={{ display: "grid", gap: 14, marginBottom: 16 }}>
             <div style={{ ...cS, padding: "16px 18px" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
@@ -9883,9 +10072,11 @@ Requirements:
                     <div style={{ fontSize: 11, color: C.tt, lineHeight: 1.5 }}>
                       {isMarketingProject
                         ? "Marketing projects use talent assignments with campaign status, brief links, content links, and person-level tracking. A&R data stays untouched."
-                        : "A&R projects keep the artist pipeline, outreach workflow, Gmail inbox, and roster tools."}
+                        : isCuratorProject
+                          ? "Curator projects keep the artist-style pipeline, AI analysis, and profile tracking, but skip email and Gmail inbox workflows."
+                          : "A&R projects keep the artist pipeline, outreach workflow, Gmail inbox, and roster tools."}
                     </div>
-                    {!isMarketingProject && (
+                    {isArProject && (
                       <>
                         <label style={{ ...actionBtn(false, "neutral"), ...lockStyle(isReadOnly), display: "inline-flex", justifyContent: "center" }}>
                           Internal CSV Check
@@ -9895,7 +10086,7 @@ Requirements:
                       </>
                     )}
                     <button onClick={() => isMarketingProject ? exportMarketingItems(proj) : exportPipeline(proj, enriched)} style={actionBtn(false, "neutral")}>
-                      {isMarketingProject ? "Export Assignment CSV" : "Export Project CSV"}
+                      {isMarketingProject ? "Export Assignment CSV" : isCuratorProject ? "Export Curator CSV" : "Export Project CSV"}
                     </button>
                     {isAdmin && (
                       <a href="/ar/admin" style={{ ...actionBtn(false, "neutral"), textDecoration: "none", display: "inline-flex", justifyContent: "center" }}>
@@ -10040,7 +10231,7 @@ Requirements:
                   </div>
                 </div>
 
-                {!isMarketingProject && <div style={{ ...cS, boxShadow: "none", padding: "14px 16px", background: C.sa }}>
+                {isArProject && <div style={{ ...cS, boxShadow: "none", padding: "14px 16px", background: C.sa }}>
                   <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>Mailboxes</div>
                   {!gmailStatus.available ? (
                     <div style={{ fontSize: 12, color: C.ts }}>Google OAuth is not configured yet.</div>
@@ -10136,7 +10327,7 @@ Requirements:
             <div style={{ position: "absolute", top: 0, right: 0, width: 420, maxWidth: "100vw", height: "100%", background: C.sf, borderLeft: `1px solid ${C.bd}`, boxShadow: C.sm, padding: "20px 18px", overflowY: "auto" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: 14 }}>
                 <div>
-                  <div style={{ fontSize: 11, color: C.tt, textTransform: "uppercase", letterSpacing: 1.2 }}>Quick View</div>
+                  <div style={{ fontSize: 11, color: C.tt, textTransform: "uppercase", letterSpacing: 1.2 }}>{isCuratorProject ? "Curator Snapshot" : "Quick View"}</div>
                   <div style={{ fontSize: 22, fontWeight: 800, lineHeight: 1.1 }}>{activeArtist.n}</div>
                   <div style={{ fontSize: 12, color: C.ts, marginTop: 4 }}>{activeArtist.bucket}{activeArtist.l ? ` · ${activeArtist.l}` : ""}{activeArtist.loc ? ` · ${activeArtist.loc}` : ""}</div>
                 </div>
@@ -10152,9 +10343,25 @@ Requirements:
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
                 <a href={spotifyUrl(activeArtist.n)} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Spotify</a>
                 {activeArtist.soc && <a href={`https://instagram.com/${activeArtist.soc}`} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Instagram</a>}
-                {activeArtist.e && <a href={`mailto:${activeArtist.e}`} style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Email</a>}
+                {isCuratorProject && activeArtist.curatorPageUrl && (
+                  <a href={activeArtist.curatorPageUrl} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>
+                    Curator Page
+                  </a>
+                )}
+                {!isCuratorProject && activeArtist.e && <a href={`mailto:${activeArtist.e}`} style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Email</a>}
                 <button onClick={() => openA(activeArtist)} style={actionBtn(false, "accent")}>Open Full Profile</button>
               </div>
+
+              {isCuratorProject && normalizeCuratedArtists(activeArtist.curatedArtists).length > 0 && (
+                <div style={{ ...cS, boxShadow: "none", padding: "12px 14px", marginBottom: 12, background: C.sa }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8 }}>Curated Artists</div>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    {normalizeCuratedArtists(activeArtist.curatedArtists).map(name => (
+                      <span key={name} style={{ ...mkP(true, C.ac, C.al) }}>{name}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               <div style={{ ...cS, boxShadow: "none", padding: "12px 14px", marginBottom: 12, background: C.sa }}>
                 <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8 }}>Status</div>
@@ -10168,13 +10375,13 @@ Requirements:
               </div>
 
               <div style={{ ...cS, boxShadow: "none", padding: "12px 14px", marginBottom: 12, background: C.sa }}>
-                <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8 }}>Owner and Next Step</div>
+                <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8 }}>{isCuratorProject ? "Owner" : "Owner and Next Step"}</div>
                 <div style={{ display: "grid", gap: 8 }}>
                   <select value={proj?.assignments?.[activeArtist.n] || ""} disabled={isReadOnly} onChange={e => assignOwner(activeArtist.n, e.target.value)} style={{ ...iS, ...lockStyle(isReadOnly) }}>
                     <option value="">Unassigned</option>
                     {(proj?.teamUsers || []).map(u => <option key={u} value={u}>{u}</option>)}
                   </select>
-                  <input type="date" value={proj?.followUps?.[activeArtist.n] || ""} disabled={isReadOnly} onChange={e => { setAFU(e.target.value); saveFU(activeArtist.n, e.target.value); }} style={{ ...iS, ...lockStyle(isReadOnly) }} />
+                  {!isCuratorProject && <input type="date" value={proj?.followUps?.[activeArtist.n] || ""} disabled={isReadOnly} onChange={e => { setAFU(e.target.value); saveFU(activeArtist.n, e.target.value); }} style={{ ...iS, ...lockStyle(isReadOnly) }} />}
                 </div>
               </div>
 
@@ -10205,7 +10412,7 @@ Requirements:
         {!isMarketingProject && projectMode === "work" && (
         <div ref={workSurfaceRef}>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10, alignItems: "center" }}>
-          <input placeholder="Search artists..." value={search} onChange={e => setSearch(e.target.value)} style={{ ...iS, width: 220 }} />
+          <input placeholder={isCuratorProject ? "Search curators..." : "Search artists..."} value={search} onChange={e => setSearch(e.target.value)} style={{ ...iS, width: 220 }} />
           <div style={{ display: "flex", gap: 2, background: C.sa, borderRadius: 10, padding: 3, border: `1px solid ${C.bd}` }}>
             {[ ["list", "☰"], ["kanban", "▦"], ["table", "▤"] ].map(([v, ic]) => (
               <button key={v} title={`${v[0].toUpperCase()}${v.slice(1)} view`} onClick={() => setView(v)} style={{ padding: "5px 12px", borderRadius: 8, border: "none", background: viewMode === v ? C.ac : "transparent", color: viewMode === v ? "#fff" : C.ts, cursor: "pointer", fontSize: 13, fontFamily: ft }}>{ic}</button>
@@ -10254,7 +10461,7 @@ Requirements:
           </div>
         )}
 
-        <div style={{ fontSize: 12, color: C.tt, marginBottom: 12 }}>{filtered.length} artist{filtered.length !== 1 ? "s" : ""}</div>
+        <div style={{ fontSize: 12, color: C.tt, marginBottom: 12 }}>{filtered.length} {isCuratorProject ? `curator${filtered.length !== 1 ? "s" : ""}` : `artist${filtered.length !== 1 ? "s" : ""}`}</div>
 
         {viewMode === "list" && (
           <div style={{ display: "grid", gap: 8 }}>
@@ -10279,12 +10486,20 @@ Requirements:
                     <div style={{ fontSize: 11, color: C.ts, marginTop: 3, display: "flex", gap: 10, flexWrap: "wrap" }}>
                       {a.g && <span>{a.bucket}</span>}
                       {a.l && <span>🎧 {a.l}</span>}
-                      {a.e && <span style={{ color: C.gn }}>✉</span>}
+                      {!isCuratorProject && a.e && <span style={{ color: C.gn }}>✉</span>}
                       {a.soc && <span>📷</span>}
+                      {isCuratorProject && a.curatorPageUrl && <span>↗ Page</span>}
                       {a.followUp && <span style={{ color: a.followUp <= todayISO() ? C.rd : C.ab }}>📅 {sD(a.followUp)}</span>}
                     </div>
                   </div>
-                  <a href={spotifyUrl(a.n)} target="_blank" rel="noopener" onClick={e => e.stopPropagation()} style={{ fontSize: 10, color: C.gn, textDecoration: "none", fontWeight: 600, padding: "3px 10px", background: C.gb, borderRadius: 8, border: `1px solid ${C.gd}`, flexShrink: 0 }}>Spotify</a>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                    <a href={spotifyUrl(a.n)} target="_blank" rel="noopener" onClick={e => e.stopPropagation()} style={{ fontSize: 10, color: C.gn, textDecoration: "none", fontWeight: 600, padding: "3px 10px", background: C.gb, borderRadius: 8, border: `1px solid ${C.gd}`, flexShrink: 0 }}>Spotify</a>
+                    {isCuratorProject && a.curatorPageUrl && (
+                      <a href={a.curatorPageUrl} target="_blank" rel="noopener" onClick={e => e.stopPropagation()} style={{ fontSize: 10, color: C.ac, textDecoration: "none", fontWeight: 600, padding: "3px 10px", background: C.al, borderRadius: 8, border: `1px solid ${C.ac}`, flexShrink: 0 }}>
+                        Curator Page
+                      </a>
+                    )}
+                  </div>
                 </div>
               );
             })}
@@ -10348,8 +10563,9 @@ Requirements:
                           <div style={{ color: C.ts, marginTop: 3, fontSize: 11 }}>{a.bucket}{a.l ? ` · ${a.l}` : ""}</div>
                           <div style={{ color: a.owner ? C.ts : C.rd, marginTop: 2, fontSize: 10 }}>👤 {a.owner || "Unassigned"}</div>
                           <div style={{ display: "flex", gap: 4, marginTop: 4 }}>
-                            {a.e && <span style={{ fontSize: 10 }}>✉</span>}
+                            {!isCuratorProject && a.e && <span style={{ fontSize: 10 }}>✉</span>}
                             {a.soc && <span style={{ fontSize: 10 }}>📷</span>}
+                            {isCuratorProject && a.curatorPageUrl && <span style={{ fontSize: 10 }}>↗</span>}
                             {a.onPlatform && <span style={{ fontSize: 10, color: C.pr }}>◆</span>}
                             {seqDue && <span style={{ fontSize: 10 }}>🧭</span>}
                             <a href={spotifyUrl(a.n)} target="_blank" rel="noopener" onClick={e => e.stopPropagation()} style={{ fontSize: 9, color: C.gn, textDecoration: "none" }}>🎵</a>
@@ -10370,7 +10586,7 @@ Requirements:
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
               <thead>
                 <tr style={{ borderBottom: `2px solid ${C.bd}`, textAlign: "left", background: C.sa }}>
-                  {["Artist", "Owner", "Genre", "Listeners", "Stage", "Priority", "Links", "Plan", "Follow-up", "Updated"].map((h, index) => (
+                  {[(isCuratorProject ? "Curator" : "Artist"), "Owner", "Genre", "Listeners", "Stage", "Priority", "Links", "Plan", "Follow-up", "Updated"].map((h, index) => (
                     <th key={h} style={{ padding: "10px 12px", fontWeight: 700, color: C.ts, fontSize: 11, whiteSpace: "nowrap", position: "sticky", top: 0, background: C.sa, zIndex: index === 0 ? 3 : 2 }}>{h}</th>
                   ))}
                 </tr>
@@ -10389,9 +10605,12 @@ Requirements:
                       <td style={{ padding: "10px 12px" }}><span style={{ fontSize: 10, padding: "2px 6px", borderRadius: 8, background: pt2.bg, color: pt2.color, fontWeight: 700 }}>{pt2.label}</span></td>
                       <td style={{ padding: "10px 12px" }}>
                         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                          {a.e ? <a href={`mailto:${a.e}`} onClick={e => e.stopPropagation()} style={{ color: C.gn, textDecoration: "none", fontSize: 12 }}>✉</a> : <span style={{ color: C.tt, fontSize: 12 }}>✉</span>}
+                          {!isCuratorProject ? (
+                            a.e ? <a href={`mailto:${a.e}`} onClick={e => e.stopPropagation()} style={{ color: C.gn, textDecoration: "none", fontSize: 12 }}>✉</a> : <span style={{ color: C.tt, fontSize: 12 }}>✉</span>
+                          ) : null}
                           {a.soc ? <a href={`https://instagram.com/${a.soc}`} target="_blank" rel="noopener" onClick={e => e.stopPropagation()} style={{ color: C.pr, textDecoration: "none", fontSize: 12 }}>@</a> : <span style={{ color: C.tt, fontSize: 12 }}>@</span>}
                           <a href={spotifyUrl(a.n)} target="_blank" rel="noopener" onClick={e => e.stopPropagation()} style={{ color: C.gn, textDecoration: "none", fontSize: 12 }}>🎵</a>
+                          {isCuratorProject && a.curatorPageUrl && <a href={a.curatorPageUrl} target="_blank" rel="noopener" onClick={e => e.stopPropagation()} style={{ color: C.ac, textDecoration: "none", fontSize: 12 }}>↗</a>}
                           {a.onPlatform && <span style={{ color: C.pr, fontSize: 11, fontWeight: 700 }}>◆</span>}
                         </div>
                       </td>
@@ -10410,8 +10629,8 @@ Requirements:
         {filtered.length === 0 && (
           <div style={{ textAlign: "center", padding: "60px 20px", color: C.tt }}>
             <div style={{ fontSize: 36, marginBottom: 12 }}>◎</div>
-            <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 6 }}>No artists yet</div>
-            <div style={{ fontSize: 13 }}>Import a CSV, add one manually, or use AI Discover.</div>
+            <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 6 }}>{isCuratorProject ? "No curators yet" : "No artists yet"}</div>
+            <div style={{ fontSize: 13 }}>{isCuratorProject ? "Import a CSV, add one manually, or use AI Discover to seed the curator roster." : "Import a CSV, add one manually, or use AI Discover."}</div>
           </div>
         )}
         </div>
@@ -10420,16 +10639,44 @@ Requirements:
         {showAddArtist && (
           <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 120 }} onClick={e => { if (e.target === e.currentTarget) { setShowAddArtist(false); resetArtistForm(); } }}>
             <div style={{ background: C.sf, borderRadius: 18, padding: "24px 28px", width: 640, maxWidth: "calc(100vw - 32px)", boxShadow: "0 25px 70px rgba(0,0,0,0.2)" }}>
-              <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 6, color: C.tx }}>Add Artist</div>
-              <div style={{ fontSize: 12, color: C.ts, marginBottom: 14 }}>Manual add for artists you want in the pipeline before a CSV import.</div>
+              <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 6, color: C.tx }}>{isCuratorProject ? "Add Curator" : "Add Artist"}</div>
+              <div style={{ fontSize: 12, color: C.ts, marginBottom: 14 }}>
+                {isCuratorProject
+                  ? "Manual add for curator contacts you want in the pipeline before a CSV import."
+                  : "Manual add for artists you want in the pipeline before a CSV import."}
+              </div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                <input value={artistForm.name} onChange={e => setArtistForm({ ...artistForm, name: e.target.value })} placeholder="Artist name*" autoFocus style={{ ...iS, width: "100%" }} />
+                <input value={artistForm.name} onChange={e => setArtistForm({ ...artistForm, name: e.target.value })} placeholder={isCuratorProject ? "Curator name*" : "Artist name*"} autoFocus style={{ ...iS, width: "100%" }} />
                 <input value={artistForm.genre} onChange={e => setArtistForm({ ...artistForm, genre: e.target.value })} placeholder="Genre / vibe" style={{ ...iS, width: "100%" }} />
                 <input value={artistForm.listeners} onChange={e => setArtistForm({ ...artistForm, listeners: e.target.value })} placeholder="Monthly listeners" style={{ ...iS, width: "100%" }} />
                 <input value={artistForm.hitTrack} onChange={e => setArtistForm({ ...artistForm, hitTrack: e.target.value })} placeholder="Hit track" style={{ ...iS, width: "100%" }} />
                 <input value={artistForm.social} onChange={e => setArtistForm({ ...artistForm, social: e.target.value })} placeholder="@handle or profile URL" style={{ ...iS, width: "100%" }} />
-                <input value={artistForm.email} onChange={e => setArtistForm({ ...artistForm, email: e.target.value })} placeholder="Email" style={{ ...iS, width: "100%" }} />
+                {!isCuratorProject ? (
+                  <input value={artistForm.email} onChange={e => setArtistForm({ ...artistForm, email: e.target.value })} placeholder="Email" style={{ ...iS, width: "100%" }} />
+                ) : (
+                  <input value={artistForm.curatorPageUrl} onChange={e => setArtistForm({ ...artistForm, curatorPageUrl: e.target.value })} placeholder="Curator page link" style={{ ...iS, width: "100%" }} />
+                )}
                 <input value={artistForm.location} onChange={e => setArtistForm({ ...artistForm, location: e.target.value })} placeholder="Location" style={{ ...iS, width: "100%", gridColumn: "1 / span 2" }} />
+                {isCuratorProject && (
+                  <div style={{ gridColumn: "1 / span 2" }}>
+                    <div style={{ fontSize: 11, color: C.tt, marginBottom: 8 }}>Curated artists they vouch for</div>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10 }}>
+                      {artistForm.curatedArtists.map((value, index) => (
+                        <input
+                          key={`new-curated-${index}`}
+                          value={value}
+                          onChange={e => setArtistForm(prev => {
+                            const next = [...prev.curatedArtists];
+                            next[index] = e.target.value;
+                            return { ...prev, curatedArtists: next };
+                          })}
+                          placeholder={`Curated artist ${index + 1}`}
+                          style={{ ...iS, width: "100%" }}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                )}
                 <textarea value={artistForm.note} onChange={e => setArtistForm({ ...artistForm, note: e.target.value })} placeholder="Optional note" style={{ ...iS, width: "100%", minHeight: 80, resize: "vertical", gridColumn: "1 / span 2" }} />
               </div>
               <div style={{ marginTop: 10, fontSize: 11, color: C.ts }}>
@@ -10443,7 +10690,7 @@ Requirements:
               <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 18 }}>
                 <button onClick={() => { setShowAddArtist(false); resetArtistForm(); }} style={{ padding: "8px 18px", borderRadius: 10, border: `1px solid ${C.bd}`, background: "transparent", cursor: "pointer", fontSize: 13, fontFamily: ft, color: C.ts }}>Cancel</button>
                 <button disabled={!artistForm.name.trim() || manualArtistSaving} onClick={addManualArtist} style={{ padding: "8px 24px", borderRadius: 10, border: "none", background: C.ac, color: "#fff", cursor: !artistForm.name.trim() || manualArtistSaving ? "not-allowed" : "pointer", fontSize: 13, fontWeight: 600, fontFamily: ft, opacity: artistForm.name.trim() && !manualArtistSaving ? 1 : 0.45 }}>
-                  {manualArtistSaving ? "Adding..." : "Add Artist"}
+                  {manualArtistSaving ? "Adding..." : isCuratorProject ? "Add Curator" : "Add Artist"}
                 </button>
               </div>
             </div>
@@ -10854,7 +11101,7 @@ Requirements:
                           <div style={{ minWidth: 0 }}>
                             <div style={{ fontSize: 13, fontWeight: 700, color: C.tx, marginBottom: 4 }}>{summary.projectName}</div>
                             <div style={{ fontSize: 11, color: C.tt }}>
-                              {summary.projectType === "marketing" ? "Marketing workspace" : "A&R workspace"}
+                              {projectTypeLabel(summary.projectType)} workspace
                               {" · "}
                               {summary.arRecords.length ? `${summary.arRecords.length} A&R record${summary.arRecords.length === 1 ? "" : "s"}` : "No A&R record"}
                               {" · "}
@@ -10866,7 +11113,7 @@ Requirements:
                               closeTalentProfileModal();
                               setApId(summary.projectId);
                               setScreen("project");
-                              if (summary.projectType === "marketing") setProjectMode("work");
+                              if (normalizeProjectType(summary.projectType) !== "ar") setProjectMode("work");
                             }}
                             style={actionBtn(false, "neutral")}
                           >
@@ -10916,8 +11163,8 @@ Requirements:
                       ? "Adding..."
                       : talentTargetProjectType === "marketing" && talentTargetExistingMarketingAssignment
                         ? "Open Existing Assignment"
-                        : talentTargetProjectType === "ar" && talentTargetExistingArRecord
-                          ? "Open Existing Artist"
+                        : talentTargetProjectType !== "marketing" && talentTargetExistingArRecord
+                          ? `Open Existing ${talentTargetProjectType === "curator" ? "Curator" : "Artist"}`
                           : "Add to Project"}
                   </button>
                 </div>
@@ -11009,11 +11256,13 @@ Requirements:
                       ? `This talent already has an assignment in ${talentTargetProject?.name} for ${talentTargetExistingMarketingAssignment.campaign || "No campaign"}. Clicking the button will open it.`
                       : talentTargetProjectType === "marketing" && talentTargetMarketingAssignments.length
                         ? `This talent is already in ${talentTargetProject?.name} on ${talentTargetMarketingAssignments.length} other marketing assignment${talentTargetMarketingAssignments.length === 1 ? "" : "s"}.`
-                        : talentTargetProjectType === "ar" && talentTargetExistingArRecord
-                          ? `This talent is already in ${talentTargetProject?.name} as an A&R artist. Clicking the button will open that record.`
+                        : talentTargetProjectType !== "marketing" && talentTargetExistingArRecord
+                          ? `This talent is already in ${talentTargetProject?.name} as a ${talentTargetProjectType === "curator" ? "curator" : "pipeline"} record. Clicking the button will open it.`
                           : talentTargetProjectType === "marketing"
                             ? "We’ll create a new campaign assignment and keep the shared talent profile intact."
-                            : "We’ll add this talent into the A&R roster for that project and keep their shared profile linked here."}
+                            : talentTargetProjectType === "curator"
+                              ? "We’ll add this talent into the curator roster for that project and keep their shared profile linked here."
+                              : "We’ll add this talent into the A&R roster for that project and keep their shared profile linked here."}
                 </div>
               </div>
 
