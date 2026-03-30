@@ -41,13 +41,14 @@ const MARKETING_STATUSES = [
   { id: "creating", label: "Creating", icon: "✦", description: "They accepted and are making the content." },
   { id: "reviewing", label: "Reviewing", icon: "◌", description: "The content is in review with the team." },
   { id: "revising", label: "Revising", icon: "↺", description: "Changes are being made after review." },
+  { id: "editing", label: "Editing", icon: "✂", description: "Greg or the editors are shaping the final content." },
   { id: "complete", label: "Complete", icon: "✓", description: "The deliverable is complete." },
   { id: "rejected", label: "Rejected", icon: "✕", description: "The talent passed on the opportunity." },
 ];
 const MARKETING_DELIVERABLE_TYPES = ["UGC", "VO", "MIXED"];
 const MM = Object.fromEntries(MARKETING_STATUSES.map(s => [s.id, s]));
 const VALID_MARKETING_STATUS_IDS = new Set(MARKETING_STATUSES.map(s => s.id));
-const MARKETING_SLACK_NOTIFY_STATUS_IDS = new Set(["contacted", "interested", "creating", "reviewing", "revising", "complete", "rejected"]);
+const MARKETING_SLACK_NOTIFY_STATUS_IDS = new Set(["contacted", "interested", "creating", "reviewing", "revising", "editing", "complete", "rejected"]);
 const VALID_STAGE_IDS = new Set(STAGES.map(s => s.id));
 const CONTACTED_STAGE_IDS = ["sent", "replied", "engaged", "won", "live"];
 const REPLIED_STAGE_IDS = ["replied", "engaged", "won", "live"];
@@ -961,6 +962,8 @@ function marketingStatusTone(status, C) {
       return { fg: C.ab, bg: C.abb, border: `${C.ab}33` };
     case "revising":
       return { fg: C.rd, bg: C.rb, border: `${C.rd}33` };
+    case "editing":
+      return { fg: C.lv, bg: C.lvb, border: `${C.lv}33` };
     case "complete":
       return { fg: C.gn, bg: C.gb, border: `${C.gn}33` };
     case "rejected":
@@ -979,6 +982,7 @@ function summarizeMarketingItems(items = [], today = todayISO()) {
     creating: 0,
     reviewing: 0,
     revising: 0,
+    editing: 0,
     complete: 0,
     rejected: 0,
     active: 0,
@@ -1012,7 +1016,7 @@ function summarizeProjectForHub(project, today = todayISO()) {
         ["Assignments", mk.items, "neutral"],
         ["Prospect", mk.prospect, "accent"],
         ["Contacted", mk.contacted, "accent"],
-        ["In Progress", mk.creating + mk.reviewing + mk.revising, "good"],
+        ["In Progress", mk.creating + mk.reviewing + mk.revising + mk.editing, "good"],
         ["Complete", mk.complete, "live"],
       ],
       badges: [
@@ -1701,6 +1705,7 @@ function createEmptyTalentProfile(id, identity = {}, seed = {}) {
     projectMemberships: [],
     arRecords: [],
     marketingAssignments: [],
+    recentActivity: [],
   };
 }
 
@@ -1831,8 +1836,26 @@ function collectWorkspaceTalentProfiles(projects = []) {
         onPlatform: !!artist.onPlatform,
         social: artist.soc || "",
         email: artist.e || "",
+        note: String(normalizedProject.notes?.[artist.n] || "").trim(),
+        followUp: String(normalizedProject.followUps?.[artist.n] || "").trim(),
         curatorPageUrl: artist.curatorPageUrl || "",
         curatedArtists: normalizeCuratedArtists(artist.curatedArtists),
+      });
+      (normalizedProject.activityLog?.[artist.n] || []).forEach(entry => {
+        profile.recentActivity.push({
+          id: entry?.id || `activity_${normalizedProject.id}_${artist.n}_${Math.random().toString(36).slice(2, 8)}`,
+          time: entry?.time || "",
+          action: entry?.action || "",
+          kind: entry?.kind || "event",
+          actor: entry?.actor || entry?.author || "",
+          note: entry?.note || "",
+          projectId: normalizedProject.id,
+          projectName: normalizedProject.name,
+          projectType: normalizedProject.type,
+          artistName: artist.n,
+          assignmentId: "",
+          campaign: "",
+        });
       });
     });
 
@@ -1887,6 +1910,42 @@ function collectWorkspaceTalentProfiles(projects = []) {
         dueDate: item.dueDate || "",
         briefUrl: item.briefUrl || "",
         contentUrl: item.contentUrl || "",
+        notes: item.notes || "",
+        rejectedReason: item.rejectedReason || "",
+        updatedAt: item.updatedAt || "",
+      });
+      if (item.notes) {
+        profile.recentActivity.push({
+          id: `marketing_note_${item.id}`,
+          time: item.updatedAt || item.createdAt || "",
+          action: "Marketing note",
+          kind: "note",
+          actor: item.owner || "",
+          note: item.notes,
+          projectId: normalizedProject.id,
+          projectName: normalizedProject.name,
+          projectType: normalizedProject.type,
+          artistName: item.talentName,
+          assignmentId: item.id,
+          campaign: item.campaign || "",
+        });
+      }
+      (normalizedProject.activityLog?.[item.talentName] || []).forEach(entry => {
+        if (entry?.assignmentId && String(entry.assignmentId) !== String(item.id)) return;
+        profile.recentActivity.push({
+          id: entry?.id || `activity_${normalizedProject.id}_${item.id}_${Math.random().toString(36).slice(2, 8)}`,
+          time: entry?.time || "",
+          action: entry?.action || "",
+          kind: entry?.kind || "event",
+          actor: entry?.actor || entry?.author || "",
+          note: entry?.note || "",
+          projectId: normalizedProject.id,
+          projectName: normalizedProject.name,
+          projectType: normalizedProject.type,
+          artistName: item.talentName,
+          assignmentId: item.id,
+          campaign: item.campaign || "",
+        });
       });
     });
   });
@@ -1902,6 +1961,10 @@ function collectWorkspaceTalentProfiles(projects = []) {
       talentTypes: uniqStrings(profile.talentTypes),
       sources: uniqStrings(profile.sources),
       curatedArtists: uniqStrings(normalizeCuratedArtists(profile.curatedArtists)).slice(0, 10),
+      recentActivity: [...(profile.recentActivity || [])]
+        .filter(entry => entry?.time || entry?.action || entry?.note)
+        .sort((a, b) => String(b?.time || "").localeCompare(String(a?.time || "")))
+        .slice(0, 24),
     }))
     .sort((a, b) => a.displayName.localeCompare(b.displayName));
 
@@ -3805,7 +3868,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     });
 
     selectedTalentProfile.arRecords.forEach(record => {
-      const summary = ensureProjectSummary(record.projectId, record.projectName, "ar", "ar");
+      const summary = ensureProjectSummary(record.projectId, record.projectName, record.projectType || "ar", "ar");
       summary.arRecords.push(record);
     });
 
@@ -3834,6 +3897,10 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const selectedTalentMarketingProjectSummaries = useMemo(
     () => selectedTalentProjectSummaries.filter(summary => summary.marketingAssignments.length),
     [selectedTalentProjectSummaries]
+  );
+  const selectedTalentRecentActivity = useMemo(
+    () => (selectedTalentProfile?.recentActivity || []).slice(0, 16),
+    [selectedTalentProfile]
   );
   const talentTargetProject = useMemo(
     () => projects.find(project => project.id === talentTargetProjectId) || null,
@@ -5655,11 +5722,33 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         : new Date().toISOString(),
     }, proj.teamUsers || DEFAULT_TEAM_USERS);
     const exists = (proj.marketingItems || []).some(item => item.id === itemId);
+    const previousStatus = exists
+      ? normalizeMarketingStatus((proj.marketingItems || []).find(item => item.id === itemId)?.status)
+      : "prospect";
+    const campaignLabel = normalizedCampaigns[0] || "No campaign";
+    let nextActivityLog = proj.activityLog || {};
+    if (!exists) {
+      nextActivityLog = logAction({ ...proj, activityLog: nextActivityLog }, talentName, `Campaign assignment created · ${campaignLabel}`, "event", {
+        assignmentId: itemId,
+        campaign: campaignLabel,
+      });
+    } else if (previousStatus !== nextItem.status) {
+      nextActivityLog = logAction({ ...proj, activityLog: nextActivityLog }, talentName, `Marketing status → ${MM[nextItem.status]?.label || titleCaseWords(nextItem.status)}`, "event", {
+        assignmentId: itemId,
+        campaign: campaignLabel,
+      });
+    } else {
+      nextActivityLog = logAction({ ...proj, activityLog: nextActivityLog }, talentName, `Campaign assignment updated · ${campaignLabel}`, "event", {
+        assignmentId: itemId,
+        campaign: campaignLabel,
+      });
+    }
     const nextProj = {
       ...proj,
       marketingItems: exists
         ? (proj.marketingItems || []).map(item => item.id === itemId ? nextItem : item)
         : [nextItem, ...(proj.marketingItems || [])],
+      activityLog: nextActivityLog,
       settings: {
         ...(proj.settings || {}),
         marketingCampaignBank: normalizeMarketingCampaignBank([
@@ -5668,9 +5757,6 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         ]),
       },
     };
-    const previousStatus = exists
-      ? normalizeMarketingStatus((proj.marketingItems || []).find(item => item.id === itemId)?.status)
-      : "prospect";
     const shouldAwaitSave = !exists || previousStatus !== nextItem.status;
     closeMarketingItemModal();
     if (shouldAwaitSave) {
@@ -5862,6 +5948,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const setMarketingItemStatus = async (itemId, status) => {
     if (!requireEditor()) return;
     if (!proj) return;
+    const target = (proj.marketingItems || []).find(item => item.id === itemId);
+    if (!target) return;
     const normalized = normalizeMarketingStatus(status);
     const nextProj = {
       ...proj,
@@ -5870,6 +5958,10 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
           ? { ...item, status: normalized, updatedAt: new Date().toISOString() }
           : item
       ),
+      activityLog: logAction(proj, target?.talentName || "", `Marketing status → ${MM[normalized]?.label || titleCaseWords(normalized)}`, "event", {
+        assignmentId: itemId,
+        campaign: target?.campaign || "",
+      }),
     };
     await saveProject(nextProj);
     flash(`Status → ${MM[normalized]?.label}`);
@@ -5878,6 +5970,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const assignMarketingItemOwner = async (itemId, owner) => {
     if (!requireEditor()) return;
     if (!proj) return;
+    const target = (proj.marketingItems || []).find(item => item.id === itemId);
+    if (!target) return;
     const nextProj = {
       ...proj,
       marketingItems: (proj.marketingItems || []).map(item =>
@@ -5885,6 +5979,10 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
           ? { ...item, owner, updatedAt: new Date().toISOString() }
           : item
       ),
+      activityLog: logAction(proj, target?.talentName || "", owner ? `Marketing owner → ${owner}` : "Marketing owner cleared", "event", {
+        assignmentId: itemId,
+        campaign: target?.campaign || "",
+      }),
     };
     await saveProject(nextProj);
     flash(owner ? `Assigned to ${owner}` : "Owner cleared");
@@ -7473,6 +7571,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     const nextItems = [...existingItems];
     const itemIndexById = new Map(nextItems.map((item, index) => [item.id, index]));
     const seenNameCampaign = new Set();
+    let nextActivityLog = proj.activityLog || {};
     nextItems.forEach(item => {
       const campaigns = item.campaigns?.length ? item.campaigns : [""];
       campaigns.forEach(campaign => {
@@ -7508,6 +7607,10 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         if (JSON.stringify(updatedItem) !== JSON.stringify(current)) {
           nextItems[itemIndex] = updatedItem;
           updatedCount += 1;
+          nextActivityLog = logAction({ ...proj, activityLog: nextActivityLog }, entry.talentName, `Marketing bulk → ${MM[entry.status]?.label || titleCaseWords(entry.status)}`, "event", {
+            assignmentId: updatedItem.id,
+            campaign: normalizedCampaign || current.campaign || "",
+          });
         }
         seenNameCampaign.add(exactKey);
         return;
@@ -7573,6 +7676,10 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         itemIndexById.set(nextItem.id, nextItems.length - 1);
         seenNameCampaign.add(exactKey);
         createdCount += 1;
+        nextActivityLog = logAction({ ...proj, activityLog: nextActivityLog }, entry.talentName, `Campaign assignment created · ${normalizedCampaign || "No campaign"}`, "event", {
+          assignmentId: nextItem.id,
+          campaign: normalizedCampaign || "",
+        });
         return;
       }
 
@@ -7582,6 +7689,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     const nextProj = {
       ...proj,
       marketingItems: nextItems,
+      activityLog: nextActivityLog,
       settings: {
         ...(proj.settings || {}),
         marketingCampaignBank: normalizeMarketingCampaignBank([
@@ -8460,11 +8568,13 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                     {stage.profiles.length ? stage.profiles.map(profile => (
                       <div
                         key={`kickoff-board-card-${profile.id}`}
+                        onClick={() => openTalentProfileFromWorkspaceProfile(profile)}
                         style={{
                           ...cS,
                           padding: "12px 14px",
                           borderColor: selectedKickoffIds.has(profile.id) ? C.ac : C.bd,
                           background: selectedKickoffIds.has(profile.id) ? C.al : C.sf,
+                          cursor: "pointer",
                         }}
                       >
                         <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "flex-start", marginBottom: 6 }}>
@@ -8475,7 +8585,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                             </div>
                           </div>
                           {kickoffSelectionMode && (
-                            <button onClick={() => toggleKickoffSelection(profile.id)} style={actionBtn(selectedKickoffIds.has(profile.id), "accent")}>
+                            <button onClick={e => { e.stopPropagation(); toggleKickoffSelection(profile.id); }} style={actionBtn(selectedKickoffIds.has(profile.id), "accent")}>
                               {selectedKickoffIds.has(profile.id) ? "Selected" : "Select"}
                             </button>
                           )}
@@ -8492,17 +8602,14 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                           {profile.instagramHandle ? ` · @${profile.instagramHandle}` : ""}
                           {profile.spotifyMonthlyListeners ? ` · ${profile.spotifyMonthlyListeners} listeners` : ""}
                         </div>
+                        {profile.recentActivity?.[0] && (
+                          <div style={{ fontSize: 11, color: C.ts, lineHeight: 1.5, marginBottom: 8 }}>
+                            {profile.recentActivity[0].note || profile.recentActivity[0].action}
+                          </div>
+                        )}
                         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                          {profile.primaryProjectId && (
-                            <button
-                              onClick={() => void openProjectWorkspace(profile.primaryProjectId, { artistName: profile.primaryArtistName })}
-                              style={actionBtn(false, "neutral")}
-                            >
-                              Open kickoff record
-                            </button>
-                          )}
-                          <button onClick={() => openTalentProfileFromWorkspaceProfile(profile)} style={actionBtn(false, "accent")}>
-                            Open Shared Profile
+                          <button onClick={e => { e.stopPropagation(); openTalentProfileFromWorkspaceProfile(profile); }} style={actionBtn(false, "accent")}>
+                            View Talent
                           </button>
                         </div>
                       </div>
@@ -8557,16 +8664,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                                 {selectedKickoffIds.has(profile.id) ? "Selected" : "Select"}
                               </button>
                             )}
-                            {profile.primaryProjectId && (
-                              <button
-                                onClick={() => void openProjectWorkspace(profile.primaryProjectId, { artistName: profile.primaryArtistName })}
-                                style={actionBtn(false, "neutral")}
-                              >
-                                Open kickoff record
-                              </button>
-                            )}
                             <button onClick={() => openTalentProfileFromWorkspaceProfile(profile)} style={actionBtn(false, "accent")}>
-                              Open Shared Profile
+                              View Talent
                             </button>
                           </div>
                         </td>
@@ -8582,11 +8681,13 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
             {kickoffProfiles.map(profile => (
               <div
                 key={profile.id}
+                onClick={() => openTalentProfileFromWorkspaceProfile(profile)}
                 style={{
                   ...cS,
                   padding: "18px 20px",
                   border: `1px solid ${selectedKickoffIds.has(profile.id) ? `${C.ac}55` : C.bd}`,
                   background: selectedKickoffIds.has(profile.id) ? C.al : C.sf,
+                  cursor: "pointer",
                 }}
               >
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "flex-start", flexWrap: "wrap", marginBottom: 14 }}>
@@ -8612,30 +8713,27 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                       {profile.spotifyUrl && <span>Spotify linked</span>}
                       {profile.curatorPageUrl && <span>Curator page linked</span>}
                     </div>
+                    {profile.recentActivity?.[0] && (
+                      <div style={{ fontSize: 12, color: C.tt, lineHeight: 1.6 }}>
+                        {profile.recentActivity[0].note || profile.recentActivity[0].action}
+                      </div>
+                    )}
                   </div>
 
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                     {kickoffSelectionMode && (
                       <button
-                        onClick={() => toggleKickoffSelection(profile.id)}
+                        onClick={e => { e.stopPropagation(); toggleKickoffSelection(profile.id); }}
                         style={actionBtn(selectedKickoffIds.has(profile.id), "accent")}
                       >
                         {selectedKickoffIds.has(profile.id) ? "Selected" : "Select"}
                       </button>
                     )}
-                    {profile.primaryProjectId && (
-                      <button
-                        onClick={() => void openProjectWorkspace(profile.primaryProjectId, { artistName: profile.primaryArtistName })}
-                        style={actionBtn(false, "neutral")}
-                      >
-                        Open kickoff record
-                      </button>
-                    )}
                     <button
-                      onClick={() => openTalentProfileFromWorkspaceProfile(profile)}
+                      onClick={e => { e.stopPropagation(); openTalentProfileFromWorkspaceProfile(profile); }}
                       style={actionBtn(false, "accent")}
                     >
-                      Open Shared Profile
+                      View Talent
                     </button>
                   </div>
                 </div>
@@ -8667,10 +8765,10 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                           {summary.projectId && (
                             <button
-                              onClick={() => void openProjectWorkspace(summary.projectId, { artistName: summary.leadArtistName })}
+                              onClick={e => { e.stopPropagation(); void openProjectWorkspace(summary.projectId, { artistName: summary.leadArtistName }); }}
                               style={actionBtn(false, "neutral")}
                             >
-                              Open record
+                              Source record
                             </button>
                           )}
                         </div>
@@ -8912,16 +9010,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                               + Campaign
                             </button>
                           )}
-                          {profile.primaryProjectId && (
-                            <button
-                              onClick={() => void openProjectWorkspace(profile.primaryProjectId, { assignmentId: profile.primaryAssignmentId })}
-                              style={actionBtn(false, "neutral")}
-                            >
-                              Open live record
-                            </button>
-                          )}
                           <button onClick={() => openTalentProfileFromWorkspaceProfile(profile)} style={actionBtn(false, "accent")}>
-                            Open Shared Profile
+                            View Talent
                           </button>
                         </div>
                       </td>
@@ -8934,7 +9024,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         ) : (
           <div style={{ display: "grid", gap: 14 }}>
             {liveCrmProfiles.map(profile => (
-              <div key={profile.id} style={{ ...cS, padding: "18px 20px" }}>
+              <div key={profile.id} onClick={() => openTalentProfileFromWorkspaceProfile(profile)} style={{ ...cS, padding: "18px 20px", cursor: "pointer" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "flex-start", flexWrap: "wrap", marginBottom: 14 }}>
                   <div style={{ display: "grid", gap: 8 }}>
                     <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
@@ -8957,12 +9047,18 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                       {profile.tiktokHandle && <span>TikTok @{profile.tiktokHandle}</span>}
                       {profile.spotifyUrl && <span>Spotify linked</span>}
                     </div>
+                    {profile.recentActivity?.[0] && (
+                      <div style={{ fontSize: 12, color: C.tt, lineHeight: 1.6 }}>
+                        {profile.recentActivity[0].note || profile.recentActivity[0].action}
+                      </div>
+                    )}
                   </div>
 
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                     {defaultLiveMarketingProject && (
                       <button
-                        onClick={() => {
+                        onClick={e => {
+                          e.stopPropagation();
                           void launchWorkspaceProjectAction(
                             defaultLiveMarketingProject.id,
                             "show-marketing-item",
@@ -8975,19 +9071,11 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                         + Campaign
                       </button>
                     )}
-                    {profile.primaryProjectId && (
-                      <button
-                        onClick={() => void openProjectWorkspace(profile.primaryProjectId, { assignmentId: profile.primaryAssignmentId })}
-                        style={actionBtn(false, "neutral")}
-                      >
-                        Open live record
-                      </button>
-                    )}
                     <button
-                      onClick={() => openTalentProfileFromWorkspaceProfile(profile)}
+                      onClick={e => { e.stopPropagation(); openTalentProfileFromWorkspaceProfile(profile); }}
                       style={actionBtn(false, "accent")}
                     >
-                      Open Shared Profile
+                      View Talent
                     </button>
                   </div>
                 </div>
@@ -9020,10 +9108,10 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                           {summary.lastTouched && <span style={{ fontSize: 11, color: C.tt }}>Updated {rD(summary.lastTouched)}</span>}
                           {summary.projectId && (
                             <button
-                              onClick={() => void openProjectWorkspace(summary.projectId, { assignmentId: summary.leadAssignmentId })}
+                              onClick={e => { e.stopPropagation(); void openProjectWorkspace(summary.projectId, { assignmentId: summary.leadAssignmentId }); }}
                               style={actionBtn(false, "neutral")}
                             >
-                              Open record
+                              Source record
                             </button>
                           )}
                         </div>
@@ -10595,7 +10683,7 @@ Requirements:
     const overviewCards = isMarketingProject ? [
       { label: "Assignments", value: marketingSummary.items, tone: C.tx, accent: C.ac, helper: "in this project" },
       { label: "Prospect", value: marketingSummary.prospect, tone: C.tt, accent: C.tt, helper: "uploaded or queued" },
-      { label: "In Progress", value: marketingSummary.creating + marketingSummary.reviewing + marketingSummary.revising, tone: C.pr, accent: C.pr, helper: "creating, reviewing, revising" },
+      { label: "In Progress", value: marketingSummary.creating + marketingSummary.reviewing + marketingSummary.revising + marketingSummary.editing, tone: C.pr, accent: C.pr, helper: "creating, reviewing, revising, editing" },
       { label: "Complete", value: marketingSummary.complete, tone: C.gn, accent: C.gn, helper: operationalDayLabel },
     ] : isCuratorProject ? [
       { label: "Curators", value: enriched.length, tone: C.tx, accent: C.ac, helper: "in this project" },
@@ -11051,7 +11139,7 @@ Requirements:
                   ["Prospect", marketingSummary.prospect, "prospect", "Queued or newly uploaded talent"],
                   ["Contacted", marketingSummary.contacted, "contacted", "The opportunity has been sent to the talent"],
                   ["Interested", marketingSummary.interested, "interested", "Talent who replied about the opportunity"],
-                  ["In Progress", marketingSummary.creating + marketingSummary.reviewing + marketingSummary.revising, "__active__", "Creating, reviewing, and revising"],
+                  ["In Progress", marketingSummary.creating + marketingSummary.reviewing + marketingSummary.revising + marketingSummary.editing, "__active__", "Creating, reviewing, revising, and editing"],
                   ["Complete", marketingSummary.complete, "complete", "Finished deliverables"],
                   ["Campaigns", marketingSummary.campaigns, "__campaigns__", "Distinct campaign buckets"],
                 ].map(([label, value, filterId, helper]) => (
@@ -11319,7 +11407,7 @@ Requirements:
               <div style={{ ...cS, padding: "12px 14px", marginBottom: 14 }}>
                 <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 8 }}>
                   <button onClick={() => setMarketingStatusFilter("all")} style={mkP(marketingStatusFilter === "all", C.ac, C.al)}>All {marketingSummary.items}</button>
-                  <button onClick={() => setMarketingStatusFilter("active")} style={mkP(marketingStatusFilter === "active", C.pr, C.pb)}>In Progress {marketingSummary.creating + marketingSummary.reviewing + marketingSummary.revising}</button>
+                  <button onClick={() => setMarketingStatusFilter("active")} style={mkP(marketingStatusFilter === "active", C.pr, C.pb)}>In Progress {marketingSummary.creating + marketingSummary.reviewing + marketingSummary.revising + marketingSummary.editing}</button>
                   {MARKETING_STATUSES.map(status => (
                     <button key={status.id} onClick={() => setMarketingStatusFilter(marketingStatusFilter === status.id ? "all" : status.id)} style={mkP(marketingStatusFilter === status.id, marketingStatusTone(status.id, C).tone, marketingStatusTone(status.id, C).bg)}>
                       {status.icon} {status.label} {marketingStatusCounts[status.id]}
@@ -13029,7 +13117,7 @@ Requirements:
             <div style={{ background: C.sf, borderRadius: 18, padding: "24px 28px", width: 960, maxWidth: "calc(100vw - 32px)", boxShadow: "0 25px 70px rgba(0,0,0,0.2)", maxHeight: "88vh", overflowY: "auto" }}>
               <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "flex-start", marginBottom: 16 }}>
                 <div>
-                  <div style={{ fontSize: 11, letterSpacing: 2, textTransform: "uppercase", color: C.ac, fontWeight: 700, marginBottom: 8 }}>Shared Talent Profile</div>
+                  <div style={{ fontSize: 11, letterSpacing: 2, textTransform: "uppercase", color: C.ac, fontWeight: 700, marginBottom: 8 }}>Talent Overview</div>
                   <div style={{ fontSize: 28, fontWeight: 800, letterSpacing: "-0.04em", color: C.tx, marginBottom: 8 }}>{selectedTalentProfile.displayName}</div>
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                     {selectedTalentProfile.talentTypes.map(type => (
@@ -13141,9 +13229,9 @@ Requirements:
                 </div>
 
                 <div style={{ ...cS, padding: "18px 20px" }}>
-                  <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>Active Records</div>
+                  <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>Workspace Coverage</div>
                   <div style={{ fontSize: 12, color: C.ts, marginBottom: 12 }}>
-                    Shared identity stays merged here, but each workspace keeps its own owners, stages, campaigns, and notes.
+                    Identity stays shared here, while kickoff progress, curator context, and live campaign work stay separated underneath.
                   </div>
                   <div style={{ display: "grid", gap: 10 }}>
                     {selectedTalentProjectSummaries.length ? selectedTalentProjectSummaries.map(summary => (
@@ -13168,7 +13256,7 @@ Requirements:
                             }}
                             style={actionBtn(false, "neutral")}
                           >
-                            Open record
+                            Source record
                           </button>
                         </div>
                         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -13194,9 +13282,52 @@ Requirements:
               </div>
 
               <div style={{ ...cS, padding: "18px 20px", marginBottom: 16 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "flex-start", marginBottom: 12, flexWrap: "wrap" }}>
+                  <div>
+                    <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>Latest Notes + Timeline</div>
+                    <div style={{ fontSize: 12, color: C.ts }}>
+                      The newest kickoff, curator, and campaign updates tied to this person across the workspace.
+                    </div>
+                  </div>
+                  <div style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>
+                    {selectedTalentRecentActivity.length} recent item{selectedTalentRecentActivity.length === 1 ? "" : "s"}
+                  </div>
+                </div>
+                <div style={{ display: "grid", gap: 10 }}>
+                  {selectedTalentRecentActivity.length ? selectedTalentRecentActivity.map((entry, index) => (
+                    <div key={`${entry.id || entry.time || entry.action || "activity"}:${index}`} style={{ padding: "12px 14px", borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sa }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: 8, flexWrap: "wrap" }}>
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontSize: 13, fontWeight: 700, color: C.tx, marginBottom: 4 }}>
+                            {entry.action || "Workspace update"}
+                          </div>
+                          {entry.note && entry.note !== entry.action && (
+                            <div style={{ fontSize: 12, color: C.ts, lineHeight: 1.6 }}>
+                              {entry.note}
+                            </div>
+                          )}
+                        </div>
+                        <div style={{ fontSize: 11, color: C.tt, whiteSpace: "nowrap" }}>
+                          {entry.time ? fmtDateTime(entry.time) : "Time unknown"}
+                        </div>
+                      </div>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        {entry.projectName && <span style={{ ...mkP(true, C.ac, C.al), cursor: "default" }}>{entry.projectName}</span>}
+                        {entry.campaign && entry.campaign !== "No campaign" && <span style={{ ...mkP(true, C.bu, C.bb), cursor: "default" }}>{entry.campaign}</span>}
+                        {entry.actor && <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{entry.actor}</span>}
+                        {entry.kind && <span style={{ ...mkP(true, C.tt, C.sa), cursor: "default" }}>{titleCaseWords(entry.kind)}</span>}
+                      </div>
+                    </div>
+                  )) : (
+                    <div style={{ fontSize: 12, color: C.tt }}>No linked notes or timeline items yet.</div>
+                  )}
+                </div>
+              </div>
+
+              <div style={{ ...cS, padding: "18px 20px", marginBottom: 16 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, marginBottom: 14 }}>
                   <div>
-                    <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>Add to record</div>
+                    <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>Place in workspace</div>
                     <div style={{ fontSize: 12, color: C.ts }}>
                       Reuse this shared talent in another workspace without retyping their profile details.
                     </div>
@@ -13318,7 +13449,7 @@ Requirements:
               </div>
 
               <div style={{ ...cS, padding: "18px 20px", marginBottom: 16 }}>
-                <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>Scout + curator placements by project</div>
+                <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>Kickoff Details</div>
                 <div style={{ display: "grid", gap: 10 }}>
                   {selectedTalentArProjectSummaries.length ? selectedTalentArProjectSummaries.map(summary => (
                     <div key={`ar:${summary.projectId}`} style={{ padding: "12px 14px", borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sa }}>
@@ -13338,9 +13469,15 @@ Requirements:
                               <div style={{ fontSize: 11, color: C.tt }}>
                                 {[record.genre, record.monthlyListeners ? `${record.monthlyListeners} listeners` : "", record.location].filter(Boolean).join(" · ") || (record.projectType === "curator" ? "Working curator record" : "Working A&R record")}
                               </div>
+                              {(record.note || record.followUp) && (
+                                <div style={{ display: "grid", gap: 4, marginTop: 8, fontSize: 11, color: C.ts, lineHeight: 1.5 }}>
+                                  {record.note && <div><strong style={{ color: C.tx }}>Notes:</strong> {record.note}</div>}
+                                  {record.followUp && <div><strong style={{ color: C.tx }}>Follow-up:</strong> {record.followUp}</div>}
+                                </div>
+                              )}
                             </div>
-                            <button onClick={() => openTalentArRecord(record)} style={actionBtn(false, "accent")}>
-                              {record.projectType === "curator" ? "Open curator" : "Open artist"}
+                            <button onClick={() => openTalentArRecord(record)} style={actionBtn(false, "neutral")}>
+                              Source detail
                             </button>
                           </div>
                         ))}
@@ -13353,7 +13490,7 @@ Requirements:
               </div>
 
               <div style={{ ...cS, padding: "18px 20px" }}>
-                <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>Marketing assignments by project</div>
+                <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>Live Roster Campaigns</div>
                 <div style={{ display: "grid", gap: 10 }}>
                   {selectedTalentMarketingProjectSummaries.length ? selectedTalentMarketingProjectSummaries.map(summary => (
                     <div key={`marketing:${summary.projectId}`} style={{ padding: "12px 14px", borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sa }}>
@@ -13370,11 +13507,17 @@ Requirements:
                               <div style={{ fontSize: 11, color: C.tt }}>
                                 {[assignment.title, assignment.trafficType, assignment.deliverableType, assignment.dueDate ? `Due ${sD(assignment.dueDate)}` : ""].filter(Boolean).join(" · ") || "Marketing assignment"}
                               </div>
+                              {(assignment.notes || assignment.rejectedReason) && (
+                                <div style={{ display: "grid", gap: 4, marginTop: 8, fontSize: 11, color: C.ts, lineHeight: 1.5 }}>
+                                  {assignment.notes && <div><strong style={{ color: C.tx }}>Notes:</strong> {assignment.notes}</div>}
+                                  {assignment.rejectedReason && <div><strong style={{ color: C.tx }}>Rejected:</strong> {assignment.rejectedReason}</div>}
+                                </div>
+                              )}
                             </div>
                             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
                               {assignment.briefUrl && <a href={assignment.briefUrl} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Brief</a>}
                               {assignment.contentUrl && <a href={assignment.contentUrl} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Content</a>}
-                              <button onClick={() => openTalentMarketingAssignment(assignment)} style={actionBtn(false, "accent")}>Open assignment</button>
+                              <button onClick={() => openTalentMarketingAssignment(assignment)} style={actionBtn(false, "neutral")}>Source detail</button>
                             </div>
                           </div>
                         ))}

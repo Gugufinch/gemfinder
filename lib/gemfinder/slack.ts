@@ -1,5 +1,5 @@
 const A_R_NOTIFY_STAGE_IDS = new Set(['engaged', 'won', 'live']);
-const MARKETING_NOTIFY_STATUS_IDS = new Set(['contacted', 'interested', 'creating', 'reviewing', 'revising', 'complete', 'rejected']);
+const MARKETING_NOTIFY_STATUS_IDS = new Set(['contacted', 'interested', 'creating', 'reviewing', 'revising', 'editing', 'complete', 'rejected']);
 
 const STAGE_LABELS: Record<string, string> = {
   prospect: 'Prospect',
@@ -19,6 +19,7 @@ const MARKETING_STATUS_LABELS: Record<string, string> = {
   creating: 'Creating',
   reviewing: 'Reviewing',
   revising: 'Revising',
+  editing: 'Editing',
   complete: 'Complete',
   rejected: 'Rejected',
 };
@@ -30,6 +31,7 @@ const MARKETING_STATUS_EMOJIS: Record<string, string> = {
   creating: '🎬',
   reviewing: '🧐',
   revising: '🔁',
+  editing: '✂️',
   complete: '✅',
   rejected: '⛔',
 };
