@@ -49,6 +49,19 @@ const MARKETING_TRAFFIC_TYPES = ["Paid", "Organic"];
 const MARKETING_CHANNELS = ["Instagram", "TikTok", "YouTube", "Meta", "X", "Email", "Other"];
 const MARKETING_TALENT_TYPES = ["Internal Artist", "External Artist", "Content Creator", "AI UGC"];
 const EMPTY_CURATED_ARTIST_SLOTS = Array.from({ length: 10 }, () => "");
+const TALENT_SOURCE_LABELS = {
+  legacy_roster: "Legacy roster",
+  ar_pipeline: "A&R pipeline",
+  curator_pipeline: "Curator pipeline",
+  songfinch: "Songfinch",
+  manual: "Manual",
+};
+const TALENT_LIFECYCLE_LABELS = {
+  pre_live: "Pre-Live",
+  live: "Live",
+  inactive: "Inactive",
+  retired: "Retired",
+};
 
 function emptyMarketingForm() {
   return {
@@ -1527,6 +1540,20 @@ function preferLongerString(currentValue, nextValue) {
   return next.length > current.length ? next : current;
 }
 
+function mergePlatformLifecycle(currentValue, nextValue) {
+  const current = String(currentValue || "").trim();
+  const next = String(nextValue || "").trim();
+  if (current === "live" || next === "live") return "live";
+  if (next === "inactive" || next === "retired") return next;
+  return next || current || "pre_live";
+}
+
+function talentLifecycleTone(lifecycle, C) {
+  if (lifecycle === "live") return { tone: C.lv, bg: C.lvb };
+  if (lifecycle === "inactive" || lifecycle === "retired") return { tone: C.rd, bg: C.rb };
+  return { tone: C.ab, bg: C.abb };
+}
+
 function buildTalentIdentity(input = {}) {
   return {
     name: canonicalArtistName(input.displayName || input.talentName || input.name || input.artistName || input.n || ""),
@@ -1551,6 +1578,8 @@ function createEmptyTalentProfile(id, identity = {}, seed = {}) {
     id,
     displayName: seed.displayName || seed.talentName || seed.name || seed.artistName || seed.n || "Unknown talent",
     aliases: [],
+    platformLifecycle: seed.platformLifecycle || "pre_live",
+    sources: uniqStrings([seed.source].filter(Boolean)),
     primaryEmail: identity.email || canonicalEmail(seed.primaryEmail || seed.email || seed.e || ""),
     emails: identity.email ? [identity.email] : [],
     instagramHandle: identity.instagram || "",
@@ -1564,6 +1593,8 @@ function createEmptyTalentProfile(id, identity = {}, seed = {}) {
     spotifyUrl: String(seed.spotifyUrl || "").trim(),
     spotifyMonthlyListeners: toNumberString(seed.spotifyMonthlyListeners || seed.listeners || seed.l || ""),
     talentTypes: uniqStrings([normalizeTalentTypeLabel(seed.talentType || seed.type || "Artist")].filter(Boolean)),
+    curatorPageUrl: String(seed.curatorPageUrl || "").trim(),
+    curatedArtists: normalizeCuratedArtists(seed.curatedArtists),
     projectMemberships: [],
     arRecords: [],
     marketingAssignments: [],
@@ -1612,6 +1643,8 @@ function upsertTalentProfile(store, identity, seed = {}) {
       ...(seed.talentName && canonicalArtistName(seed.talentName) !== canonicalArtistName(existing.displayName) ? [seed.talentName] : []),
       ...(seed.name && canonicalArtistName(seed.name) !== canonicalArtistName(existing.displayName) ? [seed.name] : []),
     ].filter(Boolean)),
+    platformLifecycle: mergePlatformLifecycle(existing.platformLifecycle, seed.platformLifecycle),
+    sources: uniqStrings([...existing.sources, seed.source].filter(Boolean)),
     primaryEmail: existing.primaryEmail || identity.email || canonicalEmail(seed.primaryEmail || seed.email || seed.e || ""),
     emails: uniqStrings([...existing.emails, identity.email, canonicalEmail(seed.primaryEmail || seed.email || seed.e || "")].filter(Boolean)),
     instagramHandle: existing.instagramHandle || identity.instagram || "",
@@ -1625,6 +1658,11 @@ function upsertTalentProfile(store, identity, seed = {}) {
     spotifyUrl: existing.spotifyUrl || String(seed.spotifyUrl || "").trim(),
     spotifyMonthlyListeners: betterNumericString(existing.spotifyMonthlyListeners, seed.spotifyMonthlyListeners || seed.listeners || seed.l || ""),
     talentTypes: uniqStrings([...existing.talentTypes, normalizeTalentTypeLabel(seed.talentType || seed.type || "")].filter(Boolean)),
+    curatorPageUrl: existing.curatorPageUrl || String(seed.curatorPageUrl || "").trim(),
+    curatedArtists: uniqStrings([
+      ...normalizeCuratedArtists(existing.curatedArtists),
+      ...normalizeCuratedArtists(seed.curatedArtists),
+    ]).slice(0, 10),
   };
   store.byId.set(profileId, nextProfile);
   registerTalentIdentity(store.index, nextProfile, identity);
@@ -1661,7 +1699,11 @@ function collectWorkspaceTalentProfiles(projects = []) {
         instagramUrl: /instagram\.com/i.test(String(artist.ig || "")) ? artist.ig : "",
         instagramHandle: artist.soc || artist.ig,
         spotifyMonthlyListeners: artist.l,
-        talentType: "Internal Artist",
+        talentType: normalizedProject.type === "curator" ? "Curator" : "Internal Artist",
+        platformLifecycle: artist.onPlatform || normalizeStageId(normalizedProject.pipeline?.[artist.n]?.stage) === "live" ? "live" : "pre_live",
+        source: normalizedProject.type === "curator" ? "curator_pipeline" : "ar_pipeline",
+        curatorPageUrl: artist.curatorPageUrl || "",
+        curatedArtists: artist.curatedArtists || [],
       });
       if (!profile) return;
 
@@ -1675,6 +1717,7 @@ function collectWorkspaceTalentProfiles(projects = []) {
       profile.arRecords.push({
         projectId: normalizedProject.id,
         projectName: normalizedProject.name,
+        projectType: normalizedProject.type,
         artistName: artist.n,
         stage: normalizeStageId(normalizedProject.pipeline?.[artist.n]?.stage),
         owner: normalizedProject.assignments?.[artist.n] || "",
@@ -1685,6 +1728,8 @@ function collectWorkspaceTalentProfiles(projects = []) {
         onPlatform: !!artist.onPlatform,
         social: artist.soc || "",
         email: artist.e || "",
+        curatorPageUrl: artist.curatorPageUrl || "",
+        curatedArtists: normalizeCuratedArtists(artist.curatedArtists),
       });
     });
 
@@ -1711,6 +1756,8 @@ function collectWorkspaceTalentProfiles(projects = []) {
         spotifyUrl: item.spotifyUrl,
         spotifyMonthlyListeners: item.spotifyMonthlyListeners,
         talentType: item.talentType,
+        platformLifecycle: "live",
+        source: "legacy_roster",
       });
       if (!profile) return;
 
@@ -1750,6 +1797,8 @@ function collectWorkspaceTalentProfiles(projects = []) {
       arRecords: [...profile.arRecords].sort((a, b) => a.projectName.localeCompare(b.projectName)),
       marketingAssignments: [...profile.marketingAssignments].sort((a, b) => a.projectName.localeCompare(b.projectName) || a.talentName.localeCompare(b.talentName)),
       talentTypes: uniqStrings(profile.talentTypes),
+      sources: uniqStrings(profile.sources),
+      curatedArtists: uniqStrings(normalizeCuratedArtists(profile.curatedArtists)).slice(0, 10),
     }))
     .sort((a, b) => a.displayName.localeCompare(b.displayName));
 
@@ -11088,6 +11137,14 @@ Requirements:
                     {selectedTalentProfile.talentTypes.map(type => (
                       <span key={type} style={{ ...mkP(true, C.ac, C.al), cursor: "default" }}>{type}</span>
                     ))}
+                    <span style={{ ...mkP(true, talentLifecycleTone(selectedTalentProfile.platformLifecycle, C).tone, talentLifecycleTone(selectedTalentProfile.platformLifecycle, C).bg), cursor: "default" }}>
+                      {TALENT_LIFECYCLE_LABELS[selectedTalentProfile.platformLifecycle] || "Pre-Live"}
+                    </span>
+                    {selectedTalentProfile.sources.map(source => (
+                      <span key={source} style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>
+                        {TALENT_SOURCE_LABELS[source] || source}
+                      </span>
+                    ))}
                     <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{selectedTalentProjectSummaries.length} project{selectedTalentProjectSummaries.length === 1 ? "" : "s"}</span>
                     <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{selectedTalentProfile.marketingAssignments.length} marketing assignment{selectedTalentProfile.marketingAssignments.length === 1 ? "" : "s"}</span>
                     <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{selectedTalentProfile.arRecords.length} A&R record{selectedTalentProfile.arRecords.length === 1 ? "" : "s"}</span>
@@ -11100,6 +11157,18 @@ Requirements:
                 <div style={{ ...cS, padding: "18px 20px" }}>
                   <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>Identity</div>
                   <div style={{ display: "grid", gap: 10, fontSize: 13 }}>
+                    <div className="gf-rail-kv">
+                      <span className="gf-rail-kv-label">Platform lifecycle</span>
+                      <span className="gf-rail-kv-value">{TALENT_LIFECYCLE_LABELS[selectedTalentProfile.platformLifecycle] || "Pre-Live"}</span>
+                    </div>
+                    <div className="gf-rail-kv">
+                      <span className="gf-rail-kv-label">Sources</span>
+                      <span className="gf-rail-kv-value">
+                        {selectedTalentProfile.sources.length
+                          ? selectedTalentProfile.sources.map(source => TALENT_SOURCE_LABELS[source] || source).join(" · ")
+                          : "Not labeled yet"}
+                      </span>
+                    </div>
                     <div className="gf-rail-kv">
                       <span className="gf-rail-kv-label">Primary email</span>
                       <span className="gf-rail-kv-value">{selectedTalentProfile.primaryEmail || "No email yet"}</span>
@@ -11128,6 +11197,18 @@ Requirements:
                           : "Not linked yet"}
                       </span>
                     </div>
+                    {selectedTalentProfile.curatorPageUrl && (
+                      <div className="gf-rail-kv">
+                        <span className="gf-rail-kv-label">Curator page</span>
+                        <span className="gf-rail-kv-value">Linked</span>
+                      </div>
+                    )}
+                    {selectedTalentProfile.curatedArtists.length > 0 && (
+                      <div className="gf-rail-kv">
+                        <span className="gf-rail-kv-label">Curated artists</span>
+                        <span className="gf-rail-kv-value">{selectedTalentProfile.curatedArtists.length}</span>
+                      </div>
+                    )}
                     {selectedTalentProfile.aliases.length > 0 && (
                       <div className="gf-rail-kv">
                         <span className="gf-rail-kv-label">Aliases</span>
@@ -11147,7 +11228,17 @@ Requirements:
                       {selectedTalentProfile.spotifyUrl && (
                         <a href={selectedTalentProfile.spotifyUrl} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Spotify</a>
                       )}
+                      {selectedTalentProfile.curatorPageUrl && (
+                        <a href={selectedTalentProfile.curatorPageUrl} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Curator Page</a>
+                      )}
                     </div>
+                    {selectedTalentProfile.curatedArtists.length > 0 && (
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
+                        {selectedTalentProfile.curatedArtists.map(name => (
+                          <span key={name} style={{ ...mkP(true, C.ac, C.al), cursor: "default" }}>{name}</span>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -11329,7 +11420,7 @@ Requirements:
               </div>
 
               <div style={{ ...cS, padding: "18px 20px", marginBottom: 16 }}>
-                <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>A&R placements by project</div>
+                <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>Scout + curator placements by project</div>
                 <div style={{ display: "grid", gap: 10 }}>
                   {selectedTalentArProjectSummaries.length ? selectedTalentArProjectSummaries.map(summary => (
                     <div key={`ar:${summary.projectId}`} style={{ padding: "12px 14px", borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sa }}>
@@ -11340,14 +11431,19 @@ Requirements:
                             <div style={{ minWidth: 0 }}>
                               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 6 }}>
                                 <div style={{ fontSize: 14, fontWeight: 700, color: C.tx }}>{record.artistName}</div>
+                                <span style={{ ...mkP(true, record.projectType === "curator" ? C.ac : C.ts, record.projectType === "curator" ? C.al : C.sa), cursor: "default" }}>
+                                  {record.projectType === "curator" ? "Curator" : "A&R"}
+                                </span>
                                 <span style={{ ...mkP(true, sc(record.stage, C), sb(record.stage, C)), cursor: "default" }}>{SM[record.stage]?.label || "Prospect"}</span>
                                 {record.owner && <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{record.owner}</span>}
                               </div>
                               <div style={{ fontSize: 11, color: C.tt }}>
-                                {[record.genre, record.monthlyListeners ? `${record.monthlyListeners} listeners` : "", record.location].filter(Boolean).join(" · ") || "Working A&R record"}
+                                {[record.genre, record.monthlyListeners ? `${record.monthlyListeners} listeners` : "", record.location].filter(Boolean).join(" · ") || (record.projectType === "curator" ? "Working curator record" : "Working A&R record")}
                               </div>
                             </div>
-                            <button onClick={() => openTalentArRecord(record)} style={actionBtn(false, "accent")}>Open artist</button>
+                            <button onClick={() => openTalentArRecord(record)} style={actionBtn(false, "accent")}>
+                              {record.projectType === "curator" ? "Open curator" : "Open artist"}
+                            </button>
                           </div>
                         ))}
                       </div>
