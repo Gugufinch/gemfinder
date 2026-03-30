@@ -3022,6 +3022,10 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [talentTargetOwner, setTalentTargetOwner] = useState("");
   const [talentTargetStatus, setTalentTargetStatus] = useState("prospect");
   const [talentTargetSaving, setTalentTargetSaving] = useState(false);
+  const [liveCrmQuery, setLiveCrmQuery] = useState("");
+  const [liveCrmTypeFilter, setLiveCrmTypeFilter] = useState("all");
+  const [liveCrmSourceFilter, setLiveCrmSourceFilter] = useState("all");
+  const [liveCrmOwnerFilter, setLiveCrmOwnerFilter] = useState("all");
 
   const [batch, setBatch] = useState(false);
   const [bSel, setBSel] = useState(new Set());
@@ -3143,6 +3147,157 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   );
   const workspaceTalentData = useMemo(() => collectWorkspaceTalentProfiles(projects), [projects]);
   const workspaceTalentProfiles = workspaceTalentData.profiles;
+  const liveCrmBaseProfiles = useMemo(
+    () => workspaceTalentProfiles.filter(profile => profile.platformLifecycle === "live"),
+    [workspaceTalentProfiles]
+  );
+  const liveCrmTypeOptions = useMemo(
+    () => uniqStrings(liveCrmBaseProfiles.flatMap(profile => profile.talentTypes || []).filter(Boolean)).sort((a, b) => a.localeCompare(b)),
+    [liveCrmBaseProfiles]
+  );
+  const liveCrmSourceOptions = useMemo(
+    () => uniqStrings(liveCrmBaseProfiles.flatMap(profile => profile.sources || []).filter(Boolean)),
+    [liveCrmBaseProfiles]
+  );
+  const liveCrmOwnerOptions = useMemo(
+    () => uniqStrings(liveCrmBaseProfiles.flatMap(profile => [
+      ...profile.marketingAssignments.map(item => item.owner),
+      ...profile.arRecords.map(item => item.owner),
+    ].filter(Boolean))).sort((a, b) => a.localeCompare(b)),
+    [liveCrmBaseProfiles]
+  );
+  const liveCrmProfiles = useMemo(() => {
+    const query = liveCrmQuery.trim().toLowerCase();
+    return liveCrmBaseProfiles
+      .map(profile => {
+        const byProject = new Map();
+        const ensureProjectSummary = (projectId, projectName, projectType) => {
+          const key = String(projectId || "");
+          if (!byProject.has(key)) {
+            byProject.set(key, {
+              projectId: key,
+              projectName: projectName || "Untitled Project",
+              projectType: normalizeProjectType(projectType),
+              owners: [],
+              arStages: [],
+              marketingStatuses: [],
+              campaigns: [],
+              lastTouched: "",
+              leadAssignmentId: "",
+            });
+          }
+          return byProject.get(key);
+        };
+
+        profile.projectMemberships.forEach(item => {
+          ensureProjectSummary(item.projectId, item.projectName, item.projectType);
+        });
+
+        profile.arRecords.forEach(record => {
+          const summary = ensureProjectSummary(record.projectId, record.projectName, record.projectType || "ar");
+          if (record.owner) summary.owners.push(record.owner);
+          if (record.stage) summary.arStages.push(record.stage);
+        });
+
+        profile.marketingAssignments.forEach(item => {
+          const summary = ensureProjectSummary(item.projectId, item.projectName, "marketing");
+          if (item.owner) summary.owners.push(item.owner);
+          if (item.status) summary.marketingStatuses.push(item.status);
+          normalizeMarketingCampaigns(item.campaigns?.length ? item.campaigns : item.campaign).forEach(campaign => {
+            summary.campaigns.push(campaign);
+          });
+          if (!summary.leadAssignmentId) summary.leadAssignmentId = item.id || "";
+          if (!summary.lastTouched || String(item.updatedAt || "") > summary.lastTouched) {
+            summary.lastTouched = String(item.updatedAt || "");
+          }
+        });
+
+        const projectSummaries = [...byProject.values()]
+          .map(summary => ({
+            ...summary,
+            owners: uniqStrings(summary.owners.filter(Boolean)),
+            arStages: uniqStrings(summary.arStages.filter(Boolean)),
+            marketingStatuses: uniqStrings(summary.marketingStatuses.filter(Boolean)),
+            campaigns: uniqStrings(summary.campaigns.filter(Boolean)),
+          }))
+          .sort((a, b) => {
+            const timeCompare = String(b.lastTouched || "").localeCompare(String(a.lastTouched || ""));
+            if (timeCompare !== 0) return timeCompare;
+            return a.projectName.localeCompare(b.projectName);
+          });
+
+        const owners = uniqStrings(projectSummaries.flatMap(item => item.owners));
+        const campaigns = uniqStrings(projectSummaries.flatMap(item => item.campaigns));
+        const searchHaystack = [
+          profile.displayName,
+          profile.primaryEmail,
+          ...(profile.aliases || []),
+          ...(profile.talentTypes || []),
+          ...(profile.sources || []),
+          profile.instagramHandle,
+          profile.tiktokHandle,
+          ...projectSummaries.map(item => item.projectName),
+          ...campaigns,
+        ].filter(Boolean).join(" ").toLowerCase();
+
+        const lastTouched = [
+          ...projectSummaries.map(item => String(item.lastTouched || "")),
+          ...profile.marketingAssignments.map(item => String(item.updatedAt || "")),
+          ...profile.arRecords.map(item => String(item.updatedAt || "")),
+        ].filter(Boolean).sort((a, b) => b.localeCompare(a))[0] || "";
+
+        return {
+          ...profile,
+          owners,
+          campaigns,
+          projectSummaries,
+          searchHaystack,
+          lastTouched,
+          primaryProjectId: projectSummaries[0]?.projectId || "",
+          primaryAssignmentId: projectSummaries[0]?.leadAssignmentId || "",
+        };
+      })
+      .filter(profile => {
+        if (query && !profile.searchHaystack.includes(query)) return false;
+        if (liveCrmTypeFilter !== "all" && !profile.talentTypes.some(type => canonicalArtistName(type) === liveCrmTypeFilter)) return false;
+        if (liveCrmSourceFilter !== "all" && !profile.sources.includes(liveCrmSourceFilter)) return false;
+        if (liveCrmOwnerFilter === "__unassigned__" && profile.owners.length) return false;
+        if (liveCrmOwnerFilter !== "all" && liveCrmOwnerFilter !== "__unassigned__" && !profile.owners.includes(liveCrmOwnerFilter)) return false;
+        return true;
+      })
+      .sort((a, b) => {
+        const timeCompare = String(b.lastTouched || "").localeCompare(String(a.lastTouched || ""));
+        if (timeCompare !== 0) return timeCompare;
+        return a.displayName.localeCompare(b.displayName);
+      });
+  }, [liveCrmBaseProfiles, liveCrmOwnerFilter, liveCrmQuery, liveCrmSourceFilter, liveCrmTypeFilter]);
+  const liveCrmOverview = useMemo(() => {
+    const projectsSeen = new Set();
+    const campaignsSeen = new Set();
+    let marketingAssignments = 0;
+    let internalArtists = 0;
+    let curators = 0;
+    let creators = 0;
+    liveCrmProfiles.forEach(profile => {
+      profile.projectSummaries.forEach(summary => {
+        projectsSeen.add(summary.projectId || summary.projectName);
+        summary.campaigns.forEach(campaign => campaignsSeen.add(campaign));
+      });
+      marketingAssignments += profile.marketingAssignments.length;
+      if (profile.talentTypes.includes("Internal Artist")) internalArtists += 1;
+      if (profile.talentTypes.includes("Curator")) curators += 1;
+      if (profile.talentTypes.some(type => type === "Content Creator" || type === "AI UGC")) creators += 1;
+    });
+    return {
+      liveTalents: liveCrmProfiles.length,
+      projects: projectsSeen.size,
+      campaigns: campaignsSeen.size,
+      assignments: marketingAssignments,
+      internalArtists,
+      curators,
+      creators,
+    };
+  }, [liveCrmProfiles]);
   const workspaceTalentProfileMap = useMemo(
     () => new Map(workspaceTalentProfiles.map(profile => [profile.id, profile])),
     [workspaceTalentProfiles]
@@ -3991,6 +4146,32 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     setShowFilters(!!layout.showFilters);
     setFocusMode(false);
     setPreFocusLayout(null);
+  };
+
+  const openProjectWorkspace = async (projectId, { artistName = "", assignmentId = "" } = {}) => {
+    const targetProject = projects.find(project => project.id === projectId);
+    if (!targetProject) return;
+    const nextType = normalizeProjectType(targetProject.type);
+    setApId(projectId);
+    setScreen("project");
+    setSearch("");
+    setGf("All");
+    setSf("all");
+    setPf("all");
+    setOwnerFilter("__view__");
+    setMarketingStatusFilter("all");
+    setMarketingCampaignFilter("all");
+    setMarketingTrafficFilter("all");
+    setMarketingGroupFilter("all");
+    setMarketingOwnerFilter(nextType === "marketing" ? "all" : "__view__");
+    if (nextType !== "ar") {
+      setProjectMode("work");
+    }
+    if (nextType === "marketing") {
+      changeWorkspaceUser(ALL_USER_VIEW);
+    }
+    updateWorkspaceUrl(projectId, artistName, artistName ? "overview" : "", assignmentId);
+    await persist(projects, projectId);
   };
 
   const toggleFocusMode = () => {
@@ -7203,6 +7384,222 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     </button>
   );
 
+  // ═══ LIVE CRM ═══
+  if (screen === "live-crm") return (
+    <div style={{ fontFamily: ft, background: C.bg, minHeight: "100vh", color: C.tx }}>
+      <Toast /><style>{css}</style>
+      <div style={{ borderBottom: `1px solid ${C.bd}`, background: C.sf }}>
+        <div style={{ maxWidth: 1180, margin: "0 auto", padding: "16px 24px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <button
+            onClick={() => { setScreen("hub"); updateWorkspaceUrl("", "", "", ""); }}
+            style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, fontFamily: ft, color: C.ac, fontWeight: 600 }}
+          >
+            ← Project Home
+          </button>
+          <DkBtn />
+        </div>
+      </div>
+
+      <div style={{ maxWidth: 1180, margin: "0 auto", padding: "24px" }}>
+        <div style={{ ...cS, marginBottom: 18, padding: "22px 24px", background: dark ? "linear-gradient(135deg, #111a2b 0%, #162238 100%)" : "linear-gradient(135deg, #ffffff 0%, #eef4ff 100%)" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(320px, 1.3fr) minmax(280px, 1fr)", gap: 18, alignItems: "stretch" }}>
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 3, textTransform: "uppercase", color: C.lv, marginBottom: 8 }}>Live CRM</div>
+              <div style={{ fontSize: 30, fontWeight: 800, letterSpacing: "-0.04em", marginBottom: 8 }}>Master Roster</div>
+              <div style={{ fontSize: 13, lineHeight: 1.6, color: C.ts, maxWidth: 560 }}>
+                This is the shared live hub. Legacy roster talent already lives here, and pre-live artists or curators can graduate into this view without losing their notes, project history, or marketing context.
+              </div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 14 }}>
+                <span style={{ ...mkP(true, C.lv, C.lvb), cursor: "default" }}>{liveCrmOverview.liveTalents} live talent</span>
+                <span style={{ ...mkP(true, C.ac, C.al), cursor: "default" }}>{liveCrmOverview.projects} active projects</span>
+                <span style={{ ...mkP(true, C.pr, C.pb), cursor: "default" }}>{liveCrmOverview.assignments} campaign assignments</span>
+                <span style={{ ...mkP(true, C.bu, C.bb), cursor: "default" }}>{liveCrmOverview.campaigns} campaigns</span>
+                {liveCrmOverview.internalArtists > 0 && <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{liveCrmOverview.internalArtists} internal artists</span>}
+                {liveCrmOverview.curators > 0 && <span style={{ ...mkP(true, C.ac, C.al), cursor: "default" }}>{liveCrmOverview.curators} curators</span>}
+                {liveCrmOverview.creators > 0 && <span style={{ ...mkP(true, C.gn, C.gb), cursor: "default" }}>{liveCrmOverview.creators} creators / AI UGC</span>}
+              </div>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(120px, 1fr))", gap: 10 }}>
+              {[
+                ["Live Talent", liveCrmOverview.liveTalents, C.lv, C.lvb],
+                ["Projects", liveCrmOverview.projects, C.ac, C.al],
+                ["Campaigns", liveCrmOverview.campaigns, C.bu, C.bb],
+                ["Assignments", liveCrmOverview.assignments, C.pr, C.pb],
+              ].map(([label, value, tone, bg]) => (
+                <div key={label} style={{ borderRadius: 14, border: `1px solid ${C.bd}`, background: bg, padding: "14px 16px" }}>
+                  <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 1.2, color: C.tt, marginBottom: 8 }}>{label}</div>
+                  <div style={{ fontSize: 26, fontWeight: 800, color: tone, lineHeight: 1 }}>{value}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div style={{ ...cS, padding: "18px 20px", marginBottom: 16 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(260px, 1.2fr) repeat(3, minmax(170px, 0.8fr))", gap: 12, alignItems: "end" }}>
+            <label style={{ display: "grid", gap: 6, fontSize: 12, color: C.ts }}>
+              <span>Search live talent</span>
+              <input
+                value={liveCrmQuery}
+                onChange={e => setLiveCrmQuery(e.target.value)}
+                placeholder="Search name, email, socials, campaign..."
+                style={{ ...iS, width: "100%" }}
+              />
+            </label>
+            <label style={{ display: "grid", gap: 6, fontSize: 12, color: C.ts }}>
+              <span>Talent type</span>
+              <select value={liveCrmTypeFilter} onChange={e => setLiveCrmTypeFilter(e.target.value)} style={{ ...iS, width: "100%" }}>
+                <option value="all">All types</option>
+                {liveCrmTypeOptions.map(type => (
+                  <option key={type} value={canonicalArtistName(type)}>{type}</option>
+                ))}
+              </select>
+            </label>
+            <label style={{ display: "grid", gap: 6, fontSize: 12, color: C.ts }}>
+              <span>Source</span>
+              <select value={liveCrmSourceFilter} onChange={e => setLiveCrmSourceFilter(e.target.value)} style={{ ...iS, width: "100%" }}>
+                <option value="all">All sources</option>
+                {liveCrmSourceOptions.map(source => (
+                  <option key={source} value={source}>{TALENT_SOURCE_LABELS[source] || source}</option>
+                ))}
+              </select>
+            </label>
+            <label style={{ display: "grid", gap: 6, fontSize: 12, color: C.ts }}>
+              <span>Owner</span>
+              <select value={liveCrmOwnerFilter} onChange={e => setLiveCrmOwnerFilter(e.target.value)} style={{ ...iS, width: "100%" }}>
+                <option value="all">All owners</option>
+                <option value="__unassigned__">Unassigned</option>
+                {liveCrmOwnerOptions.map(owner => (
+                  <option key={owner} value={owner}>{owner}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+        </div>
+
+        {liveCrmProfiles.length === 0 ? (
+          <div style={{ ...cS, padding: "32px 28px", textAlign: "center" }}>
+            <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 6 }}>No live talent matches this view yet</div>
+            <div style={{ fontSize: 12, color: C.ts, maxWidth: 520, margin: "0 auto" }}>
+              Try widening the filters, or keep seeding the shared talent layer. Legacy roster talent and any pre-live artist or curator who becomes live will show up here.
+            </div>
+          </div>
+        ) : (
+          <div style={{ display: "grid", gap: 14 }}>
+            {liveCrmProfiles.map(profile => (
+              <div key={profile.id} style={{ ...cS, padding: "18px 20px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "flex-start", flexWrap: "wrap", marginBottom: 14 }}>
+                  <div style={{ display: "grid", gap: 8 }}>
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                      <span style={{ fontSize: 24, fontWeight: 800, letterSpacing: "-0.03em" }}>{profile.displayName}</span>
+                      <span style={{ ...mkP(true, C.lv, C.lvb), cursor: "default" }}>
+                        {TALENT_LIFECYCLE_LABELS[profile.platformLifecycle] || "Live"}
+                      </span>
+                      {profile.talentTypes.map(type => (
+                        <span key={`${profile.id}:type:${type}`} style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{type}</span>
+                      ))}
+                      {profile.sources.map(source => (
+                        <span key={`${profile.id}:source:${source}`} style={{ ...mkP(true, C.pr, C.pb), cursor: "default" }}>
+                          {TALENT_SOURCE_LABELS[source] || source}
+                        </span>
+                      ))}
+                    </div>
+                    <div style={{ fontSize: 12, color: C.ts, display: "flex", gap: 10, flexWrap: "wrap" }}>
+                      <span>{profile.primaryEmail || "No email yet"}</span>
+                      {profile.instagramHandle && <span>Instagram @{profile.instagramHandle}</span>}
+                      {profile.tiktokHandle && <span>TikTok @{profile.tiktokHandle}</span>}
+                      {profile.spotifyUrl && <span>Spotify linked</span>}
+                    </div>
+                  </div>
+
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    {profile.primaryProjectId && (
+                      <button
+                        onClick={() => void openProjectWorkspace(profile.primaryProjectId, { assignmentId: profile.primaryAssignmentId })}
+                        style={actionBtn(false, "neutral")}
+                      >
+                        Open workspace
+                      </button>
+                    )}
+                    <button
+                      onClick={() => openTalentProfileById(profile.id)}
+                      style={actionBtn(false, "accent")}
+                    >
+                      Open Talent Profile
+                    </button>
+                  </div>
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(110px, 1fr))", gap: 10, marginBottom: 14 }}>
+                  {[
+                    ["Projects", profile.projectSummaries.length, C.ac, C.al],
+                    ["Campaigns", profile.campaigns.length, C.bu, C.bb],
+                    ["Assignments", profile.marketingAssignments.length, C.pr, C.pb],
+                    ["Owners", profile.owners.length || "—", C.ts, C.sa],
+                  ].map(([label, value, tone, bg]) => (
+                    <div key={`${profile.id}:${label}`} style={{ borderRadius: 12, border: `1px solid ${C.bd}`, background: bg, padding: "10px 12px" }}>
+                      <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 1, color: C.tt, marginBottom: 6 }}>{label}</div>
+                      <div style={{ fontSize: 20, fontWeight: 800, color: tone, lineHeight: 1 }}>{value}</div>
+                    </div>
+                  ))}
+                </div>
+
+                <div style={{ display: "grid", gap: 10 }}>
+                  {profile.projectSummaries.map(summary => (
+                    <div key={`${profile.id}:project:${summary.projectId || summary.projectName}`} style={{ borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sa, padding: "12px 14px" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 8 }}>
+                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                          <span style={{ fontSize: 14, fontWeight: 700 }}>{summary.projectName}</span>
+                          <span style={{ ...mkP(true, summary.projectType === "marketing" ? C.pr : C.ac, summary.projectType === "marketing" ? C.pb : C.al), cursor: "default" }}>
+                            {projectTypeLabel(summary.projectType)}
+                          </span>
+                        </div>
+                        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                          {summary.lastTouched && <span style={{ fontSize: 11, color: C.tt }}>Updated {rD(summary.lastTouched)}</span>}
+                          {summary.projectId && (
+                            <button
+                              onClick={() => void openProjectWorkspace(summary.projectId, { assignmentId: summary.leadAssignmentId })}
+                              style={actionBtn(false, "neutral")}
+                            >
+                              Open
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        {summary.owners.map(owner => (
+                          <span key={`${summary.projectId}:owner:${owner}`} style={{ ...mkP(true, C.ts, C.sf), cursor: "default" }}>{owner}</span>
+                        ))}
+                        {summary.arStages.map(stage => (
+                          <span key={`${summary.projectId}:stage:${stage}`} style={{ ...mkP(true, sc(stage, C), sb(stage, C)), cursor: "default" }}>{SM[stage]?.label || "Prospect"}</span>
+                        ))}
+                        {summary.marketingStatuses.map(status => {
+                          const tone = marketingStatusTone(status, C);
+                          return (
+                            <span key={`${summary.projectId}:status:${status}`} style={{ ...mkP(true, tone.fg, tone.bg), borderColor: tone.border, cursor: "default" }}>
+                              {MM[status]?.label || "Prospect"}
+                            </span>
+                          );
+                        })}
+                        {summary.campaigns.map(campaign => (
+                          <span key={`${summary.projectId}:campaign:${campaign}`} style={{ ...mkP(true, C.bu, C.bb), cursor: "default" }}>{campaign}</span>
+                        ))}
+                        {!summary.owners.length && !summary.arStages.length && !summary.marketingStatuses.length && !summary.campaigns.length && (
+                          <span style={{ ...mkP(true, C.ts, C.sf), cursor: "default" }}>No workflow metadata yet</span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
   // ═══ HUB ═══
   if (screen === "hub") return (
     <div style={{ fontFamily: ft, background: C.bg, minHeight: "100vh", color: C.tx }}>
@@ -7257,6 +7654,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                 <span style={{ ...mkP(true, C.pr, C.pb) }}>{workspaceOverview.marketingItems} assignments</span>
                 <span style={{ ...mkP(true, C.bu, C.bb) }}>{workspaceOverview.contacted} contacted</span>
                 <span style={{ ...mkP(true, C.lv, C.lvb) }}>{workspaceOverview.live} live</span>
+                <span style={{ ...mkP(true, C.lv, C.gb) }}>{liveCrmOverview.liveTalents} in Live CRM</span>
                 <span style={{ ...mkP(true, C.gn, C.gb) }}>{workspaceOverview.marketingComplete} complete</span>
                 <span style={{ ...mkP(true, C.ab, C.abb) }}>{workspaceOverview.due} due items</span>
                 {gmailStatus.available && <span style={{ ...mkP(true, gmailStatus.connections?.length ? C.gn : C.tt, gmailStatus.connections?.length ? C.gb : C.sa) }}>{gmailStatus.connections?.length || 0} connected mailboxes</span>}
@@ -7286,7 +7684,12 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
             <div style={{ fontSize: 15, fontWeight: 700 }}>Projects</div>
             <div style={{ fontSize: 12, color: C.tt }}>Open an existing workspace or create a new one.</div>
           </div>
-          <div style={{ fontSize: 11, color: C.tt }}>{gmailStatus.currentUserConnected ? `Your Gmail: ${gmailStatus.currentUserGmail}` : "Your Gmail is not connected yet"}</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <button onClick={() => setScreen("live-crm")} style={actionBtn(false, "accent")}>
+              Open Live CRM
+            </button>
+            <div style={{ fontSize: 11, color: C.tt }}>{gmailStatus.currentUserConnected ? `Your Gmail: ${gmailStatus.currentUserGmail}` : "Your Gmail is not connected yet"}</div>
+          </div>
         </div>
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(300px,1fr))", gap: 16 }}>
@@ -7311,27 +7714,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
               ? summarizeMarketingItems(p.marketingItems || [], todayISO()).overdue + summarizeMarketingItems(p.marketingItems || [], todayISO()).dueSoon
               : Object.values(p.sequenceState || {}).filter(ss => ss?.status === "active" && ss.nextDue && ss.nextDue <= todayISO()).length;
             return (
-              <div key={p.id} onClick={() => {
-                const nextType = normalizeProjectType(p.type);
-                setApId(p.id);
-                setScreen("project");
-                setSearch("");
-                setGf("All");
-                setSf("all");
-                setPf("all");
-                setOwnerFilter("__view__");
-                setMarketingStatusFilter("all");
-                setMarketingCampaignFilter("all");
-                setMarketingTrafficFilter("all");
-                setMarketingOwnerFilter(nextType === "marketing" ? "all" : "__view__");
-                if (nextType !== "ar") {
-                  setProjectMode("work");
-                }
-                if (nextType === "marketing") {
-                  changeWorkspaceUser(ALL_USER_VIEW);
-                }
-                persist(projects, p.id);
-              }}
+              <div key={p.id} onClick={() => { void openProjectWorkspace(p.id); }}
                 style={{ ...cS, padding: "22px 24px", cursor: "pointer", transition: "all 0.2s", animation: `fu 0.3s ease ${i * 0.06}s both`, background: dark ? "linear-gradient(180deg, #111a2b 0%, #0f1729 100%)" : "linear-gradient(180deg, #ffffff 0%, #f8fbff 100%)" }}
                 onMouseEnter={e => { e.currentTarget.style.borderColor = C.ac; e.currentTarget.style.boxShadow = C.sm; }}
                 onMouseLeave={e => { e.currentTarget.style.borderColor = C.bd; e.currentTarget.style.boxShadow = C.sw; }}>
