@@ -171,6 +171,7 @@ const AI_PROVIDERS = [
   { id: "openai", label: "OpenAI" },
   { id: "google", label: "Google Gemini" },
   { id: "deepseek", label: "DeepSeek" },
+  { id: "groq", label: "Groq / Llama" },
 ];
 
 const AI_PROVIDER_LABELS = {
@@ -178,6 +179,7 @@ const AI_PROVIDER_LABELS = {
   openai: "OpenAI",
   google: "Google Gemini",
   deepseek: "DeepSeek",
+  groq: "Groq / Llama",
 };
 
 const AI_MODEL_OPTIONS = {
@@ -199,6 +201,11 @@ const AI_MODEL_OPTIONS = {
   deepseek: [
     { id: "deepseek-chat", label: "DeepSeek Chat (balanced)" },
     { id: "deepseek-reasoner", label: "DeepSeek Reasoner (deep)" },
+  ],
+  groq: [
+    { id: "llama-3.1-8b-instant", label: "Llama 3.1 8B (fast)" },
+    { id: "llama-3.3-70b-versatile", label: "Llama 3.3 70B (balanced)" },
+    { id: "meta-llama/llama-4-scout-17b-16e-instruct", label: "Llama 4 Scout (deep)" },
   ],
 };
 
@@ -230,6 +237,13 @@ const DEFAULT_AI_MODELS = {
     discovery: "deepseek-chat",
     reply: "deepseek-chat",
     followup: "deepseek-reasoner",
+  },
+  groq: {
+    intel: "llama-3.3-70b-versatile",
+    drafts: "llama-3.3-70b-versatile",
+    discovery: "llama-3.3-70b-versatile",
+    reply: "llama-3.1-8b-instant",
+    followup: "meta-llama/llama-4-scout-17b-16e-instruct",
   },
 };
 
@@ -1529,6 +1543,10 @@ function normalizeProject(p) {
       ...DEFAULT_AI_MODELS.deepseek,
       ...(p.settings?.aiModelsByProvider?.deepseek || {}),
     },
+    groq: {
+      ...DEFAULT_AI_MODELS.groq,
+      ...(p.settings?.aiModelsByProvider?.groq || {}),
+    },
   };
   return {
     ...p,
@@ -1899,6 +1917,7 @@ const AI_KEY_STORAGE = {
   openai: "gemfinder-openai-key",
   google: "gemfinder-google-key",
   deepseek: "gemfinder-deepseek-key",
+  groq: "gemfinder-groq-key",
 };
 
 function getStoredAiKey(provider = "anthropic") {
@@ -1920,6 +1939,7 @@ function detectProviderFromKey(value) {
   if (key.startsWith("sk-ant-")) return "anthropic";
   if (key.startsWith("AIza")) return "google";
   if (key.startsWith("sk-proj-")) return "openai";
+  if (key.startsWith("gsk_")) return "groq";
   return null;
 }
 
@@ -1976,6 +1996,26 @@ function parseGoogleResponseText(payload) {
   return parts.join("\n").trim();
 }
 
+function parseChatCompletionText(payload) {
+  return (
+    payload?.choices
+      ?.map(choice => {
+        const content = choice?.message?.content;
+        if (typeof content === "string") return content;
+        if (Array.isArray(content)) {
+          return content
+            .map(part => (typeof part?.text === "string" ? part.text : ""))
+            .filter(Boolean)
+            .join("\n");
+        }
+        return "";
+      })
+      .filter(Boolean)
+      .join("\n")
+      .trim() || ""
+  );
+}
+
 // ═══ AI CALL HELPER ═══
 async function aiCall(prompt, maxTokens = 1200, provider = "anthropic", apiKey = "", model = "") {
   const key = (apiKey || getStoredAiKey(provider)).trim();
@@ -1990,6 +2030,8 @@ async function aiCall(prompt, maxTokens = 1200, provider = "anthropic", apiKey =
       ? "/api/ai/google"
       : provider === "deepseek"
         ? "/api/ai/deepseek"
+        : provider === "groq"
+          ? "/api/ai/groq"
       : "/api/ai/anthropic";
   try {
     const proxy = await fetch(proxyEndpoint, {
@@ -2040,6 +2082,20 @@ async function aiCall(prompt, maxTokens = 1200, provider = "anthropic", apiKey =
               generationConfig: { maxOutputTokens: maxTokens },
             }),
           })
+      : provider === "groq"
+        ? await fetch("https://api.groq.com/openai/v1/chat/completions", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": `Bearer ${key}`,
+            },
+            body: JSON.stringify({
+              model: safeModel,
+              messages: [{ role: "user", content: prompt }],
+              max_tokens: maxTokens,
+              temperature: 0.7,
+            }),
+          })
         : await fetch("https://api.anthropic.com/v1/messages", {
             method: "POST",
             headers: {
@@ -2063,6 +2119,8 @@ async function aiCall(prompt, maxTokens = 1200, provider = "anthropic", apiKey =
       ? parseOpenAIResponseText(d)
       : provider === "google"
         ? parseGoogleResponseText(d)
+        : provider === "groq"
+          ? parseChatCompletionText(d)
         : (d.content?.map(i => i.type === "text" ? i.text : "").filter(Boolean).join("\n") || "");
     if (!t) {
       return { ok: false, text: `${providerLabelText} returned an empty response. Try a different model.` };
@@ -4796,6 +4854,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       openai: { ...DEFAULT_AI_MODELS.openai, ...(proj.settings?.aiModelsByProvider?.openai || {}) },
       google: { ...DEFAULT_AI_MODELS.google, ...(proj.settings?.aiModelsByProvider?.google || {}) },
       deepseek: { ...DEFAULT_AI_MODELS.deepseek, ...(proj.settings?.aiModelsByProvider?.deepseek || {}) },
+      groq: { ...DEFAULT_AI_MODELS.groq, ...(proj.settings?.aiModelsByProvider?.groq || {}) },
     };
     byProvider[currentAiProvider] = { ...byProvider[currentAiProvider], [task]: modelId };
     const nextProj = { ...proj, settings: { ...(proj.settings || {}), aiModelsByProvider: byProvider } };
@@ -5359,6 +5418,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
           openai: { ...DEFAULT_AI_MODELS.openai },
           google: { ...DEFAULT_AI_MODELS.google },
           deepseek: { ...DEFAULT_AI_MODELS.deepseek },
+          groq: { ...DEFAULT_AI_MODELS.groq },
         },
         draftGuardrails: { ...DEFAULT_DRAFT_GUARDRAILS },
         savedTemplates: [],
