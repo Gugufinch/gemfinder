@@ -2876,6 +2876,19 @@ function updateWorkspaceUrl(projectId = "", artistName = "", tab = "", assignmen
   window.history.replaceState({}, "", `${url.pathname}${url.search || ""}${url.hash || ""}`);
 }
 
+function downloadCsvFile(filename, rows) {
+  const csv = rows
+    .map(row => row.map(cell => `"${String(cell ?? "").replace(/"/g, '""')}"`).join(","))
+    .join("\n");
+  const blob = new Blob([csv], { type: "text/csv" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
 function exportPipeline(proj, enriched) {
   const rows = [["Artist", "Owner", "Genre", "Bucket", "Listeners", "Hit Track", "Email", "Social", "Stage", "Priority", "Spotify", "Notes", "Follow-Up", "Follow-Up Plan", "Next Step", "Sends Logged"]];
   enriched.forEach(a => {
@@ -2902,14 +2915,7 @@ function exportPipeline(proj, enriched) {
       sends,
     ]);
   });
-  const csv = rows.map(r => r.map(c => `"${c}"`).join(",")).join("\n");
-  const blob = new Blob([csv], { type: "text/csv" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = `${proj.name.replace(/\s+/g, "_")}_pipeline_v7.csv`;
-  link.click();
-  URL.revokeObjectURL(url);
+  downloadCsvFile(`${proj.name.replace(/\s+/g, "_")}_pipeline_v7.csv`, rows);
 }
 
 function exportMarketingItems(proj) {
@@ -2968,14 +2974,7 @@ function exportMarketingItems(proj) {
       normalized.updatedAt,
     ]);
   });
-  const csv = rows.map(r => r.map(c => `"${String(c || "").replace(/"/g, '""')}"`).join(",")).join("\n");
-  const blob = new Blob([csv], { type: "text/csv" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = `${proj.name.replace(/\s+/g, "_")}_marketing.csv`;
-  link.click();
-  URL.revokeObjectURL(url);
+  downloadCsvFile(`${proj.name.replace(/\s+/g, "_")}_marketing.csv`, rows);
 }
 
 export default function App({ authUserId = "", authEmail = "", authRole = "editor" } = {}) {
@@ -3234,8 +3233,13 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     () => workspaceProjects.filter(project => normalizeProjectType(project.type) === "curator"),
     [workspaceProjects]
   );
+  const liveMarketingProjects = useMemo(
+    () => workspaceProjects.filter(project => normalizeProjectType(project.type) === "marketing"),
+    [workspaceProjects]
+  );
   const defaultKickoffArtistProject = kickoffArtistProjects[0] || null;
   const defaultKickoffCuratorProject = kickoffCuratorProjects[0] || null;
+  const defaultLiveMarketingProject = liveMarketingProjects[0] || null;
   const workspaceProjectIds = useMemo(
     () => new Set(workspaceProjects.map(project => project.id)),
     [workspaceProjects]
@@ -3529,6 +3533,99 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       stages,
     };
   }, [kickoffProfiles]);
+  const exportKickoffView = () => {
+    if (!kickoffProfiles.length) {
+      flash("No kickoff talent in the current view yet", "err");
+      return;
+    }
+    const rows = [[
+      "Talent Name",
+      "Lifecycle",
+      "Talent Types",
+      "Sources",
+      "Primary Email",
+      "Instagram",
+      "TikTok",
+      "Spotify",
+      "Source Record Count",
+      "Source Records",
+      "Owners",
+      "Stages",
+      "Curator Page",
+      "Curated Artists",
+    ]];
+    kickoffProfiles.forEach(profile => {
+      rows.push([
+        profile.displayName,
+        TALENT_LIFECYCLE_LABELS[profile.platformLifecycle] || "Pre-Live",
+        (profile.talentTypes || []).join(" | "),
+        (profile.sources || []).map(source => TALENT_SOURCE_LABELS[source] || source).join(" | "),
+        profile.primaryEmail || "",
+        profile.instagramHandle ? `@${profile.instagramHandle}` : "",
+        profile.tiktokHandle ? `@${profile.tiktokHandle}` : "",
+        profile.spotifyUrl || "",
+        profile.projectSummaries.length,
+        profile.projectSummaries.map(summary => summary.projectName).join(" | "),
+        profile.owners.join(" | "),
+        profile.stages.map(stage => SM[stage]?.label || titleCaseWords(stage)).join(" | "),
+        profile.curatorPageUrl || "",
+        (profile.curatedArtists || []).join(" | "),
+      ]);
+    });
+    downloadCsvFile(`${selectedWorkspace.name.replace(/\s+/g, "_")}_kickoff_view.csv`, rows);
+    flash(`Exported ${kickoffProfiles.length} kickoff row${kickoffProfiles.length === 1 ? "" : "s"}`);
+  };
+  const exportLiveRosterView = () => {
+    if (!liveCrmProfiles.length) {
+      flash("No live roster talent in the current view yet", "err");
+      return;
+    }
+    const rows = [[
+      "Talent Name",
+      "Lifecycle",
+      "Talent Types",
+      "Sources",
+      "Primary Email",
+      "Instagram",
+      "TikTok",
+      "Spotify",
+      "Active Project Count",
+      "Projects",
+      "Owners",
+      "Campaigns",
+      "Marketing Statuses",
+      "Assignment Count",
+      "Last Updated",
+    ]];
+    liveCrmProfiles.forEach(profile => {
+      const lastTouched = profile.projectSummaries
+        .map(summary => summary.lastTouched)
+        .filter(Boolean)
+        .sort()
+        .slice(-1)[0] || "";
+      rows.push([
+        profile.displayName,
+        TALENT_LIFECYCLE_LABELS[profile.platformLifecycle] || "Live",
+        (profile.talentTypes || []).join(" | "),
+        (profile.sources || []).map(source => TALENT_SOURCE_LABELS[source] || source).join(" | "),
+        profile.primaryEmail || "",
+        profile.instagramHandle ? `@${profile.instagramHandle}` : "",
+        profile.tiktokHandle ? `@${profile.tiktokHandle}` : "",
+        profile.spotifyUrl || "",
+        profile.projectSummaries.length,
+        profile.projectSummaries.map(summary => summary.projectName).join(" | "),
+        profile.owners.join(" | "),
+        profile.campaigns.join(" | "),
+        uniqStrings(profile.projectSummaries.flatMap(summary => summary.marketingStatuses || []))
+          .map(status => MM[status]?.label || titleCaseWords(status))
+          .join(" | "),
+        profile.marketingAssignments.length,
+        lastTouched,
+      ]);
+    });
+    downloadCsvFile(`${selectedWorkspace.name.replace(/\s+/g, "_")}_live_roster_view.csv`, rows);
+    flash(`Exported ${liveCrmProfiles.length} live roster row${liveCrmProfiles.length === 1 ? "" : "s"}`);
+  };
   const workspaceTalentProfileMap = useMemo(
     () => new Map(workspaceTalentProfiles.map(profile => [profile.id, profile])),
     [workspaceTalentProfiles]
@@ -3863,6 +3960,30 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     }
     setShowMarketingItemModal(true);
   };
+  const openMarketingItemModalFromTalentProfile = profile => {
+    const leadMarketing = (profile?.marketingAssignments || [])[0] || null;
+    const leadAr = (profile?.arRecords || [])[0] || null;
+    setMarketingForm({
+      ...emptyMarketingForm(),
+      talentName: profile?.displayName || "",
+      talentType: profile?.talentTypes?.[0] || leadMarketing?.talentType || "Internal Artist",
+      trafficType: leadMarketing?.trafficType || "Organic",
+      channels: Array.isArray(leadMarketing?.channels) && leadMarketing.channels.length ? [...leadMarketing.channels] : ["Instagram"],
+      deliverableType: leadMarketing?.deliverableType || "UGC",
+      owner: leadMarketing?.owner || leadAr?.owner || "",
+      email: profile?.primaryEmail || "",
+      instagramHandle: profile?.instagramHandle || "",
+      instagramUrl: profile?.instagramUrl || "",
+      instagramFollowers: profile?.instagramFollowers || "",
+      tiktokHandle: profile?.tiktokHandle || "",
+      tiktokUrl: profile?.tiktokUrl || "",
+      tiktokFollowers: profile?.tiktokFollowers || "",
+      spotifyUrl: profile?.spotifyUrl || "",
+      spotifyMonthlyListeners: profile?.spotifyMonthlyListeners || leadAr?.monthlyListeners || "",
+      campaign: marketingCampaignFilter !== "all" ? marketingCampaignFilter : "",
+    });
+    setShowMarketingItemModal(true);
+  };
   const resetTalentTargetDraft = useCallback((talentId = "", explicitProjectId = "") => {
     const profile = workspaceTalentProfileMap.get(talentId) || null;
     const projectMemberships = new Set((profile?.projectMemberships || []).map(item => item.projectId));
@@ -4193,15 +4314,28 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   useEffect(() => {
     if (!pendingWorkspaceAction || screen !== "project" || !proj?.id || proj.id !== pendingWorkspaceAction.projectId) return;
     const nextAction = pendingWorkspaceAction.action;
+    const profileId = String(pendingWorkspaceAction.profileId || "").trim();
     setPendingWorkspaceAction(null);
     if (nextAction === "show-add-artist") {
       setShowAddArtist(true);
       return;
     }
+    if (nextAction === "show-marketing-item") {
+      if (profileId && workspaceTalentProfileMap.has(profileId)) {
+        openMarketingItemModalFromTalentProfile(workspaceTalentProfileMap.get(profileId));
+      } else {
+        openMarketingItemModal(null);
+      }
+      return;
+    }
+    if (nextAction === "show-marketing-bulk-update") {
+      openMarketingBulkUpdateModal();
+      return;
+    }
     if (nextAction === "import-csv") {
       window.requestAnimationFrame(() => fr.current?.click?.());
     }
-  }, [pendingWorkspaceAction, screen, proj?.id]);
+  }, [pendingWorkspaceAction, screen, proj?.id, workspaceTalentProfileMap]);
 
   useEffect(() => {
     if (!showTalentProfileModal) return;
@@ -4464,13 +4598,13 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     updateWorkspaceUrl(projectId, artistName, artistName ? "overview" : "", assignmentId);
     await persist(projects, projectId, undefined, undefined, undefined, undefined, undefined, targetProject.workspaceId || DEFAULT_WORKSPACE.id);
   };
-  const launchWorkspaceProjectAction = async (projectId, action, missingMessage) => {
+  const launchWorkspaceProjectAction = async (projectId, action, missingMessage, payload = {}) => {
     if (!requireEditor()) return;
     if (!projectId) {
       flash(missingMessage || "No underlying record is set up for that action yet", "err");
       return;
     }
-    setPendingWorkspaceAction({ projectId, action });
+    setPendingWorkspaceAction({ projectId, action, ...payload });
     await openProjectWorkspace(projectId);
   };
 
@@ -7922,6 +8056,12 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
             >
               Bulk Add Curators
             </button>
+            <button
+              onClick={exportKickoffView}
+              style={{ ...actionBtn(false, "neutral"), ...lockStyle(!kickoffProfiles.length) }}
+            >
+              Export Current View CSV
+            </button>
           </div>
         </div>
 
@@ -8148,6 +8288,48 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         </div>
 
         <div style={{ ...cS, padding: "18px 20px", marginBottom: 16 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, flexWrap: "wrap", marginBottom: 12 }}>
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>Live Roster Actions</div>
+              <div style={{ fontSize: 12, color: C.ts, maxWidth: 620 }}>
+                Use the live roster as the main campaign operating surface. These actions still write through the mapped live source record underneath, so we can keep replacing the old project views without putting any current data at risk.
+              </div>
+            </div>
+            <div style={{ fontSize: 11, color: C.tt, textAlign: "right" }}>
+              {defaultLiveMarketingProject ? `Campaign work flows into ${defaultLiveMarketingProject.name}` : "No live campaign record yet"}
+              <br />
+              {liveCrmProfiles.length ? `${liveCrmProfiles.length} live talent in this view` : "Live roster is empty in this view"}
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <button
+              onClick={() => { void launchWorkspaceProjectAction(defaultLiveMarketingProject?.id || "", "show-marketing-item", "No live campaign record is mapped in this workspace yet"); }}
+              style={{ ...actionBtn(true, "good"), ...lockStyle(isReadOnly) }}
+            >
+              + Campaign Assignment
+            </button>
+            <button
+              onClick={() => { void launchWorkspaceProjectAction(defaultLiveMarketingProject?.id || "", "show-marketing-bulk-update", "No live campaign record is mapped in this workspace yet"); }}
+              style={{ ...actionBtn(false, "neutral"), ...lockStyle(isReadOnly) }}
+            >
+              Bulk Update
+            </button>
+            <button
+              onClick={() => { void launchWorkspaceProjectAction(defaultLiveMarketingProject?.id || "", "import-csv", "No live campaign record is mapped in this workspace yet"); }}
+              style={{ ...actionBtn(false, "neutral"), ...lockStyle(isReadOnly) }}
+            >
+              Import Talent CSV
+            </button>
+            <button
+              onClick={exportLiveRosterView}
+              style={{ ...actionBtn(false, "neutral"), ...lockStyle(!liveCrmProfiles.length) }}
+            >
+              Export Current View CSV
+            </button>
+          </div>
+        </div>
+
+        <div style={{ ...cS, padding: "18px 20px", marginBottom: 16 }}>
           <div style={{ display: "grid", gridTemplateColumns: "minmax(260px, 1.2fr) repeat(3, minmax(170px, 0.8fr))", gap: 12, alignItems: "end" }}>
             <label style={{ display: "grid", gap: 6, fontSize: 12, color: C.ts }}>
               <span>Search live talent</span>
@@ -8225,6 +8407,21 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                   </div>
 
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    {defaultLiveMarketingProject && (
+                      <button
+                        onClick={() => {
+                          void launchWorkspaceProjectAction(
+                            defaultLiveMarketingProject.id,
+                            "show-marketing-item",
+                            "No live campaign record is mapped in this workspace yet",
+                            { profileId: profile.id }
+                          );
+                        }}
+                        style={{ ...actionBtn(true, "good"), ...lockStyle(isReadOnly) }}
+                      >
+                        + Campaign
+                      </button>
+                    )}
                     {profile.primaryProjectId && (
                       <button
                         onClick={() => void openProjectWorkspace(profile.primaryProjectId, { assignmentId: profile.primaryAssignmentId })}
