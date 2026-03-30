@@ -6369,6 +6369,117 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     setScreen("project");
   };
 
+  const updateTalentOverviewKickoffStage = async (record, nextStage) => {
+    if (!requireEditor()) return;
+    if (!record?.projectId || !record?.artistName) return;
+    const targetProject = projects.find(project => project.id === record.projectId);
+    if (!targetProject) {
+      flash("Could not find that kickoff source record", "err");
+      return;
+    }
+    const normalizedStage = normalizeStageId(nextStage);
+    const currentStage = normalizeStageId(targetProject.pipeline?.[record.artistName]?.stage || "prospect");
+    if (normalizedStage === currentStage) return;
+    const nextProject = {
+      ...targetProject,
+      pipeline: {
+        ...(targetProject.pipeline || {}),
+        [record.artistName]: {
+          ...(targetProject.pipeline?.[record.artistName] || {}),
+          stage: normalizedStage,
+          date: new Date().toISOString(),
+        },
+      },
+      activityLog: logAction(targetProject, record.artistName, `Stage → ${SM[normalizedStage]?.label || "Prospect"}`),
+    };
+    await saveProjectsList(projects.map(project => project.id === targetProject.id ? nextProject : project));
+    flash(`${record.artistName} → ${SM[normalizedStage]?.label || "Prospect"}`);
+  };
+
+  const updateTalentOverviewKickoffOwner = async (record, nextOwner) => {
+    if (!requireEditor()) return;
+    if (!record?.projectId || !record?.artistName) return;
+    const targetProject = projects.find(project => project.id === record.projectId);
+    if (!targetProject) {
+      flash("Could not find that kickoff source record", "err");
+      return;
+    }
+    const currentOwner = String(targetProject.assignments?.[record.artistName] || "");
+    if (currentOwner === String(nextOwner || "")) return;
+    const nextAssignments = { ...(targetProject.assignments || {}) };
+    if (nextOwner) nextAssignments[record.artistName] = nextOwner;
+    else delete nextAssignments[record.artistName];
+    const nextProject = {
+      ...targetProject,
+      assignments: nextAssignments,
+      activityLog: logAction(targetProject, record.artistName, nextOwner ? `Assigned to ${nextOwner}` : "Owner cleared"),
+    };
+    await saveProjectsList(projects.map(project => project.id === targetProject.id ? nextProject : project));
+    flash(nextOwner ? `${record.artistName} assigned to ${nextOwner}` : `${record.artistName} unassigned`);
+  };
+
+  const updateTalentOverviewMarketingStatus = async (assignment, nextStatus) => {
+    if (!requireEditor()) return;
+    if (!assignment?.projectId || !assignment?.assignmentId) return;
+    const targetProject = projects.find(project => project.id === assignment.projectId);
+    if (!targetProject) {
+      flash("Could not find that live campaign source record", "err");
+      return;
+    }
+    const normalizedStatus = normalizeMarketingStatus(nextStatus);
+    const currentItem = (targetProject.marketingItems || []).find(item => String(item?.id || "") === String(assignment.assignmentId));
+    if (!currentItem) {
+      flash("Could not find that campaign assignment", "err");
+      return;
+    }
+    const currentStatus = normalizeMarketingStatus(currentItem.status || "prospect");
+    if (currentStatus === normalizedStatus) return;
+    const nextProject = {
+      ...targetProject,
+      marketingItems: (targetProject.marketingItems || []).map(item =>
+        String(item?.id || "") === String(assignment.assignmentId)
+          ? { ...item, status: normalizedStatus, updatedAt: new Date().toISOString() }
+          : item
+      ),
+      activityLog: logAction(targetProject, assignment.talentName || "", `Marketing status → ${MM[normalizedStatus]?.label || titleCaseWords(normalizedStatus)}`, "event", {
+        assignmentId: assignment.assignmentId,
+        campaign: assignment.campaign || "",
+      }),
+    };
+    await saveProjectsList(projects.map(project => project.id === targetProject.id ? nextProject : project));
+    flash(`${assignment.talentName || "Assignment"} → ${MM[normalizedStatus]?.label || titleCaseWords(normalizedStatus)}`);
+  };
+
+  const updateTalentOverviewMarketingOwner = async (assignment, nextOwner) => {
+    if (!requireEditor()) return;
+    if (!assignment?.projectId || !assignment?.assignmentId) return;
+    const targetProject = projects.find(project => project.id === assignment.projectId);
+    if (!targetProject) {
+      flash("Could not find that live campaign source record", "err");
+      return;
+    }
+    const currentItem = (targetProject.marketingItems || []).find(item => String(item?.id || "") === String(assignment.assignmentId));
+    if (!currentItem) {
+      flash("Could not find that campaign assignment", "err");
+      return;
+    }
+    if (String(currentItem.owner || "") === String(nextOwner || "")) return;
+    const nextProject = {
+      ...targetProject,
+      marketingItems: (targetProject.marketingItems || []).map(item =>
+        String(item?.id || "") === String(assignment.assignmentId)
+          ? { ...item, owner: nextOwner || "", updatedAt: new Date().toISOString() }
+          : item
+      ),
+      activityLog: logAction(targetProject, assignment.talentName || "", nextOwner ? `Marketing owner → ${nextOwner}` : "Marketing owner cleared", "event", {
+        assignmentId: assignment.assignmentId,
+        campaign: assignment.campaign || "",
+      }),
+    };
+    await saveProjectsList(projects.map(project => project.id === targetProject.id ? nextProject : project));
+    flash(nextOwner ? `${assignment.talentName || "Assignment"} assigned to ${nextOwner}` : "Marketing owner cleared");
+  };
+
   const runIntel = async a => {
     if (!requireEditor()) return;
     setIntelLoading(true);
@@ -13475,6 +13586,37 @@ Requirements:
                                   {record.followUp && <div><strong style={{ color: C.tx }}>Follow-up:</strong> {record.followUp}</div>}
                                 </div>
                               )}
+                              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 10 }}>
+                                <label style={{ fontSize: 11, color: C.ts, display: "grid", gap: 4 }}>
+                                  <span>Kickoff stage</span>
+                                  <select
+                                    value={normalizeStageId(record.stage || "prospect")}
+                                    disabled={isReadOnly}
+                                    onChange={e => { void updateTalentOverviewKickoffStage(record, e.target.value); }}
+                                    style={{ ...iS, width: "100%", fontSize: 12, ...lockStyle(isReadOnly) }}
+                                  >
+                                    {KICKOFF_STAGE_ACTIONS.map(stage => (
+                                      <option key={`talent-stage-${record.projectId}-${record.artistName}-${stage.id}`} value={stage.id}>
+                                        {stage.label}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </label>
+                                <label style={{ fontSize: 11, color: C.ts, display: "grid", gap: 4 }}>
+                                  <span>Owner</span>
+                                  <select
+                                    value={record.owner || ""}
+                                    disabled={isReadOnly}
+                                    onChange={e => { void updateTalentOverviewKickoffOwner(record, e.target.value); }}
+                                    style={{ ...iS, width: "100%", fontSize: 12, ...lockStyle(isReadOnly) }}
+                                  >
+                                    <option value="">Unassigned</option>
+                                    {(projects.find(project => project.id === record.projectId)?.teamUsers || DEFAULT_TEAM_USERS).map(user => (
+                                      <option key={`talent-owner-${record.projectId}-${record.artistName}-${user}`} value={user}>{user}</option>
+                                    ))}
+                                  </select>
+                                </label>
+                              </div>
                             </div>
                             <button onClick={() => openTalentArRecord(record)} style={actionBtn(false, "neutral")}>
                               Source detail
@@ -13513,6 +13655,37 @@ Requirements:
                                   {assignment.rejectedReason && <div><strong style={{ color: C.tx }}>Rejected:</strong> {assignment.rejectedReason}</div>}
                                 </div>
                               )}
+                              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 10 }}>
+                                <label style={{ fontSize: 11, color: C.ts, display: "grid", gap: 4 }}>
+                                  <span>Campaign status</span>
+                                  <select
+                                    value={normalizeMarketingStatus(assignment.status || "prospect")}
+                                    disabled={isReadOnly}
+                                    onChange={e => { void updateTalentOverviewMarketingStatus(assignment, e.target.value); }}
+                                    style={{ ...iS, width: "100%", fontSize: 12, ...lockStyle(isReadOnly) }}
+                                  >
+                                    {MARKETING_STATUSES.map(status => (
+                                      <option key={`talent-assignment-status-${assignment.assignmentId}-${status.id}`} value={status.id}>
+                                        {status.label}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </label>
+                                <label style={{ fontSize: 11, color: C.ts, display: "grid", gap: 4 }}>
+                                  <span>Owner</span>
+                                  <select
+                                    value={assignment.owner || ""}
+                                    disabled={isReadOnly}
+                                    onChange={e => { void updateTalentOverviewMarketingOwner(assignment, e.target.value); }}
+                                    style={{ ...iS, width: "100%", fontSize: 12, ...lockStyle(isReadOnly) }}
+                                  >
+                                    <option value="">Unassigned</option>
+                                    {(projects.find(project => project.id === assignment.projectId)?.teamUsers || DEFAULT_TEAM_USERS).map(user => (
+                                      <option key={`talent-assignment-owner-${assignment.assignmentId}-${user}`} value={user}>{user}</option>
+                                    ))}
+                                  </select>
+                                </label>
+                              </div>
                             </div>
                             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
                               {assignment.briefUrl && <a href={assignment.briefUrl} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Brief</a>}
