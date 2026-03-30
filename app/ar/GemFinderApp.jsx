@@ -4189,7 +4189,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   };
 
   const addTeamMember = async () => {
-    if (!requireAdmin()) return;
+    if (!requireEditor()) return;
     if (!proj) return;
     const name = newTeamUser.trim();
     if (!name) return;
@@ -4202,7 +4202,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   };
 
   const addWorkspaceContact = async () => {
-    if (!requireAdmin()) return;
+    if (!requireEditor()) return;
     const name = newWorkspaceContact.trim();
     if (!name) return;
     if (workspaceTeamUsers.some(user => user.toLowerCase() === name.toLowerCase())) {
@@ -10357,8 +10357,8 @@ Requirements:
                     ))}
                   </div>
                   <div style={{ display: "flex", gap: 8, maxWidth: 420 }}>
-                    <input value={newWorkspaceContact} disabled={!isAdmin} onChange={e => setNewWorkspaceContact(e.target.value)} placeholder="Add workspace contact" style={{ ...iS, flex: 1, ...lockStyle(!isAdmin) }} />
-                    <button disabled={!isAdmin} onClick={addWorkspaceContact} style={{ padding: "8px 12px", borderRadius: 10, border: "none", background: C.ac, color: "#fff", cursor: isAdmin ? "pointer" : "not-allowed", fontSize: 12, fontWeight: 600, fontFamily: ft, ...lockStyle(!isAdmin) }}>
+                    <input value={newWorkspaceContact} disabled={!canEdit} onChange={e => setNewWorkspaceContact(e.target.value)} placeholder="Add workspace contact" style={{ ...iS, flex: 1, ...lockStyle(!canEdit) }} />
+                    <button disabled={!canEdit} onClick={addWorkspaceContact} style={{ padding: "8px 12px", borderRadius: 10, border: "none", background: C.ac, color: "#fff", cursor: canEdit ? "pointer" : "not-allowed", fontSize: 12, fontWeight: 600, fontFamily: ft, ...lockStyle(!canEdit) }}>
                       Add to all projects
                     </button>
                   </div>
@@ -10375,8 +10375,8 @@ Requirements:
                     ))}
                   </div>
                   <div style={{ display: "flex", gap: 8, maxWidth: 360 }}>
-                    <input value={newTeamUser} disabled={!isAdmin} onChange={e => setNewTeamUser(e.target.value)} placeholder="Add project-only user" style={{ ...iS, flex: 1, ...lockStyle(!isAdmin) }} />
-                    <button disabled={!isAdmin} onClick={addTeamMember} style={{ padding: "8px 12px", borderRadius: 10, border: "none", background: C.ac, color: "#fff", cursor: isAdmin ? "pointer" : "not-allowed", fontSize: 12, fontWeight: 600, fontFamily: ft, ...lockStyle(!isAdmin) }}>Add</button>
+                    <input value={newTeamUser} disabled={!canEdit} onChange={e => setNewTeamUser(e.target.value)} placeholder="Add project-only user" style={{ ...iS, flex: 1, ...lockStyle(!canEdit) }} />
+                    <button disabled={!canEdit} onClick={addTeamMember} style={{ padding: "8px 12px", borderRadius: 10, border: "none", background: C.ac, color: "#fff", cursor: canEdit ? "pointer" : "not-allowed", fontSize: 12, fontWeight: 600, fontFamily: ft, ...lockStyle(!canEdit) }}>Add</button>
                   </div>
                 </div>
               </div>
