@@ -105,7 +105,7 @@ function workspaceRoleLabel(role = "") {
     case "kickoff_curator":
       return "Kickoff · Curator";
     case "live_marketing":
-      return "Live CRM · Marketing";
+      return "Live Roster · Marketing";
     default:
       return "Workspace";
   }
@@ -3061,6 +3061,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [talentTargetOwner, setTalentTargetOwner] = useState("");
   const [talentTargetStatus, setTalentTargetStatus] = useState("prospect");
   const [talentTargetSaving, setTalentTargetSaving] = useState(false);
+  const [pendingWorkspaceAction, setPendingWorkspaceAction] = useState(null);
   const [liveCrmQuery, setLiveCrmQuery] = useState("");
   const [liveCrmTypeFilter, setLiveCrmTypeFilter] = useState("all");
   const [liveCrmSourceFilter, setLiveCrmSourceFilter] = useState("all");
@@ -3224,6 +3225,16 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     [workspaces, currentWorkspaceId]
   );
   const workspaceProjects = selectedWorkspace?.projects || [];
+  const kickoffArtistProjects = useMemo(
+    () => workspaceProjects.filter(project => normalizeProjectType(project.type) === "ar"),
+    [workspaceProjects]
+  );
+  const kickoffCuratorProjects = useMemo(
+    () => workspaceProjects.filter(project => normalizeProjectType(project.type) === "curator"),
+    [workspaceProjects]
+  );
+  const defaultKickoffArtistProject = kickoffArtistProjects[0] || null;
+  const defaultKickoffCuratorProject = kickoffCuratorProjects[0] || null;
   const workspaceProjectIds = useMemo(
     () => new Set(workspaceProjects.map(project => project.id)),
     [workspaceProjects]
@@ -3896,6 +3907,19 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     }
     openTalentProfileById(workspaceTalentData.marketingTalentIds.get(String(item.id || "")) || "");
   };
+  const openTalentProfileFromWorkspaceProfile = profile => {
+    if (!profile) {
+      flash("No shared talent profile found yet", "err");
+      return;
+    }
+    const fallbackArtistId = profile.primaryProjectId && profile.primaryArtistName
+      ? workspaceTalentData.artistTalentIds.get(`${profile.primaryProjectId}::${profile.primaryArtistName}`) || ""
+      : "";
+    const fallbackMarketingId = profile.primaryAssignmentId
+      ? workspaceTalentData.marketingTalentIds.get(String(profile.primaryAssignmentId || "")) || ""
+      : "";
+    openTalentProfileById(String(profile.id || fallbackMarketingId || fallbackArtistId || "").trim());
+  };
   const seedArtistEditForm = artist => setArtistEditForm({
     name: artist?.n || "",
     genre: artist?.g || "",
@@ -4162,6 +4186,19 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   }, [proj?.id, proj?.type, projectMode]);
 
   useEffect(() => {
+    if (!pendingWorkspaceAction || screen !== "project" || !proj?.id || proj.id !== pendingWorkspaceAction.projectId) return;
+    const nextAction = pendingWorkspaceAction.action;
+    setPendingWorkspaceAction(null);
+    if (nextAction === "show-add-artist") {
+      setShowAddArtist(true);
+      return;
+    }
+    if (nextAction === "import-csv") {
+      window.requestAnimationFrame(() => fr.current?.click?.());
+    }
+  }, [pendingWorkspaceAction, screen, proj?.id]);
+
+  useEffect(() => {
     if (!showTalentProfileModal) return;
     if (selectedTalentProfileId && workspaceTalentProfileMap.has(selectedTalentProfileId)) return;
     closeTalentProfileModal();
@@ -4421,6 +4458,15 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     }
     updateWorkspaceUrl(projectId, artistName, artistName ? "overview" : "", assignmentId);
     await persist(projects, projectId, undefined, undefined, undefined, undefined, undefined, targetProject.workspaceId || DEFAULT_WORKSPACE.id);
+  };
+  const launchWorkspaceProjectAction = async (projectId, action, missingMessage) => {
+    if (!requireEditor()) return;
+    if (!projectId) {
+      flash(missingMessage || "No underlying record is set up for that action yet", "err");
+      return;
+    }
+    setPendingWorkspaceAction({ projectId, action });
+    await openProjectWorkspace(projectId);
   };
 
   const toggleFocusMode = () => {
@@ -7663,10 +7709,10 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
               <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 3, textTransform: "uppercase", color: C.ac, marginBottom: 8 }}>Workspace</div>
               <div style={{ fontSize: 30, fontWeight: 800, letterSpacing: "-0.04em", marginBottom: 8 }}>{selectedWorkspace.name}</div>
               <div style={{ fontSize: 13, lineHeight: 1.6, color: C.ts, maxWidth: 560 }}>
-                This is the master workspace shell. Kickoff is the pre-live scout and onboarding layer. Live CRM is the live roster and campaign operating hub. The child projects underneath stay intact while we transition the product model.
+                This is the master workspace shell. Kickoff is the pre-live scout and onboarding layer. Live Roster is the live roster and campaign operating hub. The underlying records stay intact while we transition the product model.
               </div>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 14 }}>
-                <span style={{ ...mkP(true, C.ac, C.al), cursor: "default" }}>{selectedWorkspace.projects.length} child projects</span>
+                <span style={{ ...mkP(true, C.ac, C.al), cursor: "default" }}>{selectedWorkspace.projects.length} underlying records</span>
                 <span style={{ ...mkP(true, C.bu, C.bb), cursor: "default" }}>{selectedWorkspace.summary.kickoff} kickoff records</span>
                 <span style={{ ...mkP(true, C.lv, C.lvb), cursor: "default" }}>{selectedWorkspace.summary.live} live roster</span>
                 <span style={{ ...mkP(true, C.pr, C.pb), cursor: "default" }}>{selectedWorkspace.summary.assignments} marketing assignments</span>
@@ -7678,7 +7724,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                 <span>{kickoffOverview.talents}</span>
               </button>
               <button onClick={() => setScreen("live-crm")} style={{ ...actionBtn(false, "neutral"), width: "100%", justifyContent: "space-between" }}>
-                <span>Open Live CRM</span>
+                <span>Open Live Roster</span>
                 <span>{liveCrmOverview.liveTalents}</span>
               </button>
             </div>
@@ -7687,8 +7733,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
 
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
           <div>
-            <div style={{ fontSize: 15, fontWeight: 700 }}>Child Projects</div>
-            <div style={{ fontSize: 12, color: C.tt }}>These are the underlying project records currently powering this workspace.</div>
+            <div style={{ fontSize: 15, fontWeight: 700 }}>Underlying Records</div>
+            <div style={{ fontSize: 12, color: C.tt }}>These are the artist, curator, and marketing records still powering this workspace while we consolidate the flow.</div>
           </div>
           <div style={{ fontSize: 11, color: C.tt }}>{selectedWorkspace.roles.map(role => workspaceRoleLabel(role)).join(" · ") || "No mapped roles yet"}</div>
         </div>
@@ -7756,11 +7802,11 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
               <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 3, textTransform: "uppercase", color: C.ac, marginBottom: 8 }}>Kickoff</div>
               <div style={{ fontSize: 30, fontWeight: 800, letterSpacing: "-0.04em", marginBottom: 8 }}>{selectedWorkspace.name} · Kickoff</div>
               <div style={{ fontSize: 13, lineHeight: 1.6, color: C.ts, maxWidth: 560 }}>
-                This is the pre-live operating view for artist scouting, curator advocacy, and onboarding. Everyone here is still in motion. Once they go live, the same shared talent profile shows up inside Live CRM with the full history intact.
+                This is the pre-live operating view for artist scouting, curator advocacy, and onboarding. Everyone here is still in motion. Once they go live, the same shared talent profile shows up inside Live Roster with the full history intact.
               </div>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 14 }}>
                 <span style={{ ...mkP(true, C.ac, C.al), cursor: "default" }}>{kickoffOverview.talents} pre-live talent</span>
-                <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{kickoffOverview.projects} kickoff projects</span>
+                <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{kickoffOverview.projects} kickoff records</span>
                 <span style={{ ...mkP(true, C.bu, C.bb), cursor: "default" }}>{kickoffOverview.stages.contacted} contacted</span>
                 <span style={{ ...mkP(true, C.pr, C.pb), cursor: "default" }}>{kickoffOverview.stages.engaged} engaged</span>
                 <span style={{ ...mkP(true, C.ac, C.al), cursor: "default" }}>{kickoffOverview.stages.won} onboarding</span>
@@ -7771,7 +7817,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
             <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(120px, 1fr))", gap: 10 }}>
               {[
                 ["Pre-Live", kickoffOverview.talents, C.ac, C.al],
-                ["Projects", kickoffOverview.projects, C.ts, C.sa],
+                ["Records", kickoffOverview.projects, C.ts, C.sa],
                 ["Artists", kickoffOverview.artists, C.bu, C.bb],
                 ["Curators", kickoffOverview.curators, C.gn, C.gb],
                 ["Contacted", kickoffOverview.stages.contacted, C.bu, C.bb],
@@ -7783,6 +7829,48 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                 </div>
               ))}
             </div>
+          </div>
+        </div>
+
+        <div style={{ ...cS, padding: "18px 20px", marginBottom: 16 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, flexWrap: "wrap", marginBottom: 12 }}>
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>Kickoff Actions</div>
+              <div style={{ fontSize: 12, color: C.ts, maxWidth: 620 }}>
+                Use these to add or bulk-load new artists and curators without having to think about the underlying record structure. We still save through the underlying intake records so the current data stays safe.
+              </div>
+            </div>
+            <div style={{ fontSize: 11, color: C.tt, textAlign: "right" }}>
+              {defaultKickoffArtistProject ? `Artists feed into ${defaultKickoffArtistProject.name}` : "No artist intake record yet"}
+              <br />
+              {defaultKickoffCuratorProject ? `Curators feed into ${defaultKickoffCuratorProject.name}` : "No curator intake record yet"}
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <button
+              onClick={() => { void launchWorkspaceProjectAction(defaultKickoffArtistProject?.id || "", "show-add-artist", "No artist intake record is mapped in this workspace yet"); }}
+              style={{ ...actionBtn(true, "good"), ...lockStyle(isReadOnly) }}
+            >
+              + Artist
+            </button>
+            <button
+              onClick={() => { void launchWorkspaceProjectAction(defaultKickoffArtistProject?.id || "", "import-csv", "No artist intake record is mapped in this workspace yet"); }}
+              style={{ ...actionBtn(false, "neutral"), ...lockStyle(isReadOnly) }}
+            >
+              Bulk Add Artists
+            </button>
+            <button
+              onClick={() => { void launchWorkspaceProjectAction(defaultKickoffCuratorProject?.id || "", "show-add-artist", "No curator intake record is mapped in this workspace yet"); }}
+              style={{ ...actionBtn(true, "accent"), ...lockStyle(isReadOnly) }}
+            >
+              + Curator
+            </button>
+            <button
+              onClick={() => { void launchWorkspaceProjectAction(defaultKickoffCuratorProject?.id || "", "import-csv", "No curator intake record is mapped in this workspace yet"); }}
+              style={{ ...actionBtn(false, "neutral"), ...lockStyle(isReadOnly) }}
+            >
+              Bulk Add Curators
+            </button>
           </div>
         </div>
 
@@ -7849,8 +7937,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
             {kickoffProfiles.map(profile => (
               <div key={profile.id} style={{ ...cS, padding: "18px 20px" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "flex-start", flexWrap: "wrap", marginBottom: 14 }}>
-                  <div style={{ display: "grid", gap: 8 }}>
-                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                <div style={{ display: "grid", gap: 8 }}>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
                       <span style={{ fontSize: 24, fontWeight: 800, letterSpacing: "-0.03em" }}>{profile.displayName}</span>
                       <span style={{ ...mkP(true, talentLifecycleTone(profile.platformLifecycle, C).tone, talentLifecycleTone(profile.platformLifecycle, C).bg), cursor: "default" }}>
                         {TALENT_LIFECYCLE_LABELS[profile.platformLifecycle] || "Pre-Live"}
@@ -7879,21 +7967,21 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                         onClick={() => void openProjectWorkspace(profile.primaryProjectId, { artistName: profile.primaryArtistName })}
                         style={actionBtn(false, "neutral")}
                       >
-                        Open workspace
+                        Open kickoff record
                       </button>
                     )}
                     <button
-                      onClick={() => openTalentProfileById(profile.id)}
+                      onClick={() => openTalentProfileFromWorkspaceProfile(profile)}
                       style={actionBtn(false, "accent")}
                     >
-                      Open Talent Profile
+                      Open Shared Profile
                     </button>
                   </div>
                 </div>
 
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(110px, 1fr))", gap: 10, marginBottom: 14 }}>
                   {[
-                    ["Projects", profile.projectSummaries.length, C.ac, C.al],
+                    ["Records", profile.projectSummaries.length, C.ac, C.al],
                     ["Owners", profile.owners.length || "—", C.ts, C.sa],
                     ["Curated Artists", profile.curatedArtists.length || "—", C.gn, C.gb],
                     ["Sources", profile.sources.length, C.pr, C.pb],
@@ -7921,7 +8009,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                               onClick={() => void openProjectWorkspace(summary.projectId, { artistName: summary.leadArtistName })}
                               style={actionBtn(false, "neutral")}
                             >
-                              Open
+                              Open record
                             </button>
                           )}
                         </div>
@@ -7976,10 +8064,10 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         <div style={{ ...cS, marginBottom: 18, padding: "22px 24px", background: dark ? "linear-gradient(135deg, #111a2b 0%, #162238 100%)" : "linear-gradient(135deg, #ffffff 0%, #eef4ff 100%)" }}>
           <div style={{ display: "grid", gridTemplateColumns: "minmax(320px, 1.3fr) minmax(280px, 1fr)", gap: 18, alignItems: "stretch" }}>
             <div>
-              <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 3, textTransform: "uppercase", color: C.lv, marginBottom: 8 }}>Live CRM</div>
-              <div style={{ fontSize: 30, fontWeight: 800, letterSpacing: "-0.04em", marginBottom: 8 }}>{selectedWorkspace.name} · Live CRM</div>
+              <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 3, textTransform: "uppercase", color: C.lv, marginBottom: 8 }}>Live Roster</div>
+              <div style={{ fontSize: 30, fontWeight: 800, letterSpacing: "-0.04em", marginBottom: 8 }}>{selectedWorkspace.name} · Live Roster</div>
               <div style={{ fontSize: 13, lineHeight: 1.6, color: C.ts, maxWidth: 560 }}>
-                This is the shared live hub. Legacy roster talent already lives here, and pre-live artists or curators can graduate into this view without losing their notes, project history, or marketing context.
+                This is the shared live roster. Legacy roster talent already lives here, and pre-live artists or curators can graduate into this view without losing their notes, project history, or marketing context.
               </div>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 14 }}>
                 <span style={{ ...mkP(true, C.lv, C.lvb), cursor: "default" }}>{liveCrmOverview.liveTalents} live talent</span>
@@ -7995,7 +8083,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
             <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(120px, 1fr))", gap: 10 }}>
               {[
                 ["Live Talent", liveCrmOverview.liveTalents, C.lv, C.lvb],
-                ["Projects", liveCrmOverview.projects, C.ac, C.al],
+                ["Records", liveCrmOverview.projects, C.ac, C.al],
                 ["Campaigns", liveCrmOverview.campaigns, C.bu, C.bb],
                 ["Assignments", liveCrmOverview.assignments, C.pr, C.pb],
               ].map(([label, value, tone, bg]) => (
@@ -8091,21 +8179,21 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                         onClick={() => void openProjectWorkspace(profile.primaryProjectId, { assignmentId: profile.primaryAssignmentId })}
                         style={actionBtn(false, "neutral")}
                       >
-                        Open workspace
+                        Open live record
                       </button>
                     )}
                     <button
-                      onClick={() => openTalentProfileById(profile.id)}
+                      onClick={() => openTalentProfileFromWorkspaceProfile(profile)}
                       style={actionBtn(false, "accent")}
                     >
-                      Open Talent Profile
+                      Open Shared Profile
                     </button>
                   </div>
                 </div>
 
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(110px, 1fr))", gap: 10, marginBottom: 14 }}>
                   {[
-                    ["Projects", profile.projectSummaries.length, C.ac, C.al],
+                    ["Records", profile.projectSummaries.length, C.ac, C.al],
                     ["Campaigns", profile.campaigns.length, C.bu, C.bb],
                     ["Assignments", profile.marketingAssignments.length, C.pr, C.pb],
                     ["Owners", profile.owners.length || "—", C.ts, C.sa],
@@ -8134,7 +8222,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                               onClick={() => void openProjectWorkspace(summary.projectId, { assignmentId: summary.leadAssignmentId })}
                               style={actionBtn(false, "neutral")}
                             >
-                              Open
+                              Open record
                             </button>
                           )}
                         </div>
@@ -8226,7 +8314,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                 <span style={{ ...mkP(true, C.pr, C.pb) }}>{workspaceOverview.marketingItems} assignments</span>
                 <span style={{ ...mkP(true, C.bu, C.bb) }}>{workspaceOverview.contacted} contacted</span>
                 <span style={{ ...mkP(true, C.lv, C.lvb) }}>{workspaceOverview.live} live</span>
-                <span style={{ ...mkP(true, C.lv, C.gb) }}>{liveCrmOverview.liveTalents} in Live CRM</span>
+                <span style={{ ...mkP(true, C.lv, C.gb) }}>{liveCrmOverview.liveTalents} in Live Roster</span>
                 <span style={{ ...mkP(true, C.gn, C.gb) }}>{workspaceOverview.marketingComplete} complete</span>
                 <span style={{ ...mkP(true, C.ab, C.abb) }}>{workspaceOverview.due} due items</span>
                 {gmailStatus.available && <span style={{ ...mkP(true, gmailStatus.connections?.length ? C.gn : C.tt, gmailStatus.connections?.length ? C.gb : C.sa) }}>{gmailStatus.connections?.length || 0} connected mailboxes</span>}
@@ -8273,7 +8361,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                   <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 3, textTransform: "uppercase", color: C.ac, marginBottom: 6 }}>Workspace</div>
                   <div style={{ fontSize: 24, fontWeight: 800, letterSpacing: "-0.03em", marginBottom: 6 }}>{workspace.name}</div>
                   <div style={{ fontSize: 12, color: C.ts, lineHeight: 1.5 }}>
-                    Kickoff and Live CRM both live here, while the child projects stay intact underneath.
+                    Kickoff and Live Roster both live here, while the underlying records stay intact underneath.
                   </div>
                 </div>
                 {workspace.id === currentWorkspaceId && (
@@ -8282,7 +8370,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10, marginBottom: 12 }}>
                 {[
-                  ["Child Projects", workspace.projects.length, C.ac, C.al],
+                  ["Underlying Records", workspace.projects.length, C.ac, C.al],
                   ["Kickoff", workspace.summary.kickoff, C.bu, C.bb],
                   ["Live", workspace.summary.live, C.lv, C.lvb],
                   ["Assignments", workspace.summary.assignments, C.pr, C.pb],
@@ -8312,7 +8400,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
               Open Kickoff
             </button>
             <button onClick={() => setScreen("live-crm")} style={actionBtn(false, "accent")}>
-              Open Live CRM
+              Open Live Roster
             </button>
             <div style={{ fontSize: 11, color: C.tt }}>{gmailStatus.currentUserConnected ? `Your Gmail: ${gmailStatus.currentUserGmail}` : "Your Gmail is not connected yet"}</div>
           </div>
@@ -12252,7 +12340,7 @@ Requirements:
                 </div>
 
                 <div style={{ ...cS, padding: "18px 20px" }}>
-                  <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>Active in Projects</div>
+                  <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>Active Records</div>
                   <div style={{ fontSize: 12, color: C.ts, marginBottom: 12 }}>
                     Shared identity stays merged here, but each workspace keeps its own owners, stages, campaigns, and notes.
                   </div>
@@ -12263,7 +12351,7 @@ Requirements:
                           <div style={{ minWidth: 0 }}>
                             <div style={{ fontSize: 13, fontWeight: 700, color: C.tx, marginBottom: 4 }}>{summary.projectName}</div>
                             <div style={{ fontSize: 11, color: C.tt }}>
-                              {projectTypeLabel(summary.projectType)} workspace
+                              {projectTypeLabel(summary.projectType)} record
                               {" · "}
                               {summary.arRecords.length ? `${summary.arRecords.length} A&R record${summary.arRecords.length === 1 ? "" : "s"}` : "No A&R record"}
                               {" · "}
@@ -12279,7 +12367,7 @@ Requirements:
                             }}
                             style={actionBtn(false, "neutral")}
                           >
-                            Open project
+                            Open record
                           </button>
                         </div>
                         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -12307,7 +12395,7 @@ Requirements:
               <div style={{ ...cS, padding: "18px 20px", marginBottom: 16 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, marginBottom: 14 }}>
                   <div>
-                    <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>Add to project</div>
+                    <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>Add to record</div>
                     <div style={{ fontSize: 12, color: C.ts }}>
                       Reuse this shared talent in another workspace without retyping their profile details.
                     </div>
@@ -12327,13 +12415,13 @@ Requirements:
                         ? "Open Existing Assignment"
                         : talentTargetProjectType !== "marketing" && talentTargetExistingArRecord
                           ? `Open Existing ${talentTargetProjectType === "curator" ? "Curator" : "Artist"}`
-                          : "Add to Project"}
+                        : "Add to Record"}
                   </button>
                 </div>
 
                 <div style={{ display: "grid", gridTemplateColumns: talentTargetProjectType === "marketing" ? "1.2fr 1fr 1fr 1fr" : "1.4fr 1fr 1fr", gap: 12, alignItems: "end", marginBottom: 12 }}>
                   <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 6 }}>
-                    <span>Target project</span>
+                    <span>Target record</span>
                     <select
                       value={talentTargetProjectId}
                       onChange={e => setTalentTargetProjectId(e.target.value)}
