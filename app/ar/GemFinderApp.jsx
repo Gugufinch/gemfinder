@@ -17,6 +17,13 @@ const STAGES = [
   { id: "dead", label: "Dead", icon: "✕", description: "Closed out or not moving forward." },
 ];
 const SM = Object.fromEntries(STAGES.map(s => [s.id, s]));
+const KICKOFF_STAGE_ACTIONS = [
+  { id: "prospect", label: "Prospect" },
+  { id: "sent", label: "Contacted" },
+  { id: "engaged", label: "Engaged" },
+  { id: "won", label: "Onboarding" },
+  { id: "live", label: "Live" },
+];
 const PROJECT_TYPES = [
   { id: "ar", label: "A&R" },
   { id: "marketing", label: "Marketing" },
@@ -904,6 +911,14 @@ function isEngagedStage(stage) {
 }
 function isWonStage(stage) {
   return WON_STAGE_IDS.includes(stage);
+}
+function kickoffStageBucket(stages = []) {
+  const normalized = uniqStrings((stages || []).map(stage => normalizeStageId(stage)).filter(Boolean));
+  if (normalized.some(stage => stage === "live")) return "live";
+  if (normalized.some(stage => isWonStage(stage))) return "won";
+  if (normalized.some(stage => isEngagedStage(stage))) return "engaged";
+  if (normalized.some(stage => isContactedStage(stage))) return "contacted";
+  return "prospect";
 }
 function isClosedStage(stage) {
   return CLOSED_STAGE_IDS.includes(stage);
@@ -3044,6 +3059,9 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [marketingTrafficFilter, setMarketingTrafficFilter] = useState("all");
   const [marketingOwnerFilter, setMarketingOwnerFilter] = useState("__view__");
   const [marketingGroupFilter, setMarketingGroupFilter] = useState("all");
+  const [kickoffSelectionMode, setKickoffSelectionMode] = useState(false);
+  const [selectedKickoffIds, setSelectedKickoffIds] = useState(new Set());
+  const [kickoffSelectionOwnerDraft, setKickoffSelectionOwnerDraft] = useState("");
   const [marketingSelectionMode, setMarketingSelectionMode] = useState(false);
   const [selectedMarketingIds, setSelectedMarketingIds] = useState(new Set());
   const [marketingSelectionOwnerDraft, setMarketingSelectionOwnerDraft] = useState("");
@@ -3513,15 +3531,11 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     kickoffProfiles.forEach(profile => {
       if (profile.talentTypes.includes("Curator")) curators += 1;
       else artists += 1;
+      const bucket = kickoffStageBucket(profile.stages);
+      stages[bucket] = (stages[bucket] || 0) + 1;
       profile.projectSummaries.forEach(summary => {
         projectsSeen.add(summary.projectId || summary.projectName);
         summary.owners.forEach(owner => ownersSeen.add(owner));
-        summary.stages.forEach(stage => {
-          if (isEngagedStage(stage)) stages.engaged += 1;
-          else if (isWonStage(stage)) stages.won += 1;
-          else if (isContactedStage(stage)) stages.contacted += 1;
-          else if (stage === "prospect") stages.prospect += 1;
-        });
       });
     });
     return {
@@ -3633,6 +3647,19 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const selectedTalentProfile = useMemo(
     () => workspaceTalentProfileMap.get(selectedTalentProfileId) || null,
     [workspaceTalentProfileMap, selectedTalentProfileId]
+  );
+  const kickoffSelectedProfiles = useMemo(
+    () => [...selectedKickoffIds]
+      .map(id => workspaceTalentProfileMap.get(id))
+      .filter(profile => profile && profile.platformLifecycle !== "live"),
+    [selectedKickoffIds, workspaceTalentProfileMap]
+  );
+  const kickoffSelectedRecordCount = useMemo(
+    () => kickoffSelectedProfiles.reduce(
+      (sum, profile) => sum + profile.arRecords.filter(record => workspaceProjectIds.has(record.projectId)).length,
+      0
+    ),
+    [kickoffSelectedProfiles, workspaceProjectIds]
   );
   const selectedTalentProjectSummaries = useMemo(() => {
     if (!selectedTalentProfile) return [];
@@ -6954,6 +6981,103 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     setSelectedMarketingIds(new Set());
   };
 
+  const toggleKickoffSelection = profileId => {
+    setSelectedKickoffIds(prev => {
+      const next = new Set(prev);
+      if (next.has(profileId)) next.delete(profileId);
+      else next.add(profileId);
+      return next;
+    });
+  };
+
+  const clearKickoffSelection = () => {
+    setSelectedKickoffIds(new Set());
+    setKickoffSelectionOwnerDraft("");
+  };
+
+  const selectVisibleKickoffProfiles = () => {
+    const visibleIds = kickoffProfiles.map(profile => profile.id).filter(Boolean);
+    if (!visibleIds.length) {
+      flash("No visible kickoff talent to select", "err");
+      return;
+    }
+    setSelectedKickoffIds(new Set(visibleIds));
+    flash(`Selected ${visibleIds.length} kickoff talent row${visibleIds.length === 1 ? "" : "s"}`);
+  };
+
+  const batchAssignKickoffOwner = async owner => {
+    if (!requireEditor()) return;
+    if (!kickoffSelectedProfiles.length) {
+      flash("Select kickoff talent first", "err");
+      return;
+    }
+    const nextProjects = projects.map(project => {
+      const records = kickoffSelectedProfiles
+        .flatMap(profile => profile.arRecords)
+        .filter(record => record.projectId === project.id);
+      if (!records.length) return project;
+      let nextAssignments = { ...(project.assignments || {}) };
+      let nextActivityLog = project.activityLog || {};
+      records.forEach(record => {
+        if (owner) nextAssignments[record.artistName] = owner;
+        else delete nextAssignments[record.artistName];
+        nextActivityLog = logAction(
+          { ...project, activityLog: nextActivityLog },
+          record.artistName,
+          owner ? `Assigned to ${owner} (kickoff bulk)` : "Owner cleared (kickoff bulk)"
+        );
+      });
+      return {
+        ...project,
+        assignments: nextAssignments,
+        activityLog: nextActivityLog,
+      };
+    });
+    await saveProjectsList(nextProjects);
+    flash(owner
+      ? `Assigned ${kickoffSelectedProfiles.length} kickoff talent to ${owner}`
+      : `Cleared owner on ${kickoffSelectedProfiles.length} kickoff talent`);
+    clearKickoffSelection();
+  };
+
+  const batchSetKickoffStage = async stageId => {
+    if (!requireEditor()) return;
+    if (!kickoffSelectedProfiles.length) {
+      flash("Select kickoff talent first", "err");
+      return;
+    }
+    const normalizedStage = normalizeStageId(stageId);
+    const now = new Date().toISOString();
+    const nextProjects = projects.map(project => {
+      const records = kickoffSelectedProfiles
+        .flatMap(profile => profile.arRecords)
+        .filter(record => record.projectId === project.id);
+      if (!records.length) return project;
+      const nextPipeline = { ...(project.pipeline || {}) };
+      let nextActivityLog = project.activityLog || {};
+      records.forEach(record => {
+        nextPipeline[record.artistName] = {
+          ...(nextPipeline[record.artistName] || {}),
+          stage: normalizedStage,
+          date: now,
+        };
+        nextActivityLog = logAction(
+          { ...project, activityLog: nextActivityLog },
+          record.artistName,
+          `Stage → ${SM[normalizedStage]?.label || titleCaseWords(normalizedStage)} (kickoff bulk)`
+        );
+      });
+      return {
+        ...project,
+        pipeline: nextPipeline,
+        activityLog: nextActivityLog,
+      };
+    });
+    await saveProjectsList(nextProjects);
+    flash(`Moved ${kickoffSelectedProfiles.length} kickoff talent → ${SM[normalizedStage]?.label || titleCaseWords(normalizedStage)}`);
+    clearKickoffSelection();
+  };
+
   const selectVisibleMarketingItems = () => {
     const visibleIds = filteredMarketingItems.map(item => item.id).filter(Boolean);
     if (!visibleIds.length) {
@@ -8063,6 +8187,58 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
               Export Current View CSV
             </button>
           </div>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginTop: 12 }}>
+            <button
+              onClick={() => {
+                setKickoffSelectionMode(prev => {
+                  const next = !prev;
+                  if (!next) clearKickoffSelection();
+                  return next;
+                });
+              }}
+              style={{ ...actionBtn(kickoffSelectionMode, "neutral"), ...lockStyle(isReadOnly) }}
+            >
+              {kickoffSelectionMode ? "Done Selecting" : "Select Talent"}
+            </button>
+            {(kickoffSelectionMode || selectedKickoffIds.size > 0) && (
+              <>
+                <button onClick={selectVisibleKickoffProfiles} style={{ ...actionBtn(false, "neutral"), ...lockStyle(isReadOnly) }}>
+                  Select All Visible
+                </button>
+                <button onClick={clearKickoffSelection} style={{ ...actionBtn(false, "neutral"), ...lockStyle(!selectedKickoffIds.size) }}>
+                  Clear Selection
+                </button>
+                <span style={{ ...mkP(true, C.ac, C.al), cursor: "default" }}>
+                  {selectedKickoffIds.size} selected · {kickoffSelectedRecordCount} source record{kickoffSelectedRecordCount === 1 ? "" : "s"}
+                </span>
+                <select
+                  value={kickoffSelectionOwnerDraft}
+                  onChange={e => setKickoffSelectionOwnerDraft(e.target.value)}
+                  style={{ ...iS, width: 190, ...lockStyle(isReadOnly || !selectedKickoffIds.size) }}
+                >
+                  <option value="">Assign owner...</option>
+                  {(workspaceTeamUsers || DEFAULT_TEAM_USERS).map(owner => <option key={owner} value={owner}>{owner}</option>)}
+                  <option value="__clear__">Clear owner</option>
+                </select>
+                <button
+                  onClick={() => batchAssignKickoffOwner(kickoffSelectionOwnerDraft === "__clear__" ? "" : kickoffSelectionOwnerDraft)}
+                  style={{ ...actionBtn(false, "good"), ...lockStyle(isReadOnly || !selectedKickoffIds.size || !kickoffSelectionOwnerDraft) }}
+                >
+                  Apply Owner
+                </button>
+                {KICKOFF_STAGE_ACTIONS.map(stage => (
+                  <button
+                    key={`kickoff-bulk-stage-${stage.id}`}
+                    onClick={() => batchSetKickoffStage(stage.id)}
+                    style={{ ...mkP(false, sc(stage.id, C), sb(stage.id, C)), ...lockStyle(isReadOnly || !selectedKickoffIds.size) }}
+                    title={`Move selected kickoff talent to ${stage.label}`}
+                  >
+                    {stage.label}
+                  </button>
+                ))}
+              </>
+            )}
+          </div>
         </div>
 
         <div style={{ ...cS, padding: "18px 20px", marginBottom: 16 }}>
@@ -8126,7 +8302,15 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         ) : (
           <div style={{ display: "grid", gap: 14 }}>
             {kickoffProfiles.map(profile => (
-              <div key={profile.id} style={{ ...cS, padding: "18px 20px" }}>
+              <div
+                key={profile.id}
+                style={{
+                  ...cS,
+                  padding: "18px 20px",
+                  border: `1px solid ${selectedKickoffIds.has(profile.id) ? `${C.ac}55` : C.bd}`,
+                  background: selectedKickoffIds.has(profile.id) ? C.al : C.sf,
+                }}
+              >
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "flex-start", flexWrap: "wrap", marginBottom: 14 }}>
                 <div style={{ display: "grid", gap: 8 }}>
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
@@ -8153,6 +8337,14 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                   </div>
 
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    {kickoffSelectionMode && (
+                      <button
+                        onClick={() => toggleKickoffSelection(profile.id)}
+                        style={actionBtn(selectedKickoffIds.has(profile.id), "accent")}
+                      >
+                        {selectedKickoffIds.has(profile.id) ? "Selected" : "Select"}
+                      </button>
+                    )}
                     {profile.primaryProjectId && (
                       <button
                         onClick={() => void openProjectWorkspace(profile.primaryProjectId, { artistName: profile.primaryArtistName })}
