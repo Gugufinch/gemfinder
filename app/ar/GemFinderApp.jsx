@@ -404,6 +404,18 @@ function curatedArtistSlots(value) {
 function uniqStrings(values = []) {
   return Array.from(new Set(values.filter(Boolean)));
 }
+function normalizeTeamUsers(values = []) {
+  const seen = new Set();
+  return values
+    .map(value => String(value || "").trim())
+    .filter(Boolean)
+    .filter(value => {
+      const key = value.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
 function normalizeMarketingChannels(value) {
   const aliasMap = {
     instagram: "Instagram",
@@ -2999,6 +3011,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [discLoading, setDiscLoading] = useState(false);
   const [showModels, setShowModels] = useState(false);
   const [showTeam, setShowTeam] = useState(false);
+  const [newWorkspaceContact, setNewWorkspaceContact] = useState("");
   const [newTeamUser, setNewTeamUser] = useState("");
   const [workspaceUser, setWorkspaceUser] = useState(ALL_USER_VIEW);
   const [layoutByUser, setLayoutByUser] = useState({});
@@ -3072,6 +3085,13 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const isMarketingProject = projectType === "marketing";
   const isCuratorProject = projectType === "curator";
   const isArProject = projectType === "ar";
+  const workspaceTeamUsers = useMemo(
+    () => normalizeTeamUsers([
+      ...DEFAULT_TEAM_USERS,
+      ...projects.flatMap(project => Array.isArray(project?.teamUsers) ? project.teamUsers : []),
+    ]),
+    [projects]
+  );
   const workspaceTalentData = useMemo(() => collectWorkspaceTalentProfiles(projects), [projects]);
   const workspaceTalentProfiles = workspaceTalentData.profiles;
   const workspaceTalentProfileMap = useMemo(
@@ -4175,10 +4195,31 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     if (!name) return;
     const exists = (proj.teamUsers || []).some(u => u.toLowerCase() === name.toLowerCase());
     if (exists) { flash("User already exists", "err"); return; }
-    const nextProj = { ...proj, teamUsers: [...(proj.teamUsers || []), name] };
+    const nextProj = { ...proj, teamUsers: normalizeTeamUsers([...(proj.teamUsers || []), name]) };
     await saveProject(nextProj);
     setNewTeamUser("");
     flash(`Added ${name}`);
+  };
+
+  const addWorkspaceContact = async () => {
+    if (!requireAdmin()) return;
+    const name = newWorkspaceContact.trim();
+    if (!name) return;
+    if (workspaceTeamUsers.some(user => user.toLowerCase() === name.toLowerCase())) {
+      flash("Workspace contact already exists", "err");
+      return;
+    }
+    if (!projects.length) {
+      flash("Create a project first so this workspace contact has somewhere to live", "err");
+      return;
+    }
+    const nextProjects = projects.map(project => ({
+      ...project,
+      teamUsers: normalizeTeamUsers([...(project.teamUsers || []), name]),
+    }));
+    await saveProjectsList(nextProjects);
+    setNewWorkspaceContact("");
+    flash(`Added ${name} to all projects`);
   };
 
   const assignOwner = async (artistName, owner) => {
@@ -4536,7 +4577,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       abCredits: {},
       archivedArtists: [],
       marketingItems: [],
-      teamUsers: [...DEFAULT_TEAM_USERS],
+      teamUsers: [...workspaceTeamUsers],
       assignments: {},
       replyIntel: {},
       internalRoster: {
@@ -10306,14 +10347,35 @@ Requirements:
                 </div>}
 
                 <div style={{ ...cS, boxShadow: "none", padding: "14px 16px", background: C.sa, gridColumn: "1 / -1" }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>Team</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>Workspace Contacts</div>
+                  <div style={{ fontSize: 11, color: C.tt, lineHeight: 1.5, marginBottom: 10 }}>
+                    Add someone here once and they become available in every project owner dropdown, including future projects.
+                  </div>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+                    {workspaceTeamUsers.map(u => (
+                      <span key={u} style={{ fontSize: 11, padding: "4px 10px", borderRadius: 999, border: `1px solid ${C.bd}`, background: C.sf, color: C.ts }}>{u}</span>
+                    ))}
+                  </div>
+                  <div style={{ display: "flex", gap: 8, maxWidth: 420 }}>
+                    <input value={newWorkspaceContact} disabled={!isAdmin} onChange={e => setNewWorkspaceContact(e.target.value)} placeholder="Add workspace contact" style={{ ...iS, flex: 1, ...lockStyle(!isAdmin) }} />
+                    <button disabled={!isAdmin} onClick={addWorkspaceContact} style={{ padding: "8px 12px", borderRadius: 10, border: "none", background: C.ac, color: "#fff", cursor: isAdmin ? "pointer" : "not-allowed", fontSize: 12, fontWeight: 600, fontFamily: ft, ...lockStyle(!isAdmin) }}>
+                      Add to all projects
+                    </button>
+                  </div>
+                </div>
+
+                <div style={{ ...cS, boxShadow: "none", padding: "14px 16px", background: C.sa, gridColumn: "1 / -1" }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>Project Team</div>
+                  <div style={{ fontSize: 11, color: C.tt, lineHeight: 1.5, marginBottom: 10 }}>
+                    Use this if someone should only appear inside this project. Workspace Contacts above are shared everywhere.
+                  </div>
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
                     {(proj.teamUsers || []).map(u => (
                       <span key={u} style={{ fontSize: 11, padding: "4px 10px", borderRadius: 999, border: `1px solid ${C.bd}`, background: C.sf, color: C.ts }}>{u}</span>
                     ))}
                   </div>
                   <div style={{ display: "flex", gap: 8, maxWidth: 360 }}>
-                    <input value={newTeamUser} disabled={!isAdmin} onChange={e => setNewTeamUser(e.target.value)} placeholder="Add team user" style={{ ...iS, flex: 1, ...lockStyle(!isAdmin) }} />
+                    <input value={newTeamUser} disabled={!isAdmin} onChange={e => setNewTeamUser(e.target.value)} placeholder="Add project-only user" style={{ ...iS, flex: 1, ...lockStyle(!isAdmin) }} />
                     <button disabled={!isAdmin} onClick={addTeamMember} style={{ padding: "8px 12px", borderRadius: 10, border: "none", background: C.ac, color: "#fff", cursor: isAdmin ? "pointer" : "not-allowed", fontSize: 12, fontWeight: 600, fontFamily: ft, ...lockStyle(!isAdmin) }}>Add</button>
                   </div>
                 </div>
