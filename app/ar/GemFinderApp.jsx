@@ -3053,6 +3053,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [marketingBulkDefaultCampaign, setMarketingBulkDefaultCampaign] = useState("");
   const [marketingBulkDefaultStatus, setMarketingBulkDefaultStatus] = useState("prospect");
   const [marketingBulkDefaultOwner, setMarketingBulkDefaultOwner] = useState("");
+  const [showWorkspaceSourceRecords, setShowWorkspaceSourceRecords] = useState(false);
   const [showTalentProfileModal, setShowTalentProfileModal] = useState(false);
   const [selectedTalentProfileId, setSelectedTalentProfileId] = useState("");
   const [talentTargetProjectId, setTalentTargetProjectId] = useState("");
@@ -3756,6 +3757,10 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       border: `1px solid ${active ? tone.bd : C.bd}`,
       background: active ? tone.bg : C.sf,
       color: active ? tone.fg : C.ts,
+      display: "inline-flex",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 8,
       cursor: "pointer",
       fontSize: 12,
       fontWeight: 600,
@@ -7712,20 +7717,56 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                 This is the master workspace shell. Kickoff is the pre-live scout and onboarding layer. Live Roster is the live roster and campaign operating hub. The underlying records stay intact while we transition the product model.
               </div>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 14 }}>
-                <span style={{ ...mkP(true, C.ac, C.al), cursor: "default" }}>{selectedWorkspace.projects.length} underlying records</span>
-                <span style={{ ...mkP(true, C.bu, C.bb), cursor: "default" }}>{selectedWorkspace.summary.kickoff} kickoff records</span>
-                <span style={{ ...mkP(true, C.lv, C.lvb), cursor: "default" }}>{selectedWorkspace.summary.live} live roster</span>
-                <span style={{ ...mkP(true, C.pr, C.pb), cursor: "default" }}>{selectedWorkspace.summary.assignments} marketing assignments</span>
+                <span style={{ ...mkP(true, C.ac, C.al), cursor: "default" }}>{selectedWorkspace.projects.length} source records</span>
+                <span style={{ ...mkP(true, C.bu, C.bb), cursor: "default" }}>{kickoffOverview.talents} pre-live talent</span>
+                <span style={{ ...mkP(true, C.lv, C.lvb), cursor: "default" }}>{liveCrmOverview.liveTalents} live talent</span>
+                <span style={{ ...mkP(true, C.pr, C.pb), cursor: "default" }}>{liveCrmOverview.assignments} marketing assignments</span>
               </div>
             </div>
             <div style={{ display: "grid", gap: 12, alignContent: "start" }}>
-              <button onClick={() => setScreen("kickoff")} style={{ ...actionBtn(false, "accent"), width: "100%", justifyContent: "space-between" }}>
-                <span>Open Kickoff</span>
-                <span>{kickoffOverview.talents}</span>
+              <button
+                onClick={() => setScreen("kickoff")}
+                style={{
+                  borderRadius: 16,
+                  border: `1px solid ${C.ac}40`,
+                  background: C.al,
+                  padding: "16px 18px",
+                  cursor: "pointer",
+                  display: "grid",
+                  gap: 6,
+                  textAlign: "left",
+                  fontFamily: ft,
+                }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
+                  <span style={{ fontSize: 16, fontWeight: 800, color: C.ac }}>Open Kickoff</span>
+                  <span style={{ ...mkP(true, C.ac, C.sf), cursor: "pointer" }}>{kickoffOverview.talents}</span>
+                </div>
+                <div style={{ fontSize: 12, color: C.ts, lineHeight: 1.5 }}>
+                  Intake, scouting, curator advocacy, and onboarding for all pre-live talent.
+                </div>
               </button>
-              <button onClick={() => setScreen("live-crm")} style={{ ...actionBtn(false, "neutral"), width: "100%", justifyContent: "space-between" }}>
-                <span>Open Live Roster</span>
-                <span>{liveCrmOverview.liveTalents}</span>
+              <button
+                onClick={() => setScreen("live-crm")}
+                style={{
+                  borderRadius: 16,
+                  border: `1px solid ${C.lv}40`,
+                  background: C.lvb,
+                  padding: "16px 18px",
+                  cursor: "pointer",
+                  display: "grid",
+                  gap: 6,
+                  textAlign: "left",
+                  fontFamily: ft,
+                }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
+                  <span style={{ fontSize: 16, fontWeight: 800, color: C.lv }}>Open Live Roster</span>
+                  <span style={{ ...mkP(true, C.lv, C.sf), cursor: "pointer" }}>{liveCrmOverview.liveTalents}</span>
+                </div>
+                <div style={{ fontSize: 12, color: C.ts, lineHeight: 1.5 }}>
+                  Shared live talent roster with campaign assignments, groups, and marketing operations.
+                </div>
               </button>
             </div>
           </div>
@@ -7733,48 +7774,58 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
 
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
           <div>
-            <div style={{ fontSize: 15, fontWeight: 700 }}>Underlying Records</div>
-            <div style={{ fontSize: 12, color: C.tt }}>These are the artist, curator, and marketing records still powering this workspace while we consolidate the flow.</div>
+            <div style={{ fontSize: 15, fontWeight: 700 }}>Source Records</div>
+            <div style={{ fontSize: 12, color: C.tt }}>These are the underlying records still powering this workspace while Kickoff and Live Roster become the main operating surfaces.</div>
           </div>
-          <div style={{ fontSize: 11, color: C.tt }}>{selectedWorkspace.roles.map(role => workspaceRoleLabel(role)).join(" · ") || "No mapped roles yet"}</div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <div style={{ fontSize: 11, color: C.tt }}>{selectedWorkspace.roles.map(role => workspaceRoleLabel(role)).join(" · ") || "No mapped roles yet"}</div>
+            <button
+              onClick={() => setShowWorkspaceSourceRecords(prev => !prev)}
+              style={actionBtn(false, "neutral")}
+            >
+              {showWorkspaceSourceRecords ? "Hide Source Records" : "Show Source Records"}
+            </button>
+          </div>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(300px,1fr))", gap: 16 }}>
-          {selectedWorkspace.projects.map((project, index) => {
-            const summary = summarizeProjectForHub(project, todayISO());
-            const toneColor = normalizeProjectType(project.type) === "marketing" ? C.pr : normalizeProjectType(project.type) === "curator" ? C.gn : C.ac;
-            const toneBg = normalizeProjectType(project.type) === "marketing" ? C.pb : normalizeProjectType(project.type) === "curator" ? C.gb : C.al;
-            return (
-              <div
-                key={project.id}
-                onClick={() => { void openProjectWorkspace(project.id); }}
-                style={{ ...cS, padding: "20px 22px", cursor: "pointer", transition: "all 0.2s", animation: `fu 0.3s ease ${index * 0.05}s both` }}
-                onMouseEnter={e => { e.currentTarget.style.borderColor = C.ac; e.currentTarget.style.boxShadow = C.sm; }}
-                onMouseLeave={e => { e.currentTarget.style.borderColor = C.bd; e.currentTarget.style.boxShadow = C.sw; }}
-              >
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "flex-start", marginBottom: 10 }}>
-                  <div>
-                    <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 4 }}>{project.name}</div>
-                    <div style={{ fontSize: 12, color: C.ts }}>{workspaceRoleLabel(project.workspaceRole)}</div>
+        {showWorkspaceSourceRecords && (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(300px,1fr))", gap: 16 }}>
+            {selectedWorkspace.projects.map((project, index) => {
+              const summary = summarizeProjectForHub(project, todayISO());
+              const toneColor = normalizeProjectType(project.type) === "marketing" ? C.pr : normalizeProjectType(project.type) === "curator" ? C.gn : C.ac;
+              const toneBg = normalizeProjectType(project.type) === "marketing" ? C.pb : normalizeProjectType(project.type) === "curator" ? C.gb : C.al;
+              return (
+                <div
+                  key={project.id}
+                  onClick={() => { void openProjectWorkspace(project.id); }}
+                  style={{ ...cS, padding: "20px 22px", cursor: "pointer", transition: "all 0.2s", animation: `fu 0.3s ease ${index * 0.05}s both` }}
+                  onMouseEnter={e => { e.currentTarget.style.borderColor = C.ac; e.currentTarget.style.boxShadow = C.sm; }}
+                  onMouseLeave={e => { e.currentTarget.style.borderColor = C.bd; e.currentTarget.style.boxShadow = C.sw; }}
+                >
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "flex-start", marginBottom: 10 }}>
+                    <div>
+                      <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 4 }}>{project.name}</div>
+                      <div style={{ fontSize: 12, color: C.ts }}>{workspaceRoleLabel(project.workspaceRole)}</div>
+                    </div>
+                    <span style={{ ...mkP(true, toneColor, toneBg), cursor: "default" }}>{projectTypeLabel(project.type)}</span>
                   </div>
-                  <span style={{ ...mkP(true, toneColor, toneBg), cursor: "default" }}>{projectTypeLabel(project.type)}</span>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10 }}>
+                    {(summary.cards || []).map(([label, value, tone]) => {
+                      const fg = tone === "good" ? C.gn : tone === "live" ? C.lv : tone === "accent" ? C.ac : tone === "warn" ? C.ab : C.tx;
+                      const bg = tone === "good" ? C.gb : tone === "live" ? C.lvb : tone === "accent" ? C.al : tone === "warn" ? C.abb : C.sa;
+                      return (
+                        <div key={`${project.id}:${label}`} style={{ borderRadius: 12, border: `1px solid ${C.bd}`, background: bg, padding: "10px 12px" }}>
+                          <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 1, color: C.tt, marginBottom: 6 }}>{label}</div>
+                          <div style={{ fontSize: 20, fontWeight: 800, color: fg, lineHeight: 1 }}>{value}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10 }}>
-                  {(summary.cards || []).map(([label, value, tone]) => {
-                    const fg = tone === "good" ? C.gn : tone === "live" ? C.lv : tone === "accent" ? C.ac : tone === "warn" ? C.ab : C.tx;
-                    const bg = tone === "good" ? C.gb : tone === "live" ? C.lvb : tone === "accent" ? C.al : tone === "warn" ? C.abb : C.sa;
-                    return (
-                      <div key={`${project.id}:${label}`} style={{ borderRadius: 12, border: `1px solid ${C.bd}`, background: bg, padding: "10px 12px" }}>
-                        <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 1, color: C.tt, marginBottom: 6 }}>{label}</div>
-                        <div style={{ fontSize: 20, fontWeight: 800, color: fg, lineHeight: 1 }}>{value}</div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            );
-          })}
-        </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     </div>
   );
