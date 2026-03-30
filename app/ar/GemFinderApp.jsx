@@ -3026,6 +3026,11 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [liveCrmTypeFilter, setLiveCrmTypeFilter] = useState("all");
   const [liveCrmSourceFilter, setLiveCrmSourceFilter] = useState("all");
   const [liveCrmOwnerFilter, setLiveCrmOwnerFilter] = useState("all");
+  const [kickoffQuery, setKickoffQuery] = useState("");
+  const [kickoffTypeFilter, setKickoffTypeFilter] = useState("all");
+  const [kickoffSourceFilter, setKickoffSourceFilter] = useState("all");
+  const [kickoffOwnerFilter, setKickoffOwnerFilter] = useState("all");
+  const [kickoffStageFilter, setKickoffStageFilter] = useState("all");
 
   const [batch, setBatch] = useState(false);
   const [bSel, setBSel] = useState(new Set());
@@ -3298,6 +3303,125 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       creators,
     };
   }, [liveCrmProfiles]);
+  const kickoffBaseProfiles = useMemo(
+    () => workspaceTalentProfiles.filter(profile => profile.platformLifecycle !== "live" && profile.arRecords.length > 0),
+    [workspaceTalentProfiles]
+  );
+  const kickoffTypeOptions = useMemo(
+    () => uniqStrings(kickoffBaseProfiles.flatMap(profile => profile.talentTypes || []).filter(Boolean)).sort((a, b) => a.localeCompare(b)),
+    [kickoffBaseProfiles]
+  );
+  const kickoffSourceOptions = useMemo(
+    () => uniqStrings(kickoffBaseProfiles.flatMap(profile => profile.sources || []).filter(Boolean)),
+    [kickoffBaseProfiles]
+  );
+  const kickoffOwnerOptions = useMemo(
+    () => uniqStrings(kickoffBaseProfiles.flatMap(profile => profile.arRecords.map(record => record.owner).filter(Boolean))).sort((a, b) => a.localeCompare(b)),
+    [kickoffBaseProfiles]
+  );
+  const kickoffProfiles = useMemo(() => {
+    const query = kickoffQuery.trim().toLowerCase();
+    return kickoffBaseProfiles
+      .map(profile => {
+        const projectSummaries = profile.arRecords
+          .reduce((map, record) => {
+            const key = String(record.projectId || "");
+            if (!map.has(key)) {
+              map.set(key, {
+                projectId: key,
+                projectName: record.projectName || "Untitled Project",
+                projectType: normalizeProjectType(record.projectType || "ar"),
+                owners: [],
+                stages: [],
+                genres: [],
+                locations: [],
+                leadArtistName: "",
+              });
+            }
+            const summary = map.get(key);
+            if (record.owner) summary.owners.push(record.owner);
+            if (record.stage) summary.stages.push(record.stage);
+            if (record.genre) summary.genres.push(record.genre);
+            if (record.location) summary.locations.push(record.location);
+            if (!summary.leadArtistName) summary.leadArtistName = record.artistName || "";
+            return map;
+          }, new Map());
+
+        const normalizedProjectSummaries = [...projectSummaries.values()]
+          .map(summary => ({
+            ...summary,
+            owners: uniqStrings(summary.owners.filter(Boolean)),
+            stages: uniqStrings(summary.stages.filter(Boolean)),
+            genres: uniqStrings(summary.genres.filter(Boolean)),
+            locations: uniqStrings(summary.locations.filter(Boolean)),
+          }))
+          .sort((a, b) => a.projectName.localeCompare(b.projectName));
+
+        const owners = uniqStrings(normalizedProjectSummaries.flatMap(item => item.owners));
+        const stages = uniqStrings(normalizedProjectSummaries.flatMap(item => item.stages));
+        const searchHaystack = [
+          profile.displayName,
+          profile.primaryEmail,
+          ...(profile.aliases || []),
+          ...(profile.talentTypes || []),
+          ...(profile.sources || []),
+          profile.instagramHandle,
+          profile.tiktokHandle,
+          ...normalizedProjectSummaries.map(item => item.projectName),
+          ...owners,
+          ...stages,
+        ].filter(Boolean).join(" ").toLowerCase();
+
+        return {
+          ...profile,
+          owners,
+          stages,
+          projectSummaries: normalizedProjectSummaries,
+          primaryProjectId: normalizedProjectSummaries[0]?.projectId || "",
+          primaryArtistName: normalizedProjectSummaries[0]?.leadArtistName || "",
+          searchHaystack,
+        };
+      })
+      .filter(profile => {
+        if (query && !profile.searchHaystack.includes(query)) return false;
+        if (kickoffTypeFilter !== "all" && !profile.talentTypes.some(type => canonicalArtistName(type) === kickoffTypeFilter)) return false;
+        if (kickoffSourceFilter !== "all" && !profile.sources.includes(kickoffSourceFilter)) return false;
+        if (kickoffOwnerFilter === "__unassigned__" && profile.owners.length) return false;
+        if (kickoffOwnerFilter !== "all" && kickoffOwnerFilter !== "__unassigned__" && !profile.owners.includes(kickoffOwnerFilter)) return false;
+        if (kickoffStageFilter !== "all" && !profile.stages.includes(kickoffStageFilter)) return false;
+        return true;
+      })
+      .sort((a, b) => a.displayName.localeCompare(b.displayName));
+  }, [kickoffBaseProfiles, kickoffOwnerFilter, kickoffQuery, kickoffSourceFilter, kickoffStageFilter, kickoffTypeFilter]);
+  const kickoffOverview = useMemo(() => {
+    const projectsSeen = new Set();
+    const ownersSeen = new Set();
+    const stages = { prospect: 0, contacted: 0, engaged: 0, won: 0, live: 0 };
+    let curators = 0;
+    let artists = 0;
+    kickoffProfiles.forEach(profile => {
+      if (profile.talentTypes.includes("Curator")) curators += 1;
+      else artists += 1;
+      profile.projectSummaries.forEach(summary => {
+        projectsSeen.add(summary.projectId || summary.projectName);
+        summary.owners.forEach(owner => ownersSeen.add(owner));
+        summary.stages.forEach(stage => {
+          if (isEngagedStage(stage)) stages.engaged += 1;
+          else if (isWonStage(stage)) stages.won += 1;
+          else if (isContactedStage(stage)) stages.contacted += 1;
+          else if (stage === "prospect") stages.prospect += 1;
+        });
+      });
+    });
+    return {
+      talents: kickoffProfiles.length,
+      projects: projectsSeen.size,
+      owners: ownersSeen.size,
+      artists,
+      curators,
+      stages,
+    };
+  }, [kickoffProfiles]);
   const workspaceTalentProfileMap = useMemo(
     () => new Map(workspaceTalentProfiles.map(profile => [profile.id, profile])),
     [workspaceTalentProfiles]
@@ -7384,6 +7508,229 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     </button>
   );
 
+  // ═══ KICKOFF ═══
+  if (screen === "kickoff") return (
+    <div style={{ fontFamily: ft, background: C.bg, minHeight: "100vh", color: C.tx }}>
+      <Toast /><style>{css}</style>
+      <div style={{ borderBottom: `1px solid ${C.bd}`, background: C.sf }}>
+        <div style={{ maxWidth: 1180, margin: "0 auto", padding: "16px 24px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <button
+            onClick={() => { setScreen("hub"); updateWorkspaceUrl("", "", "", ""); }}
+            style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, fontFamily: ft, color: C.ac, fontWeight: 600 }}
+          >
+            ← Project Home
+          </button>
+          <DkBtn />
+        </div>
+      </div>
+
+      <div style={{ maxWidth: 1180, margin: "0 auto", padding: "24px" }}>
+        <div style={{ ...cS, marginBottom: 18, padding: "22px 24px", background: dark ? "linear-gradient(135deg, #111a2b 0%, #162238 100%)" : "linear-gradient(135deg, #ffffff 0%, #eef4ff 100%)" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(320px, 1.3fr) minmax(280px, 1fr)", gap: 18, alignItems: "stretch" }}>
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 3, textTransform: "uppercase", color: C.ac, marginBottom: 8 }}>Kickoff</div>
+              <div style={{ fontSize: 30, fontWeight: 800, letterSpacing: "-0.04em", marginBottom: 8 }}>Scout + Onboarding</div>
+              <div style={{ fontSize: 13, lineHeight: 1.6, color: C.ts, maxWidth: 560 }}>
+                This is the pre-live operating view for artist scouting, curator advocacy, and onboarding. Everyone here is still in motion. Once they go live, the same shared talent profile shows up inside Live CRM with the full history intact.
+              </div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 14 }}>
+                <span style={{ ...mkP(true, C.ac, C.al), cursor: "default" }}>{kickoffOverview.talents} pre-live talent</span>
+                <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{kickoffOverview.projects} kickoff projects</span>
+                <span style={{ ...mkP(true, C.bu, C.bb), cursor: "default" }}>{kickoffOverview.stages.contacted} contacted</span>
+                <span style={{ ...mkP(true, C.pr, C.pb), cursor: "default" }}>{kickoffOverview.stages.engaged} engaged</span>
+                <span style={{ ...mkP(true, C.ac, C.al), cursor: "default" }}>{kickoffOverview.stages.won} onboarding</span>
+                {kickoffOverview.curators > 0 && <span style={{ ...mkP(true, C.gn, C.gb), cursor: "default" }}>{kickoffOverview.curators} curators</span>}
+              </div>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(120px, 1fr))", gap: 10 }}>
+              {[
+                ["Pre-Live", kickoffOverview.talents, C.ac, C.al],
+                ["Projects", kickoffOverview.projects, C.ts, C.sa],
+                ["Artists", kickoffOverview.artists, C.bu, C.bb],
+                ["Curators", kickoffOverview.curators, C.gn, C.gb],
+                ["Contacted", kickoffOverview.stages.contacted, C.bu, C.bb],
+                ["Onboarding", kickoffOverview.stages.won, C.ac, C.al],
+              ].map(([label, value, tone, bg]) => (
+                <div key={label} style={{ borderRadius: 14, border: `1px solid ${C.bd}`, background: bg, padding: "14px 16px" }}>
+                  <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 1.2, color: C.tt, marginBottom: 8 }}>{label}</div>
+                  <div style={{ fontSize: 26, fontWeight: 800, color: tone, lineHeight: 1 }}>{value}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div style={{ ...cS, padding: "18px 20px", marginBottom: 16 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(260px, 1.2fr) repeat(4, minmax(150px, 0.8fr))", gap: 12, alignItems: "end" }}>
+            <label style={{ display: "grid", gap: 6, fontSize: 12, color: C.ts }}>
+              <span>Search kickoff talent</span>
+              <input
+                value={kickoffQuery}
+                onChange={e => setKickoffQuery(e.target.value)}
+                placeholder="Search name, email, project, owner..."
+                style={{ ...iS, width: "100%" }}
+              />
+            </label>
+            <label style={{ display: "grid", gap: 6, fontSize: 12, color: C.ts }}>
+              <span>Talent type</span>
+              <select value={kickoffTypeFilter} onChange={e => setKickoffTypeFilter(e.target.value)} style={{ ...iS, width: "100%" }}>
+                <option value="all">All types</option>
+                {kickoffTypeOptions.map(type => (
+                  <option key={type} value={canonicalArtistName(type)}>{type}</option>
+                ))}
+              </select>
+            </label>
+            <label style={{ display: "grid", gap: 6, fontSize: 12, color: C.ts }}>
+              <span>Source</span>
+              <select value={kickoffSourceFilter} onChange={e => setKickoffSourceFilter(e.target.value)} style={{ ...iS, width: "100%" }}>
+                <option value="all">All sources</option>
+                {kickoffSourceOptions.map(source => (
+                  <option key={source} value={source}>{TALENT_SOURCE_LABELS[source] || source}</option>
+                ))}
+              </select>
+            </label>
+            <label style={{ display: "grid", gap: 6, fontSize: 12, color: C.ts }}>
+              <span>Owner</span>
+              <select value={kickoffOwnerFilter} onChange={e => setKickoffOwnerFilter(e.target.value)} style={{ ...iS, width: "100%" }}>
+                <option value="all">All owners</option>
+                <option value="__unassigned__">Unassigned</option>
+                {kickoffOwnerOptions.map(owner => (
+                  <option key={owner} value={owner}>{owner}</option>
+                ))}
+              </select>
+            </label>
+            <label style={{ display: "grid", gap: 6, fontSize: 12, color: C.ts }}>
+              <span>Stage</span>
+              <select value={kickoffStageFilter} onChange={e => setKickoffStageFilter(e.target.value)} style={{ ...iS, width: "100%" }}>
+                <option value="all">All stages</option>
+                {STAGES.filter(stage => stage.id !== "live").map(stage => (
+                  <option key={stage.id} value={stage.id}>{stage.label}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+        </div>
+
+        {kickoffProfiles.length === 0 ? (
+          <div style={{ ...cS, padding: "32px 28px", textAlign: "center" }}>
+            <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 6 }}>No kickoff talent matches this view yet</div>
+            <div style={{ fontSize: 12, color: C.ts, maxWidth: 520, margin: "0 auto" }}>
+              Try widening the filters. This view is meant to be the shared scout and onboarding layer for new artists and curators before they become live.
+            </div>
+          </div>
+        ) : (
+          <div style={{ display: "grid", gap: 14 }}>
+            {kickoffProfiles.map(profile => (
+              <div key={profile.id} style={{ ...cS, padding: "18px 20px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "flex-start", flexWrap: "wrap", marginBottom: 14 }}>
+                  <div style={{ display: "grid", gap: 8 }}>
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                      <span style={{ fontSize: 24, fontWeight: 800, letterSpacing: "-0.03em" }}>{profile.displayName}</span>
+                      <span style={{ ...mkP(true, talentLifecycleTone(profile.platformLifecycle, C).tone, talentLifecycleTone(profile.platformLifecycle, C).bg), cursor: "default" }}>
+                        {TALENT_LIFECYCLE_LABELS[profile.platformLifecycle] || "Pre-Live"}
+                      </span>
+                      {profile.talentTypes.map(type => (
+                        <span key={`${profile.id}:type:${type}`} style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{type}</span>
+                      ))}
+                      {profile.sources.map(source => (
+                        <span key={`${profile.id}:source:${source}`} style={{ ...mkP(true, C.pr, C.pb), cursor: "default" }}>
+                          {TALENT_SOURCE_LABELS[source] || source}
+                        </span>
+                      ))}
+                    </div>
+                    <div style={{ fontSize: 12, color: C.ts, display: "flex", gap: 10, flexWrap: "wrap" }}>
+                      <span>{profile.primaryEmail || "No email yet"}</span>
+                      {profile.instagramHandle && <span>Instagram @{profile.instagramHandle}</span>}
+                      {profile.tiktokHandle && <span>TikTok @{profile.tiktokHandle}</span>}
+                      {profile.spotifyUrl && <span>Spotify linked</span>}
+                      {profile.curatorPageUrl && <span>Curator page linked</span>}
+                    </div>
+                  </div>
+
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    {profile.primaryProjectId && (
+                      <button
+                        onClick={() => void openProjectWorkspace(profile.primaryProjectId, { artistName: profile.primaryArtistName })}
+                        style={actionBtn(false, "neutral")}
+                      >
+                        Open workspace
+                      </button>
+                    )}
+                    <button
+                      onClick={() => openTalentProfileById(profile.id)}
+                      style={actionBtn(false, "accent")}
+                    >
+                      Open Talent Profile
+                    </button>
+                  </div>
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(110px, 1fr))", gap: 10, marginBottom: 14 }}>
+                  {[
+                    ["Projects", profile.projectSummaries.length, C.ac, C.al],
+                    ["Owners", profile.owners.length || "—", C.ts, C.sa],
+                    ["Curated Artists", profile.curatedArtists.length || "—", C.gn, C.gb],
+                    ["Sources", profile.sources.length, C.pr, C.pb],
+                  ].map(([label, value, tone, bg]) => (
+                    <div key={`${profile.id}:${label}`} style={{ borderRadius: 12, border: `1px solid ${C.bd}`, background: bg, padding: "10px 12px" }}>
+                      <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 1, color: C.tt, marginBottom: 6 }}>{label}</div>
+                      <div style={{ fontSize: 20, fontWeight: 800, color: tone, lineHeight: 1 }}>{value}</div>
+                    </div>
+                  ))}
+                </div>
+
+                <div style={{ display: "grid", gap: 10 }}>
+                  {profile.projectSummaries.map(summary => (
+                    <div key={`${profile.id}:project:${summary.projectId || summary.projectName}`} style={{ borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sa, padding: "12px 14px" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 8 }}>
+                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                          <span style={{ fontSize: 14, fontWeight: 700 }}>{summary.projectName}</span>
+                          <span style={{ ...mkP(true, summary.projectType === "curator" ? C.gn : C.ac, summary.projectType === "curator" ? C.gb : C.al), cursor: "default" }}>
+                            {projectTypeLabel(summary.projectType)}
+                          </span>
+                        </div>
+                        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                          {summary.projectId && (
+                            <button
+                              onClick={() => void openProjectWorkspace(summary.projectId, { artistName: summary.leadArtistName })}
+                              style={actionBtn(false, "neutral")}
+                            >
+                              Open
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        {summary.owners.map(owner => (
+                          <span key={`${summary.projectId}:owner:${owner}`} style={{ ...mkP(true, C.ts, C.sf), cursor: "default" }}>{owner}</span>
+                        ))}
+                        {summary.stages.map(stage => (
+                          <span key={`${summary.projectId}:stage:${stage}`} style={{ ...mkP(true, sc(stage, C), sb(stage, C)), cursor: "default" }}>
+                            {SM[stage]?.label || "Prospect"}
+                          </span>
+                        ))}
+                        {summary.genres.map(genre => (
+                          <span key={`${summary.projectId}:genre:${genre}`} style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{genre}</span>
+                        ))}
+                        {summary.locations.map(location => (
+                          <span key={`${summary.projectId}:location:${location}`} style={{ ...mkP(true, C.tt, C.sa), cursor: "default" }}>{location}</span>
+                        ))}
+                        {!summary.owners.length && !summary.stages.length && !summary.genres.length && !summary.locations.length && (
+                          <span style={{ ...mkP(true, C.ts, C.sf), cursor: "default" }}>No kickoff metadata yet</span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
   // ═══ LIVE CRM ═══
   if (screen === "live-crm") return (
     <div style={{ fontFamily: ft, background: C.bg, minHeight: "100vh", color: C.tx }}>
@@ -7685,6 +8032,9 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
             <div style={{ fontSize: 12, color: C.tt }}>Open an existing workspace or create a new one.</div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <button onClick={() => setScreen("kickoff")} style={actionBtn(false, "neutral")}>
+              Open Kickoff
+            </button>
             <button onClick={() => setScreen("live-crm")} style={actionBtn(false, "accent")}>
               Open Live CRM
             </button>
