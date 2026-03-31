@@ -3902,8 +3902,13 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     () => selectedTalentProjectSummaries.filter(summary => summary.marketingAssignments.length),
     [selectedTalentProjectSummaries]
   );
-  const isKickoffTalentContext = talentProfileContext === "kickoff";
-  const isLiveTalentContext = talentProfileContext === "live-crm";
+  const effectiveTalentProfileContext = screen === "kickoff"
+    ? "kickoff"
+    : screen === "live-crm"
+      ? "live-crm"
+      : talentProfileContext;
+  const isKickoffTalentContext = effectiveTalentProfileContext === "kickoff";
+  const isLiveTalentContext = effectiveTalentProfileContext === "live-crm";
   const showTalentPlacementTools = talentProfileContext === "project";
   const talentOverviewProjectSummaries = isKickoffTalentContext ? selectedTalentArProjectSummaries : selectedTalentProjectSummaries;
   const selectedTalentRecentActivity = useMemo(
