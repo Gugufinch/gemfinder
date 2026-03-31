@@ -52,7 +52,7 @@ export async function PUT(req: NextRequest) {
       { status: 409 }
     );
   }
-  void notifySlackOnProjectTransitions({
+  await notifySlackOnProjectTransitions({
     previousProjects,
     nextProjects: parsed.data.projects,
     actorEmail: actor.email

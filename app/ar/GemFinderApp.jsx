@@ -949,6 +949,22 @@ function isEngagedStage(stage) {
 function isWonStage(stage) {
   return WON_STAGE_IDS.includes(stage);
 }
+function isDeadStage(stage) {
+  return normalizeStageId(stage) === "dead";
+}
+function isLiveStage(stage) {
+  return normalizeStageId(stage) === "live";
+}
+function isActiveKickoffStage(stage) {
+  const normalized = normalizeStageId(stage || "prospect");
+  return normalized !== "dead" && normalized !== "live";
+}
+function filterKickoffActiveArRecords(records = [], workspaceProjectIds = null) {
+  return (records || []).filter(record => {
+    if (workspaceProjectIds && !workspaceProjectIds.has(record?.projectId)) return false;
+    return isActiveKickoffStage(record?.stage || "prospect");
+  });
+}
 function kickoffStageBucket(stages = []) {
   const normalized = uniqStrings((stages || []).map(stage => normalizeStageId(stage)).filter(Boolean));
   if (normalized.some(stage => stage === "live")) return "live";
@@ -3610,7 +3626,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     () => workspaceTalentProfiles.filter(
       profile =>
         profile.platformLifecycle !== "live" &&
-        profile.arRecords.some(record => workspaceProjectIds.has(record.projectId))
+        filterKickoffActiveArRecords(profile.arRecords, workspaceProjectIds).length > 0
     ),
     [workspaceTalentProfiles, workspaceProjectIds]
   );
@@ -3630,8 +3646,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     const query = kickoffQuery.trim().toLowerCase();
     return kickoffBaseProfiles
       .map(profile => {
-        const projectSummaries = profile.arRecords
-          .filter(record => workspaceProjectIds.has(record.projectId))
+        const activeKickoffRecords = filterKickoffActiveArRecords(profile.arRecords, workspaceProjectIds);
+        const projectSummaries = activeKickoffRecords
           .reduce((map, record) => {
             const key = String(record.projectId || "");
             if (!map.has(key)) {
@@ -3908,6 +3924,20 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       }))
       .sort((a, b) => a.projectName.localeCompare(b.projectName));
   }, [selectedTalentProfile]);
+  const selectedTalentKickoffProjectSummaries = useMemo(
+    () => selectedTalentProjectSummaries
+      .map(summary => {
+        const arRecords = filterKickoffActiveArRecords(summary.arRecords);
+        return {
+          ...summary,
+          arRecords,
+          owners: uniqStrings(arRecords.map(record => record.owner).filter(Boolean)),
+          arStages: uniqStrings(arRecords.map(record => record.stage).filter(Boolean)),
+        };
+      })
+      .filter(summary => summary.arRecords.length),
+    [selectedTalentProjectSummaries]
+  );
   const selectedTalentArProjectSummaries = useMemo(
     () => selectedTalentProjectSummaries.filter(summary => summary.arRecords.length),
     [selectedTalentProjectSummaries]
@@ -3923,14 +3953,21 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       : talentProfileContext;
   const isKickoffTalentContext = effectiveTalentProfileContext === "kickoff";
   const isLiveTalentContext = effectiveTalentProfileContext === "live-crm";
-  const talentOverviewProjectSummaries = isKickoffTalentContext ? selectedTalentArProjectSummaries : selectedTalentProjectSummaries;
+  const talentOverviewProjectSummaries = isKickoffTalentContext ? selectedTalentKickoffProjectSummaries : selectedTalentProjectSummaries;
+  const kickoffTalentRecordCount = useMemo(
+    () => selectedTalentKickoffProjectSummaries.reduce((count, summary) => count + summary.arRecords.length, 0),
+    [selectedTalentKickoffProjectSummaries]
+  );
   const selectedTalentRecentActivity = useMemo(
     () => (selectedTalentProfile?.recentActivity || []).slice(0, 16),
     [selectedTalentProfile]
   );
   const talentOverviewRecentActivity = useMemo(
     () => (isKickoffTalentContext
-      ? selectedTalentRecentActivity.filter(entry => normalizeProjectType(entry?.projectType) !== "marketing")
+      ? selectedTalentRecentActivity.filter(entry =>
+          normalizeProjectType(entry?.projectType) !== "marketing" &&
+          !/^stage\s*[→-]\s*dead$/i.test(String(entry?.action || "").trim())
+        )
       : selectedTalentRecentActivity),
     [isKickoffTalentContext, selectedTalentRecentActivity]
   );
@@ -8282,7 +8319,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
               <input value={artistForm.name} onChange={e => setArtistForm(prev => ({ ...prev, name: e.target.value }))} placeholder={isCuratorProject ? "Curator name*" : "Artist name*"} autoFocus style={{ ...iS, width: "100%" }} />
-              <input value={artistForm.genre} onChange={e => setArtistForm(prev => ({ ...prev, genre: e.target.value }))} placeholder="Genre / vibe" autoComplete="off" style={{ ...iS, width: "100%" }} />
+              <input value={artistForm.genre} onChange={e => setArtistForm(prev => ({ ...prev, genre: e.target.value }))} placeholder="Genre / vibe" autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} style={{ ...iS, width: "100%" }} />
               <input value={artistForm.listeners} onChange={e => setArtistForm(prev => ({ ...prev, listeners: e.target.value }))} placeholder="Monthly listeners" style={{ ...iS, width: "100%" }} />
               <input value={artistForm.hitTrack} onChange={e => setArtistForm(prev => ({ ...prev, hitTrack: e.target.value }))} placeholder="Hit track" style={{ ...iS, width: "100%" }} />
               <input value={artistForm.social} onChange={e => setArtistForm(prev => ({ ...prev, social: e.target.value }))} placeholder="@handle or profile URL" style={{ ...iS, width: "100%" }} />
@@ -8675,7 +8712,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                   </span>
                   {!isKickoffTalentContext && <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{selectedTalentProfile.marketingAssignments.length} marketing assignment{selectedTalentProfile.marketingAssignments.length === 1 ? "" : "s"}</span>}
                   <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>
-                    {selectedTalentProfile.arRecords.length} {isKickoffTalentContext ? "kickoff" : "A&R"} record{selectedTalentProfile.arRecords.length === 1 ? "" : "s"}
+                    {(isKickoffTalentContext ? kickoffTalentRecordCount : selectedTalentProfile.arRecords.length)} {isKickoffTalentContext ? "kickoff" : "A&R"} record{(isKickoffTalentContext ? kickoffTalentRecordCount : selectedTalentProfile.arRecords.length) === 1 ? "" : "s"}
                   </span>
                 </div>
               </div>
@@ -8880,7 +8917,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
             {!isLiveTalentContext && <div style={{ ...cS, padding: "18px 20px", marginBottom: 16 }}>
               <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>Kickoff Details</div>
               <div style={{ display: "grid", gap: 10 }}>
-                {selectedTalentArProjectSummaries.length ? selectedTalentArProjectSummaries.map(summary => (
+                {selectedTalentKickoffProjectSummaries.length ? selectedTalentKickoffProjectSummaries.map(summary => (
                   <div key={`ar:${summary.projectId}`} style={{ padding: "12px 14px", borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sa }}>
                     <div style={{ fontSize: 12, color: C.tt, marginBottom: 10 }}>{workspaceRecordLabel(summary.projectType, "kickoff")}</div>
                     <div style={{ display: "grid", gap: 10 }}>
@@ -8929,7 +8966,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                             {talentKickoffEditRecordKey === `${record.projectId}::${record.artistName}` && (
                               <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10, marginTop: 12 }}>
                                 <input value={artistEditForm.name} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, name: e.target.value }))} placeholder={record.projectType === "curator" ? "Curator name" : "Artist name"} style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
-                                <input value={artistEditForm.genre} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, genre: e.target.value }))} placeholder="Genre / vibe" style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
+                                <input value={artistEditForm.genre} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, genre: e.target.value }))} placeholder="Genre / vibe" autoCorrect="off" autoCapitalize="off" spellCheck={false} style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
                                 <input value={artistEditForm.listeners} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, listeners: e.target.value }))} placeholder="Monthly listeners" style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
                                 <input value={artistEditForm.hitTrack} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, hitTrack: e.target.value }))} placeholder="Hit track" style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
                                 <input value={artistEditForm.social} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, social: e.target.value }))} placeholder="@handle or URL" style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
@@ -9007,7 +9044,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                     </div>
                   </div>
                 )) : (
-                  <div style={{ fontSize: 12, color: C.tt }}>No A&R placements linked yet.</div>
+                  <div style={{ fontSize: 12, color: C.tt }}>No active kickoff records linked yet.</div>
                 )}
               </div>
             </div>}
@@ -9411,7 +9448,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
               <span>Stage</span>
               <select value={kickoffStageFilter} onChange={e => setKickoffStageFilter(e.target.value)} style={{ ...iS, width: "100%" }}>
                 <option value="all">All stages</option>
-                {STAGES.filter(stage => stage.id !== "live").map(stage => (
+                {STAGES.filter(stage => stage.id !== "live" && stage.id !== "dead").map(stage => (
                   <option key={stage.id} value={stage.id}>{stage.label}</option>
                 ))}
               </select>
