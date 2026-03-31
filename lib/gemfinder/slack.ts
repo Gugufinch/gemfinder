@@ -173,8 +173,8 @@ function extractArtistTransitions(previousProjects: unknown[], nextProjects: unk
     const nextPipeline = nextProject?.pipeline || {};
     for (const [artistName, nextState] of Object.entries(nextPipeline)) {
       const nextStage = String(nextState?.stage || 'prospect');
-      const previousStage = String(prevProject?.pipeline?.[artistName]?.stage || '');
-      if (!previousStage || previousStage === nextStage) continue;
+      const previousStage = String(prevProject?.pipeline?.[artistName]?.stage || 'prospect');
+      if (previousStage === nextStage) continue;
       if (!A_R_NOTIFY_STAGE_IDS.has(nextStage)) continue;
       const artistRecord = (nextProject?.artists || []).find((artist) => String(artist?.n || '') === artistName);
       transitions.push({

@@ -5635,6 +5635,14 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     const nextProj = {
       ...proj,
       artists: [nextArtist, ...proj.artists],
+      pipeline: {
+        ...(proj.pipeline || {}),
+        [name]: {
+          ...(proj.pipeline?.[name] || {}),
+          stage: normalizeStageId(proj.pipeline?.[name]?.stage || "prospect"),
+          date: proj.pipeline?.[name]?.date || new Date().toISOString(),
+        },
+      },
       notes: artistForm.note.trim() ? { ...(proj.notes || {}), [name]: artistForm.note.trim() } : proj.notes,
       activityLog,
     };
@@ -8273,17 +8281,17 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                 : "Manual add for artists you want in the pipeline before a CSV import."}
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-              <input value={artistForm.name} onChange={e => setArtistForm({ ...artistForm, name: e.target.value })} placeholder={isCuratorProject ? "Curator name*" : "Artist name*"} autoFocus style={{ ...iS, width: "100%" }} />
-              <input value={artistForm.genre} onChange={e => setArtistForm({ ...artistForm, genre: e.target.value })} placeholder="Genre / vibe" style={{ ...iS, width: "100%" }} />
-              <input value={artistForm.listeners} onChange={e => setArtistForm({ ...artistForm, listeners: e.target.value })} placeholder="Monthly listeners" style={{ ...iS, width: "100%" }} />
-              <input value={artistForm.hitTrack} onChange={e => setArtistForm({ ...artistForm, hitTrack: e.target.value })} placeholder="Hit track" style={{ ...iS, width: "100%" }} />
-              <input value={artistForm.social} onChange={e => setArtistForm({ ...artistForm, social: e.target.value })} placeholder="@handle or profile URL" style={{ ...iS, width: "100%" }} />
+              <input value={artistForm.name} onChange={e => setArtistForm(prev => ({ ...prev, name: e.target.value }))} placeholder={isCuratorProject ? "Curator name*" : "Artist name*"} autoFocus style={{ ...iS, width: "100%" }} />
+              <input value={artistForm.genre} onChange={e => setArtistForm(prev => ({ ...prev, genre: e.target.value }))} placeholder="Genre / vibe" autoComplete="off" style={{ ...iS, width: "100%" }} />
+              <input value={artistForm.listeners} onChange={e => setArtistForm(prev => ({ ...prev, listeners: e.target.value }))} placeholder="Monthly listeners" style={{ ...iS, width: "100%" }} />
+              <input value={artistForm.hitTrack} onChange={e => setArtistForm(prev => ({ ...prev, hitTrack: e.target.value }))} placeholder="Hit track" style={{ ...iS, width: "100%" }} />
+              <input value={artistForm.social} onChange={e => setArtistForm(prev => ({ ...prev, social: e.target.value }))} placeholder="@handle or profile URL" style={{ ...iS, width: "100%" }} />
               {!isCuratorProject ? (
-                <input value={artistForm.email} onChange={e => setArtistForm({ ...artistForm, email: e.target.value })} placeholder="Email" style={{ ...iS, width: "100%" }} />
+                <input value={artistForm.email} onChange={e => setArtistForm(prev => ({ ...prev, email: e.target.value }))} placeholder="Email" style={{ ...iS, width: "100%" }} />
               ) : (
-                <input value={artistForm.curatorPageUrl} onChange={e => setArtistForm({ ...artistForm, curatorPageUrl: e.target.value })} placeholder="Curator page link" style={{ ...iS, width: "100%" }} />
+                <input value={artistForm.curatorPageUrl} onChange={e => setArtistForm(prev => ({ ...prev, curatorPageUrl: e.target.value }))} placeholder="Curator page link" style={{ ...iS, width: "100%" }} />
               )}
-              <input value={artistForm.location} onChange={e => setArtistForm({ ...artistForm, location: e.target.value })} placeholder="Location" style={{ ...iS, width: "100%", gridColumn: "1 / span 2" }} />
+              <input value={artistForm.location} onChange={e => setArtistForm(prev => ({ ...prev, location: e.target.value }))} placeholder="Location" style={{ ...iS, width: "100%", gridColumn: "1 / span 2" }} />
               {isCuratorProject && (
                 <div style={{ gridColumn: "1 / span 2" }}>
                   <div style={{ fontSize: 11, color: C.tt, marginBottom: 8 }}>Curated artists they vouch for</div>
@@ -8304,7 +8312,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                   </div>
                 </div>
               )}
-              <textarea value={artistForm.note} onChange={e => setArtistForm({ ...artistForm, note: e.target.value })} placeholder="Optional note" style={{ ...iS, width: "100%", minHeight: 80, resize: "vertical", gridColumn: "1 / span 2" }} />
+              <textarea value={artistForm.note} onChange={e => setArtistForm(prev => ({ ...prev, note: e.target.value }))} placeholder="Optional note" style={{ ...iS, width: "100%", minHeight: 80, resize: "vertical", gridColumn: "1 / span 2" }} />
             </div>
             <div style={{ marginTop: 10, fontSize: 11, color: C.ts }}>
               {artistForm.name.trim() && proj?.artists?.some(a => canonicalArtistName(a.n) === canonicalArtistName(artistForm.name)) && (
@@ -8869,7 +8877,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
               </div>
             </div>
 
-            <div style={{ ...cS, padding: "18px 20px", marginBottom: 16 }}>
+            {!isLiveTalentContext && <div style={{ ...cS, padding: "18px 20px", marginBottom: 16 }}>
               <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>Kickoff Details</div>
               <div style={{ display: "grid", gap: 10 }}>
                 {selectedTalentArProjectSummaries.length ? selectedTalentArProjectSummaries.map(summary => (
@@ -9002,10 +9010,19 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                   <div style={{ fontSize: 12, color: C.tt }}>No A&R placements linked yet.</div>
                 )}
               </div>
-            </div>
+            </div>}
 
             {!isKickoffTalentContext && <div style={{ ...cS, padding: "18px 20px" }}>
-              <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>Live Roster Campaigns</div>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
+                <div style={{ fontSize: 14, fontWeight: 700 }}>Live Roster Campaigns</div>
+                <button
+                  onClick={() => openMarketingItemModalFromTalentProfile(selectedTalentProfile)}
+                  disabled={isReadOnly}
+                  style={{ ...actionBtn(false, "good"), ...lockStyle(isReadOnly) }}
+                >
+                  + Campaign
+                </button>
+              </div>
               <div style={{ display: "grid", gap: 10 }}>
                 {selectedTalentMarketingProjectSummaries.length ? selectedTalentMarketingProjectSummaries.map(summary => (
                   <div key={`marketing:${summary.projectId}`} style={{ padding: "12px 14px", borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sa }}>
