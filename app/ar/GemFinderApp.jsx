@@ -3265,6 +3265,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [selectedTalentProfileId, setSelectedTalentProfileId] = useState("");
   const [talentProfileContext, setTalentProfileContext] = useState("project");
   const [talentKickoffEditRecordKey, setTalentKickoffEditRecordKey] = useState("");
+  const [showFullTalentTimeline, setShowFullTalentTimeline] = useState(false);
   const [pendingWorkspaceAction, setPendingWorkspaceAction] = useState(null);
   const [liveCrmQuery, setLiveCrmQuery] = useState("");
   const [liveCrmTypeFilter, setLiveCrmTypeFilter] = useState("all");
@@ -3971,6 +3972,13 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       : selectedTalentRecentActivity),
     [isKickoffTalentContext, selectedTalentRecentActivity]
   );
+  const talentTimelineDefaultCount = isKickoffTalentContext ? 3 : 4;
+  const visibleTalentOverviewRecentActivity = useMemo(
+    () => showFullTalentTimeline
+      ? talentOverviewRecentActivity
+      : talentOverviewRecentActivity.slice(0, talentTimelineDefaultCount),
+    [showFullTalentTimeline, talentOverviewRecentActivity, talentTimelineDefaultCount]
+  );
   const sessionUserName = useMemo(
     () => resolveSessionUserName(authEmail, authUserId, proj?.teamUsers || DEFAULT_TEAM_USERS),
     [authEmail, authUserId, proj?.teamUsers],
@@ -4581,6 +4589,9 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     if (selectedTalentProfileId && workspaceTalentProfileMap.has(selectedTalentProfileId)) return;
     closeTalentProfileModal();
   }, [showTalentProfileModal, selectedTalentProfileId, workspaceTalentProfileMap]);
+  useEffect(() => {
+    setShowFullTalentTimeline(false);
+  }, [selectedTalentProfileId, screen, talentProfileContext]);
 
   const persist = useCallback(async (np, la, dk, vm, lb, wu, pm, cw, kvm, lvm) => {
     const nextProjects = np || projects;
@@ -8782,6 +8793,15 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                     </div>
                   )}
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 4 }}>
+                    {!isKickoffTalentContext && (
+                      <button
+                        onClick={() => openMarketingItemModalFromTalentProfile(selectedTalentProfile)}
+                        disabled={isReadOnly}
+                        style={{ ...actionBtn(false, "good"), ...lockStyle(isReadOnly) }}
+                      >
+                        + Campaign
+                      </button>
+                    )}
                     {selectedTalentProfile.primaryEmail && (
                       <a href={`mailto:${selectedTalentProfile.primaryEmail}`} style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Email</a>
                     )}
@@ -8862,55 +8882,6 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                     </div>
                   )}
                 </div>
-              </div>
-            </div>
-
-            <div style={{ ...cS, padding: "18px 20px", marginBottom: 16 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "flex-start", marginBottom: 12, flexWrap: "wrap" }}>
-                <div>
-                  <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>Latest Notes + Timeline</div>
-                  <div style={{ fontSize: 12, color: C.ts }}>
-                    {isKickoffTalentContext
-                      ? "The newest kickoff and curator updates tied to this person across the workspace."
-                      : "The newest kickoff, curator, and campaign updates tied to this person across the workspace."}
-                  </div>
-                </div>
-                <div style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>
-                  {talentOverviewRecentActivity.length} recent item{talentOverviewRecentActivity.length === 1 ? "" : "s"}
-                </div>
-              </div>
-              <div style={{ display: "grid", gap: 10 }}>
-                {talentOverviewRecentActivity.length ? talentOverviewRecentActivity.map((entry, index) => (
-                  <div key={`${entry.id || entry.time || entry.action || "activity"}:${index}`} style={{ padding: "12px 14px", borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sa }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: 8, flexWrap: "wrap" }}>
-                      <div style={{ minWidth: 0 }}>
-                        <div style={{ fontSize: 13, fontWeight: 700, color: C.tx, marginBottom: 4 }}>
-                          {entry.action || "Workspace update"}
-                        </div>
-                        {entry.note && entry.note !== entry.action && (
-                          <div style={{ fontSize: 12, color: C.ts, lineHeight: 1.6 }}>
-                            {entry.note}
-                          </div>
-                        )}
-                      </div>
-                      <div style={{ fontSize: 11, color: C.tt, whiteSpace: "nowrap" }}>
-                        {entry.time ? fmtDateTime(entry.time) : "Time unknown"}
-                      </div>
-                    </div>
-                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                      {workspaceTimelineLabel(entry, isKickoffTalentContext ? "kickoff" : isLiveTalentContext ? "live" : "generic") && (
-                        <span style={{ ...mkP(true, C.ac, C.al), cursor: "default" }}>
-                          {workspaceTimelineLabel(entry, isKickoffTalentContext ? "kickoff" : isLiveTalentContext ? "live" : "generic")}
-                        </span>
-                      )}
-                      {!isKickoffTalentContext && entry.campaign && entry.campaign !== "No campaign" && <span style={{ ...mkP(true, C.bu, C.bb), cursor: "default" }}>{entry.campaign}</span>}
-                      {entry.actor && <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{entry.actor}</span>}
-                      {entry.kind && <span style={{ ...mkP(true, C.tt, C.sa), cursor: "default" }}>{titleCaseWords(entry.kind)}</span>}
-                    </div>
-                  </div>
-                )) : (
-                  <div style={{ fontSize: 12, color: C.tt }}>No linked notes or timeline items yet.</div>
-                )}
               </div>
             </div>
 
@@ -9049,7 +9020,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
               </div>
             </div>}
 
-            {!isKickoffTalentContext && <div style={{ ...cS, padding: "18px 20px" }}>
+            {!isKickoffTalentContext && <div style={{ ...cS, padding: "18px 20px", marginBottom: 16 }}>
               <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
                 <div style={{ fontSize: 14, fontWeight: 700 }}>Live Roster Campaigns</div>
                 <button
@@ -9138,6 +9109,62 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                 )}
               </div>
             </div>}
+
+            <div style={{ ...cS, padding: "18px 20px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "flex-start", marginBottom: 12, flexWrap: "wrap" }}>
+                <div>
+                  <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>Latest Notes + Timeline</div>
+                  <div style={{ fontSize: 12, color: C.ts }}>
+                    {isKickoffTalentContext
+                      ? "The newest kickoff and curator updates tied to this person across the workspace."
+                      : "The newest kickoff, curator, and campaign updates tied to this person across the workspace."}
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                  <div style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>
+                    {talentOverviewRecentActivity.length} recent item{talentOverviewRecentActivity.length === 1 ? "" : "s"}
+                  </div>
+                  {talentOverviewRecentActivity.length > talentTimelineDefaultCount && (
+                    <button onClick={() => setShowFullTalentTimeline(prev => !prev)} style={actionBtn(false, "neutral")}>
+                      {showFullTalentTimeline ? "Show Less" : "Show All"}
+                    </button>
+                  )}
+                </div>
+              </div>
+              <div style={{ display: "grid", gap: 10 }}>
+                {visibleTalentOverviewRecentActivity.length ? visibleTalentOverviewRecentActivity.map((entry, index) => (
+                  <div key={`${entry.id || entry.time || entry.action || "activity"}:${index}`} style={{ padding: "12px 14px", borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sa }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: 8, flexWrap: "wrap" }}>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: C.tx, marginBottom: 4 }}>
+                          {entry.action || "Workspace update"}
+                        </div>
+                        {entry.note && entry.note !== entry.action && (
+                          <div style={{ fontSize: 12, color: C.ts, lineHeight: 1.6 }}>
+                            {entry.note}
+                          </div>
+                        )}
+                      </div>
+                      <div style={{ fontSize: 11, color: C.tt, whiteSpace: "nowrap" }}>
+                        {entry.time ? fmtDateTime(entry.time) : "Time unknown"}
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      {workspaceTimelineLabel(entry, isKickoffTalentContext ? "kickoff" : isLiveTalentContext ? "live" : "generic") && (
+                        <span style={{ ...mkP(true, C.ac, C.al), cursor: "default" }}>
+                          {workspaceTimelineLabel(entry, isKickoffTalentContext ? "kickoff" : isLiveTalentContext ? "live" : "generic")}
+                        </span>
+                      )}
+                      {!isKickoffTalentContext && entry.campaign && entry.campaign !== "No campaign" && <span style={{ ...mkP(true, C.bu, C.bb), cursor: "default" }}>{entry.campaign}</span>}
+                      {entry.actor && <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{entry.actor}</span>}
+                      {entry.kind && <span style={{ ...mkP(true, C.tt, C.sa), cursor: "default" }}>{titleCaseWords(entry.kind)}</span>}
+                    </div>
+                  </div>
+                )) : (
+                  <div style={{ fontSize: 12, color: C.tt }}>No linked notes or timeline items yet.</div>
+                )}
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -9889,6 +9916,26 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                           {profile.primaryEmail || "No email yet"}
                           {profile.instagramHandle ? ` · @${profile.instagramHandle}` : ""}
                         </div>
+                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
+                          <button onClick={() => openTalentProfileFromWorkspaceProfile(profile)} style={actionBtn(false, "accent")}>
+                            View Talent
+                          </button>
+                          {defaultLiveMarketingProject && (
+                            <button
+                              onClick={() => {
+                                void launchWorkspaceProjectAction(
+                                  defaultLiveMarketingProject.id,
+                                  "show-marketing-item",
+                                  "No live campaign record is mapped in this workspace yet",
+                                  { profileId: profile.id }
+                                );
+                              }}
+                              style={{ ...actionBtn(true, "good"), ...lockStyle(isReadOnly) }}
+                            >
+                              + Campaign
+                            </button>
+                          )}
+                        </div>
                       </td>
                       <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>{summarizeWorkspaceValues(profile.talentTypes, 2)}</td>
                       <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>{summarizeWorkspaceValues(profile.sources, 2, source => TALENT_SOURCE_LABELS[source] || source)}</td>
@@ -9906,27 +9953,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                       <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>{profile.marketingAssignments.length}</td>
                       <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>{liveStatusSummaryLabel(profile)}</td>
                       <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.tt }}>{profile.lastTouched ? rD(profile.lastTouched) : "—"}</td>
-                      <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}` }}>
-                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                          {defaultLiveMarketingProject && (
-                            <button
-                              onClick={() => {
-                                void launchWorkspaceProjectAction(
-                                  defaultLiveMarketingProject.id,
-                                  "show-marketing-item",
-                                  "No live campaign record is mapped in this workspace yet",
-                                  { profileId: profile.id }
-                                );
-                              }}
-                              style={{ ...actionBtn(true, "good"), ...lockStyle(isReadOnly) }}
-                            >
-                              + Campaign
-                            </button>
-                          )}
-                          <button onClick={() => openTalentProfileFromWorkspaceProfile(profile)} style={actionBtn(false, "accent")}>
-                            View Talent
-                          </button>
-                        </div>
+                      <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.tt }}>
+                        Use talent actions
                       </td>
                     </tr>
                   ))}
