@@ -3266,6 +3266,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [talentProfileContext, setTalentProfileContext] = useState("project");
   const [talentKickoffEditRecordKey, setTalentKickoffEditRecordKey] = useState("");
   const [showFullTalentTimeline, setShowFullTalentTimeline] = useState(false);
+  const [showCampaignHubModal, setShowCampaignHubModal] = useState(false);
   const [pendingWorkspaceAction, setPendingWorkspaceAction] = useState(null);
   const [liveCrmQuery, setLiveCrmQuery] = useState("");
   const [liveCrmTypeFilter, setLiveCrmTypeFilter] = useState("all");
@@ -3947,6 +3948,18 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     () => selectedTalentProjectSummaries.filter(summary => summary.marketingAssignments.length),
     [selectedTalentProjectSummaries]
   );
+  const selectedTalentPrimaryKickoffRecord = useMemo(
+    () => selectedTalentKickoffProjectSummaries.flatMap(summary => summary.arRecords)[0] || null,
+    [selectedTalentKickoffProjectSummaries]
+  );
+  const selectedTalentPrimaryArRecord = useMemo(
+    () => selectedTalentArProjectSummaries.flatMap(summary => summary.arRecords)[0] || null,
+    [selectedTalentArProjectSummaries]
+  );
+  const selectedTalentPrimaryMarketingAssignment = useMemo(
+    () => selectedTalentMarketingProjectSummaries.flatMap(summary => summary.marketingAssignments)[0] || null,
+    [selectedTalentMarketingProjectSummaries]
+  );
   const effectiveTalentProfileContext = screen === "kickoff"
     ? "kickoff"
     : screen === "live-crm"
@@ -3955,6 +3968,42 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const isKickoffTalentContext = effectiveTalentProfileContext === "kickoff";
   const isLiveTalentContext = effectiveTalentProfileContext === "live-crm";
   const talentOverviewProjectSummaries = isKickoffTalentContext ? selectedTalentKickoffProjectSummaries : selectedTalentProjectSummaries;
+  const selectedTalentGenre = String(
+    selectedTalentPrimaryKickoffRecord?.genre
+    || selectedTalentPrimaryArRecord?.genre
+    || ""
+  ).trim();
+  const selectedTalentHitTrack = String(
+    selectedTalentPrimaryKickoffRecord?.hitTrack
+    || selectedTalentPrimaryArRecord?.hitTrack
+    || ""
+  ).trim();
+  const selectedTalentLocation = String(
+    selectedTalentPrimaryKickoffRecord?.location
+    || selectedTalentPrimaryArRecord?.location
+    || ""
+  ).trim();
+  const selectedTalentListeners = String(
+    selectedTalentProfile?.spotifyMonthlyListeners
+    || selectedTalentPrimaryKickoffRecord?.monthlyListeners
+    || selectedTalentPrimaryArRecord?.monthlyListeners
+    || selectedTalentPrimaryMarketingAssignment?.spotifyMonthlyListeners
+    || ""
+  ).trim();
+  const selectedTalentSpotifyLabel = selectedTalentListeners
+    ? `${selectedTalentListeners} listeners`
+    : selectedTalentProfile?.spotifyUrl
+      ? "Linked"
+      : "Not linked yet";
+  const selectedTalentHeadlineOwner = isKickoffTalentContext
+    ? String(selectedTalentPrimaryKickoffRecord?.owner || "").trim()
+    : String(selectedTalentPrimaryMarketingAssignment?.owner || "").trim();
+  const selectedTalentHeadlineKickoffStage = isKickoffTalentContext
+    ? normalizeStageId(selectedTalentPrimaryKickoffRecord?.stage || "")
+    : "";
+  const selectedTalentHeadlineMarketingStatus = isLiveTalentContext
+    ? normalizeMarketingStatus(selectedTalentPrimaryMarketingAssignment?.status || "")
+    : "";
   const kickoffTalentRecordCount = useMemo(
     () => selectedTalentKickoffProjectSummaries.reduce((count, summary) => count + summary.arRecords.length, 0),
     [selectedTalentKickoffProjectSummaries]
@@ -3979,6 +4028,48 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       : talentOverviewRecentActivity.slice(0, talentTimelineDefaultCount),
     [showFullTalentTimeline, talentOverviewRecentActivity, talentTimelineDefaultCount]
   );
+  const liveCampaignHubRows = useMemo(() => {
+    const byCampaign = new Map();
+    liveMarketingProjects.forEach(project => {
+      (project.marketingItems || [])
+        .map(item => normalizeMarketingItem(item, project.teamUsers || DEFAULT_TEAM_USERS))
+        .forEach(item => {
+          const campaignNames = item.campaigns?.length ? item.campaigns : [item.campaign || "No campaign"];
+          campaignNames.forEach(rawCampaign => {
+            const campaignName = rawCampaign || "No campaign";
+            if (!byCampaign.has(campaignName)) {
+              byCampaign.set(campaignName, {
+                name: campaignName,
+                assignments: 0,
+                talentNames: new Set(),
+                owners: new Set(),
+                statuses: {},
+                dueDates: [],
+              });
+            }
+            const summary = byCampaign.get(campaignName);
+            summary.assignments += 1;
+            if (item.talentName) summary.talentNames.add(item.talentName);
+            if (item.owner) summary.owners.add(item.owner);
+            summary.statuses[item.status] = (summary.statuses[item.status] || 0) + 1;
+            if (item.dueDate) summary.dueDates.push(item.dueDate);
+          });
+        });
+    });
+    return [...byCampaign.values()]
+      .map(summary => ({
+        name: summary.name,
+        assignments: summary.assignments,
+        talentCount: summary.talentNames.size,
+        owners: [...summary.owners],
+        statusMix: Object.entries(summary.statuses)
+          .sort((a, b) => b[1] - a[1])
+          .map(([status, count]) => `${MM[status]?.label || titleCaseWords(status)} (${count})`)
+          .join(" · "),
+        nextDue: summary.dueDates.sort()[0] || "",
+      }))
+      .sort((a, b) => b.assignments - a.assignments || a.name.localeCompare(b.name));
+  }, [liveMarketingProjects]);
   const sessionUserName = useMemo(
     () => resolveSessionUserName(authEmail, authUserId, proj?.teamUsers || DEFAULT_TEAM_USERS),
     [authEmail, authUserId, proj?.teamUsers],
@@ -4860,6 +4951,16 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     }
     setPendingWorkspaceAction({ projectId, action, ...payload });
   };
+  const launchLiveCampaignAction = useCallback((profile = null) => {
+    const targetProjectId = String(defaultLiveMarketingProject?.id || "").trim();
+    const nextPayload = profile?.id ? { profileId: profile.id } : {};
+    void launchWorkspaceProjectAction(
+      targetProjectId,
+      "show-marketing-item",
+      "No live campaign record is mapped in this workspace yet",
+      nextPayload
+    );
+  }, [defaultLiveMarketingProject?.id, launchWorkspaceProjectAction]);
 
   const toggleFocusMode = () => {
     if (!focusMode) {
@@ -8380,8 +8481,77 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         </div>
       )}
 
+      {showCampaignHubModal && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 127 }} onClick={e => { if (e.target === e.currentTarget) setShowCampaignHubModal(false); }}>
+          <div style={{ background: C.sf, borderRadius: 18, padding: "24px 28px", width: 880, maxWidth: "calc(100vw - 32px)", boxShadow: "0 25px 70px rgba(0,0,0,0.2)", maxHeight: "86vh", overflowY: "auto" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", marginBottom: 14 }}>
+              <div>
+                <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 6, color: C.tx }}>Campaign Hub</div>
+                <div style={{ fontSize: 12, color: C.ts }}>
+                  See the campaigns currently in motion inside Live Roster, then jump back into the roster with that campaign in focus.
+                </div>
+              </div>
+              <button onClick={() => setShowCampaignHubModal(false)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: C.ts }}>✕</button>
+            </div>
+
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
+              <span style={{ ...mkP(true, C.bu, C.bb), cursor: "default" }}>{liveCampaignHubRows.length} campaigns</span>
+              <span style={{ ...mkP(true, C.pr, C.pb), cursor: "default" }}>{liveCrmOverview.assignments} assignments</span>
+              <span style={{ ...mkP(true, C.lv, C.lvb), cursor: "default" }}>{liveCrmOverview.liveTalents} live talent</span>
+            </div>
+
+            <div style={{ display: "grid", gap: 10 }}>
+              {liveCampaignHubRows.length ? liveCampaignHubRows.map(campaign => (
+                <div key={`campaign-hub-${campaign.name}`} style={{ padding: "14px 16px", borderRadius: 16, border: `1px solid ${C.bd}`, background: C.sa }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, flexWrap: "wrap", marginBottom: 8 }}>
+                    <div>
+                      <div style={{ fontSize: 16, fontWeight: 700, color: C.tx, marginBottom: 4 }}>{campaign.name}</div>
+                      <div style={{ fontSize: 12, color: C.ts }}>
+                        {campaign.talentCount} talent · {campaign.assignments} assignment{campaign.assignments === 1 ? "" : "s"}
+                        {campaign.nextDue ? ` · Next due ${sD(campaign.nextDue)}` : ""}
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      <button
+                        onClick={() => {
+                          setLiveCrmQuery(campaign.name);
+                          setShowCampaignHubModal(false);
+                          flash(`Focused Live Roster on ${campaign.name}`);
+                        }}
+                        style={actionBtn(false, "accent")}
+                      >
+                        Focus Roster
+                      </button>
+                      <button
+                        onClick={() => {
+                          setShowCampaignHubModal(false);
+                          launchLiveCampaignAction();
+                        }}
+                        style={{ ...actionBtn(true, "good"), ...lockStyle(isReadOnly) }}
+                      >
+                        + Assignment
+                      </button>
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    {campaign.owners.length ? campaign.owners.map(owner => (
+                      <span key={`${campaign.name}:owner:${owner}`} style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{owner}</span>
+                    )) : <span style={{ ...mkP(true, C.tt, C.sa), cursor: "default" }}>Unassigned</span>}
+                    {campaign.statusMix && <span style={{ ...mkP(true, C.pr, C.pb), cursor: "default" }}>{campaign.statusMix}</span>}
+                  </div>
+                </div>
+              )) : (
+                <div style={{ padding: "18px 14px", borderRadius: 16, border: `1px solid ${C.bd}`, background: C.sa, fontSize: 12, color: C.tt }}>
+                  No campaigns are moving yet. Start one from Live Roster with <strong style={{ color: C.tx }}>+ Campaign Assignment</strong>.
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {showMarketingBulkUpdateModal && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 125 }} onClick={e => { if (e.target === e.currentTarget) closeMarketingBulkUpdateModal(); }}>
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 129 }} onClick={e => { if (e.target === e.currentTarget) closeMarketingBulkUpdateModal(); }}>
           <div style={{ background: C.sf, borderRadius: 18, padding: "24px 28px", width: 880, maxWidth: "calc(100vw - 32px)", boxShadow: "0 25px 70px rgba(0,0,0,0.2)", maxHeight: "88vh", overflowY: "auto" }}>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", marginBottom: 12 }}>
               <div>
@@ -8493,7 +8663,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       )}
 
       {showMarketingItemModal && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 120 }} onClick={e => { if (e.target === e.currentTarget) { closeMarketingItemModal(); } }}>
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 130 }} onClick={e => { if (e.target === e.currentTarget) { closeMarketingItemModal(); } }}>
           <div style={{ background: C.sf, borderRadius: 18, padding: "24px 28px", width: 720, maxWidth: "calc(100vw - 32px)", boxShadow: "0 25px 70px rgba(0,0,0,0.2)", maxHeight: "88vh", overflowY: "auto" }}>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", marginBottom: 12 }}>
               <div>
@@ -8718,13 +8888,36 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                       {TALENT_SOURCE_LABELS[source] || source}
                     </span>
                   ))}
-                  <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>
-                    {talentOverviewProjectSummaries.length} {isKickoffTalentContext ? "kickoff" : isLiveTalentContext ? "live" : "workspace"} record{talentOverviewProjectSummaries.length === 1 ? "" : "s"}
-                  </span>
-                  {!isKickoffTalentContext && <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{selectedTalentProfile.marketingAssignments.length} marketing assignment{selectedTalentProfile.marketingAssignments.length === 1 ? "" : "s"}</span>}
-                  <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>
-                    {(isKickoffTalentContext ? kickoffTalentRecordCount : selectedTalentProfile.arRecords.length)} {isKickoffTalentContext ? "kickoff" : "A&R"} record{(isKickoffTalentContext ? kickoffTalentRecordCount : selectedTalentProfile.arRecords.length) === 1 ? "" : "s"}
-                  </span>
+                  {isKickoffTalentContext && selectedTalentHeadlineKickoffStage && (
+                    <span style={{ ...mkP(true, sc(selectedTalentHeadlineKickoffStage, C), sb(selectedTalentHeadlineKickoffStage, C)), cursor: "default" }}>
+                      {SM[selectedTalentHeadlineKickoffStage]?.label || titleCaseWords(selectedTalentHeadlineKickoffStage)}
+                    </span>
+                  )}
+                  {isLiveTalentContext && selectedTalentHeadlineMarketingStatus && (
+                    <span style={{ ...mkP(true, marketingStatusTone(selectedTalentHeadlineMarketingStatus, C).tone, marketingStatusTone(selectedTalentHeadlineMarketingStatus, C).bg), cursor: "default" }}>
+                      {MM[selectedTalentHeadlineMarketingStatus]?.label || titleCaseWords(selectedTalentHeadlineMarketingStatus)}
+                    </span>
+                  )}
+                  {selectedTalentHeadlineOwner && (
+                    <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>
+                      {selectedTalentHeadlineOwner}
+                    </span>
+                  )}
+                  {selectedTalentGenre && (
+                    <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>
+                      {selectedTalentGenre}
+                    </span>
+                  )}
+                  {selectedTalentListeners && (
+                    <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>
+                      {selectedTalentListeners}
+                    </span>
+                  )}
+                  {isLiveTalentContext && selectedTalentProfile.campaigns.length > 0 && (
+                    <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>
+                      {selectedTalentProfile.campaigns.length} campaign{selectedTalentProfile.campaigns.length === 1 ? "" : "s"}
+                    </span>
+                  )}
                 </div>
               </div>
               <button onClick={closeTalentProfileModal} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 20, color: C.ts }}>✕</button>
@@ -8732,20 +8925,30 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 18 }}>
               <div style={{ ...cS, padding: "18px 20px" }}>
-                <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>Identity</div>
+                <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>
+                  {selectedTalentProfile.talentTypes.includes("Curator") ? "Profile" : "Artist Info"}
+                </div>
                 <div style={{ display: "grid", gap: 10, fontSize: 13 }}>
                   <div className="gf-rail-kv">
-                    <span className="gf-rail-kv-label">Platform lifecycle</span>
-                    <span className="gf-rail-kv-value">{TALENT_LIFECYCLE_LABELS[selectedTalentProfile.platformLifecycle] || "Pre-Live"}</span>
+                    <span className="gf-rail-kv-label">Genre / vibe</span>
+                    <span className="gf-rail-kv-value">{selectedTalentGenre || "Not set yet"}</span>
                   </div>
                   <div className="gf-rail-kv">
-                    <span className="gf-rail-kv-label">Sources</span>
-                    <span className="gf-rail-kv-value">
-                      {selectedTalentProfile.sources.length
-                        ? selectedTalentProfile.sources.map(source => TALENT_SOURCE_LABELS[source] || source).join(" · ")
-                        : "Not labeled yet"}
-                    </span>
+                    <span className="gf-rail-kv-label">Monthly listeners</span>
+                    <span className="gf-rail-kv-value">{selectedTalentListeners || "No listener count yet"}</span>
                   </div>
+                  {selectedTalentHitTrack && (
+                    <div className="gf-rail-kv">
+                      <span className="gf-rail-kv-label">Hit track</span>
+                      <span className="gf-rail-kv-value">{selectedTalentHitTrack}</span>
+                    </div>
+                  )}
+                  {selectedTalentLocation && (
+                    <div className="gf-rail-kv">
+                      <span className="gf-rail-kv-label">Location</span>
+                      <span className="gf-rail-kv-value">{selectedTalentLocation}</span>
+                    </div>
+                  )}
                   <div className="gf-rail-kv">
                     <span className="gf-rail-kv-label">Primary email</span>
                     <span className="gf-rail-kv-value">{selectedTalentProfile.primaryEmail || "No email yet"}</span>
@@ -8768,11 +8971,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                   </div>
                   <div className="gf-rail-kv">
                     <span className="gf-rail-kv-label">Spotify</span>
-                    <span className="gf-rail-kv-value">
-                      {selectedTalentProfile.spotifyUrl
-                        ? `${selectedTalentProfile.spotifyMonthlyListeners || "Linked"}`
-                        : "Not linked yet"}
-                    </span>
+                    <span className="gf-rail-kv-value">{selectedTalentSpotifyLabel}</span>
                   </div>
                   {selectedTalentProfile.curatorPageUrl && (
                     <div className="gf-rail-kv">
@@ -8795,7 +8994,10 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 4 }}>
                     {!isKickoffTalentContext && (
                       <button
-                        onClick={() => openMarketingItemModalFromTalentProfile(selectedTalentProfile)}
+                        onClick={() => {
+                          if (isLiveTalentContext) launchLiveCampaignAction(selectedTalentProfile);
+                          else openMarketingItemModalFromTalentProfile(selectedTalentProfile);
+                        }}
                         disabled={isReadOnly}
                         style={{ ...actionBtn(false, "good"), ...lockStyle(isReadOnly) }}
                       >
@@ -8823,65 +9025,70 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
 
               <div style={{ ...cS, padding: "18px 20px" }}>
                 <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>
-                  {isKickoffTalentContext ? "Kickoff Coverage" : isLiveTalentContext ? "Live Coverage" : "Talent Coverage"}
+                  {isKickoffTalentContext ? "Current Kickoff Status" : isLiveTalentContext ? "Live Snapshot" : "Workspace Snapshot"}
                 </div>
                 <div style={{ fontSize: 12, color: C.ts, marginBottom: 12 }}>
                   {isKickoffTalentContext
-                    ? "Kickoff stays focused on pre-live scouting, curator context, and onboarding progress."
+                    ? "This is the pre-live status we are actively working from inside Kickoff."
                     : isLiveTalentContext
-                      ? "Live stays focused on active roster context, campaign work, and the history that carried forward from kickoff."
-                      : "Identity stays shared here, while kickoff progress, curator context, and live campaign work stay separated underneath."}
+                      ? "This is the live roster snapshot for campaigns currently in motion."
+                      : "This is the shared snapshot across the workspace."}
                 </div>
-                <div style={{ display: "grid", gap: 10 }}>
-                  {talentOverviewProjectSummaries.length ? talentOverviewProjectSummaries.map(summary => (
-                    <div key={summary.projectId} style={{ padding: "12px 14px", borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sa }}>
-                      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, marginBottom: 10 }}>
-                        <div style={{ minWidth: 0 }}>
-                          <div style={{ fontSize: 13, fontWeight: 700, color: C.tx, marginBottom: 4 }}>
-                            {isKickoffTalentContext
-                              ? workspaceRecordLabel(summary.projectType, "kickoff")
-                              : isLiveTalentContext
-                                ? workspaceRecordLabel(summary.projectType, "live")
-                                : summary.projectName}
-                          </div>
-                          <div style={{ fontSize: 11, color: C.tt }}>
-                            {isKickoffTalentContext
-                              ? `${summary.projectType === "curator" ? "Curator" : "Kickoff"} record`
-                              : summary.projectType === "marketing"
-                                ? "Live campaign record"
-                                : `${projectTypeLabel(summary.projectType)} record`}
-                            {" · "}
-                            {summary.arRecords.length ? `${summary.arRecords.length} A&R record${summary.arRecords.length === 1 ? "" : "s"}` : "No A&R record"}
-                            {!isKickoffTalentContext && (
-                              <>
-                                {" · "}
-                                {summary.marketingAssignments.length ? `${summary.marketingAssignments.length} marketing assignment${summary.marketingAssignments.length === 1 ? "" : "s"}` : "No marketing assignments"}
-                              </>
-                            )}
-                          </div>
-                        </div>
-                      </div>
+                {isKickoffTalentContext ? (
+                  selectedTalentPrimaryKickoffRecord ? (
+                    <div style={{ display: "grid", gap: 10 }}>
                       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                        {summary.owners.map(owner => (
-                          <span key={`${summary.projectId}:owner:${owner}`} style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>Owner: {owner}</span>
-                        ))}
-                        {summary.arStages.map(stage => (
-                          <span key={`${summary.projectId}:stage:${stage}`} style={{ ...mkP(true, sc(stage, C), sb(stage, C)), cursor: "default" }}>{SM[stage]?.label || "Prospect"}</span>
-                        ))}
-                        {!isKickoffTalentContext && summary.marketingStatuses.map(status => {
-                          const tone = marketingStatusTone(status, C);
-                          return (
-                            <span key={`${summary.projectId}:status:${status}`} style={{ ...mkP(true, tone.tone, tone.bg), cursor: "default" }}>{MM[status]?.label || "Prospect"}</span>
-                          );
-                        })}
+                        <span style={{ ...mkP(true, sc(selectedTalentPrimaryKickoffRecord.stage, C), sb(selectedTalentPrimaryKickoffRecord.stage, C)), cursor: "default" }}>
+                          {SM[selectedTalentPrimaryKickoffRecord.stage]?.label || "Prospect"}
+                        </span>
+                        <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>
+                          Owner: {selectedTalentPrimaryKickoffRecord.owner || "Unassigned"}
+                        </span>
+                        {selectedTalentPrimaryKickoffRecord.followUp && (
+                          <span style={{ ...mkP(true, C.ac, C.al), cursor: "default" }}>
+                            Follow-up {selectedTalentPrimaryKickoffRecord.followUp}
+                          </span>
+                        )}
+                      </div>
+                      {selectedTalentPrimaryKickoffRecord.note && (
+                        <div style={{ fontSize: 12, color: C.ts, lineHeight: 1.7 }}>
+                          {selectedTalentPrimaryKickoffRecord.note}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: 12, color: C.tt }}>No active kickoff record is linked yet.</div>
+                  )
+                ) : isLiveTalentContext ? (
+                  <div style={{ display: "grid", gap: 10 }}>
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      <span style={{ ...mkP(true, C.lv, C.lvb), cursor: "default" }}>
+                        {selectedTalentProfile.campaigns.length} campaign{selectedTalentProfile.campaigns.length === 1 ? "" : "s"}
+                      </span>
+                      <span style={{ ...mkP(true, C.pr, C.pb), cursor: "default" }}>
+                        {selectedTalentProfile.marketingAssignments.length} assignment{selectedTalentProfile.marketingAssignments.length === 1 ? "" : "s"}
+                      </span>
+                      {selectedTalentHeadlineOwner && (
+                        <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>
+                          Owner: {selectedTalentHeadlineOwner}
+                        </span>
+                      )}
+                    </div>
+                    <div style={{ display: "grid", gap: 8, fontSize: 12, color: C.ts }}>
+                      <div>
+                        <strong style={{ color: C.tx }}>Campaigns:</strong> {selectedTalentProfile.campaigns.length ? selectedTalentProfile.campaigns.join(" · ") : "No campaigns yet"}
+                      </div>
+                      <div>
+                        <strong style={{ color: C.tx }}>Status mix:</strong> {liveStatusSummaryLabel(selectedTalentProfile)}
                       </div>
                     </div>
-                  )) : (
-                    <div style={{ fontSize: 12, color: C.tt }}>
-                      {isKickoffTalentContext ? "No kickoff records yet." : isLiveTalentContext ? "No live records yet." : "No linked records yet."}
-                    </div>
-                  )}
-                </div>
+                  </div>
+                ) : (
+                  <div style={{ display: "grid", gap: 8, fontSize: 12, color: C.ts }}>
+                    <div><strong style={{ color: C.tx }}>Records:</strong> {talentOverviewProjectSummaries.length}</div>
+                    <div><strong style={{ color: C.tx }}>Campaigns:</strong> {selectedTalentProfile.campaigns.length || 0}</div>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -9024,7 +9231,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
               <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
                 <div style={{ fontSize: 14, fontWeight: 700 }}>Live Roster Campaigns</div>
                 <button
-                  onClick={() => openMarketingItemModalFromTalentProfile(selectedTalentProfile)}
+                  onClick={() => launchLiveCampaignAction(selectedTalentProfile)}
                   disabled={isReadOnly}
                   style={{ ...actionBtn(false, "good"), ...lockStyle(isReadOnly) }}
                 >
@@ -9116,8 +9323,10 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                   <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>Latest Notes + Timeline</div>
                   <div style={{ fontSize: 12, color: C.ts }}>
                     {isKickoffTalentContext
-                      ? "The newest kickoff and curator updates tied to this person across the workspace."
-                      : "The newest kickoff, curator, and campaign updates tied to this person across the workspace."}
+                      ? "The newest kickoff and curator updates tied to this person."
+                      : isLiveTalentContext
+                        ? "The newest live roster and campaign updates tied to this person."
+                        : "The newest updates tied to this person across the workspace."}
                   </div>
                 </div>
                 <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
@@ -9801,10 +10010,16 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
           </div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
             <button
-              onClick={() => { void launchWorkspaceProjectAction(defaultLiveMarketingProject?.id || "", "show-marketing-item", "No live campaign record is mapped in this workspace yet"); }}
+              onClick={() => { launchLiveCampaignAction(); }}
               style={{ ...actionBtn(true, "good"), ...lockStyle(isReadOnly) }}
             >
               + Campaign Assignment
+            </button>
+            <button
+              onClick={() => setShowCampaignHubModal(true)}
+              style={{ ...actionBtn(false, "accent"), ...lockStyle(!liveCampaignHubRows.length) }}
+            >
+              Campaign Hub
             </button>
             <button
               onClick={() => { void launchWorkspaceProjectAction(defaultLiveMarketingProject?.id || "", "show-marketing-bulk-update", "No live campaign record is mapped in this workspace yet"); }}
@@ -9922,14 +10137,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                           </button>
                           {defaultLiveMarketingProject && (
                             <button
-                              onClick={() => {
-                                void launchWorkspaceProjectAction(
-                                  defaultLiveMarketingProject.id,
-                                  "show-marketing-item",
-                                  "No live campaign record is mapped in this workspace yet",
-                                  { profileId: profile.id }
-                                );
-                              }}
+                              onClick={() => { launchLiveCampaignAction(profile); }}
                               style={{ ...actionBtn(true, "good"), ...lockStyle(isReadOnly) }}
                             >
                               + Campaign
@@ -10003,12 +10211,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                       <button
                         onClick={e => {
                           e.stopPropagation();
-                          void launchWorkspaceProjectAction(
-                            defaultLiveMarketingProject.id,
-                            "show-marketing-item",
-                            "No live campaign record is mapped in this workspace yet",
-                            { profileId: profile.id }
-                          );
+                          launchLiveCampaignAction(profile);
                         }}
                         style={{ ...actionBtn(true, "good"), ...lockStyle(isReadOnly) }}
                       >
