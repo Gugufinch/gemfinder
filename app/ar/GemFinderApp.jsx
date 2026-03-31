@@ -3227,6 +3227,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [showWorkspaceSourceRecords, setShowWorkspaceSourceRecords] = useState(false);
   const [showTalentProfileModal, setShowTalentProfileModal] = useState(false);
   const [selectedTalentProfileId, setSelectedTalentProfileId] = useState("");
+  const [talentProfileContext, setTalentProfileContext] = useState("project");
+  const [talentKickoffEditRecordKey, setTalentKickoffEditRecordKey] = useState("");
   const [talentTargetProjectId, setTalentTargetProjectId] = useState("");
   const [talentTargetCampaign, setTalentTargetCampaign] = useState("");
   const [talentTargetNewCampaign, setTalentTargetNewCampaign] = useState("");
@@ -3900,9 +3902,19 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     () => selectedTalentProjectSummaries.filter(summary => summary.marketingAssignments.length),
     [selectedTalentProjectSummaries]
   );
+  const isKickoffTalentContext = talentProfileContext === "kickoff";
+  const isLiveTalentContext = talentProfileContext === "live-crm";
+  const showTalentPlacementTools = talentProfileContext === "project";
+  const talentOverviewProjectSummaries = isKickoffTalentContext ? selectedTalentArProjectSummaries : selectedTalentProjectSummaries;
   const selectedTalentRecentActivity = useMemo(
     () => (selectedTalentProfile?.recentActivity || []).slice(0, 16),
     [selectedTalentProfile]
+  );
+  const talentOverviewRecentActivity = useMemo(
+    () => (isKickoffTalentContext
+      ? selectedTalentRecentActivity.filter(entry => normalizeProjectType(entry?.projectType) !== "marketing")
+      : selectedTalentRecentActivity),
+    [isKickoffTalentContext, selectedTalentRecentActivity]
   );
   const talentTargetProject = useMemo(
     () => projects.find(project => project.id === talentTargetProjectId) || null,
@@ -4218,6 +4230,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const closeTalentProfileModal = () => {
     setShowTalentProfileModal(false);
     setSelectedTalentProfileId("");
+    setTalentProfileContext("project");
+    setTalentKickoffEditRecordKey("");
     setTalentTargetProjectId("");
     setTalentTargetCampaign("");
     setTalentTargetNewCampaign("");
@@ -4225,12 +4239,14 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     setTalentTargetStatus("prospect");
     setTalentTargetSaving(false);
   };
-  const openTalentProfileById = talentId => {
+  const openTalentProfileById = (talentId, context = "project") => {
     if (!talentId) {
       flash("No shared talent profile found yet", "err");
       return;
     }
     setSelectedTalentProfileId(talentId);
+    setTalentProfileContext(context);
+    setTalentKickoffEditRecordKey("");
     resetTalentTargetDraft(talentId);
     setShowTalentProfileModal(true);
   };
@@ -4239,14 +4255,14 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       flash("No shared talent profile found yet", "err");
       return;
     }
-    openTalentProfileById(workspaceTalentData.artistTalentIds.get(`${proj.id}::${artist.n}`) || "");
+    openTalentProfileById(workspaceTalentData.artistTalentIds.get(`${proj.id}::${artist.n}`) || "", "project");
   };
   const openTalentProfileFromMarketingItem = item => {
     if (!item?.id) {
       flash("No shared talent profile found yet", "err");
       return;
     }
-    openTalentProfileById(workspaceTalentData.marketingTalentIds.get(String(item.id || "")) || "");
+    openTalentProfileById(workspaceTalentData.marketingTalentIds.get(String(item.id || "")) || "", "project");
   };
   const openTalentProfileFromWorkspaceProfile = profile => {
     if (!profile) {
@@ -4259,7 +4275,10 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     const fallbackMarketingId = profile.primaryAssignmentId
       ? workspaceTalentData.marketingTalentIds.get(String(profile.primaryAssignmentId || "")) || ""
       : "";
-    openTalentProfileById(String(profile.id || fallbackMarketingId || fallbackArtistId || "").trim());
+    openTalentProfileById(
+      String(profile.id || fallbackMarketingId || fallbackArtistId || "").trim(),
+      screen === "kickoff" ? "kickoff" : screen === "live-crm" ? "live-crm" : "workspace"
+    );
   };
   const seedArtistEditForm = artist => setArtistEditForm({
     name: artist?.n || "",
@@ -6455,6 +6474,106 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     };
     await saveProjectsList(projects.map(project => project.id === targetProject.id ? nextProject : project));
     flash(nextFollowUp ? `Follow-up: ${sD(nextFollowUp)}` : "Follow-up cleared");
+  };
+
+  const openTalentOverviewKickoffEditor = record => {
+    if (!record?.projectId || !record?.artistName) return;
+    const targetProject = projects.find(project => project.id === record.projectId);
+    const targetArtist = targetProject?.artists?.find(artist => artist.n === record.artistName);
+    if (!targetProject || !targetArtist) {
+      flash("Could not find that kickoff record", "err");
+      return;
+    }
+    seedArtistEditForm(targetArtist);
+    setTalentKickoffEditRecordKey(`${record.projectId}::${record.artistName}`);
+  };
+
+  const saveTalentOverviewKickoffProfile = async record => {
+    if (!requireEditor()) return;
+    if (!record?.projectId || !record?.artistName) return;
+    const targetProject = projects.find(project => project.id === record.projectId);
+    const targetArtist = targetProject?.artists?.find(artist => artist.n === record.artistName);
+    if (!targetProject || !targetArtist) {
+      flash("Could not find that kickoff record", "err");
+      return;
+    }
+
+    const previousName = String(targetArtist.n || "");
+    const nextName = artistEditForm.name.trim();
+    if (!nextName) {
+      flash("Artist name is required", "err");
+      return;
+    }
+    const renamed = nextName !== previousName;
+    const nextCanon = canonicalArtistName(nextName);
+    const hasCollision = targetProject.artists.some(item => item.n !== previousName && canonicalArtistName(item.n) === nextCanon);
+    if (hasCollision) {
+      flash(`${nextName} already exists in kickoff`, "err");
+      return;
+    }
+
+    const socialHandle = normalizeSocialHandle(artistEditForm.social);
+    const nextArtist = {
+      ...targetArtist,
+      n: nextName,
+      g: artistEditForm.genre.trim(),
+      l: artistEditForm.listeners.trim(),
+      h: artistEditForm.hitTrack.trim(),
+      ig: socialHandle ? `@${socialHandle}` : "",
+      soc: socialHandle,
+      e: artistEditForm.email.trim(),
+      loc: artistEditForm.location.trim(),
+      curatorPageUrl: String(artistEditForm.curatorPageUrl || "").trim(),
+      curatedArtists: normalizeCuratedArtists(artistEditForm.curatedArtists),
+    };
+    const nextTalentId = preferredTalentProfileId(buildTalentIdentity(nextArtist));
+
+    setArtistEditSaving(true);
+    try {
+      let nextProject = {
+        ...targetProject,
+        artists: targetProject.artists.map(item => item.n === previousName ? nextArtist : item),
+        pipeline: renamed ? renameObjectKey(targetProject.pipeline, previousName, nextName) : { ...(targetProject.pipeline || {}) },
+        notes: renamed ? renameObjectKey(targetProject.notes, previousName, nextName) : { ...(targetProject.notes || {}) },
+        followUps: renamed ? renameObjectKey(targetProject.followUps, previousName, nextName) : { ...(targetProject.followUps || {}) },
+        assignments: renamed ? renameObjectKey(targetProject.assignments, previousName, nextName) : { ...(targetProject.assignments || {}) },
+        replyIntel: renamed ? renameObjectKey(targetProject.replyIntel, previousName, nextName) : { ...(targetProject.replyIntel || {}) },
+        sequenceState: renamed ? renameObjectKey(targetProject.sequenceState, previousName, nextName) : { ...(targetProject.sequenceState || {}) },
+        activityLog: renamed ? renameObjectKey(targetProject.activityLog, previousName, nextName) : { ...(targetProject.activityLog || {}) },
+        sendLog: renamed
+          ? (targetProject.sendLog || []).map(item => item.artist === previousName ? { ...item, artist: nextName } : item)
+          : [...(targetProject.sendLog || [])],
+      };
+
+      let activityLog = nextProject.activityLog || {};
+      if (renamed) {
+        activityLog = logAction({ ...nextProject, activityLog }, nextName, `Artist renamed from ${previousName}`);
+      }
+      activityLog = logAction({ ...nextProject, activityLog }, nextName, "Kickoff profile updated");
+      nextProject = { ...nextProject, activityLog };
+
+      await saveProjectsList(projects.map(project => project.id === targetProject.id ? nextProject : project));
+
+      if (renamed) {
+        try {
+          await apiRelabelArtistInbox({
+            projectId: targetProject.id,
+            previousArtistName: previousName,
+            nextArtistName: nextName,
+          });
+        } catch (error) {
+          console.error("[gemfinder] artist inbox relabel failed", error);
+          flash("Artist saved, but inbox labels could not be updated yet", "err");
+        }
+      }
+
+      seedArtistEditForm(nextArtist);
+      setTalentKickoffEditRecordKey(`${record.projectId}::${nextName}`);
+      if (nextTalentId) setSelectedTalentProfileId(nextTalentId);
+      flash(renamed ? `Updated ${previousName} → ${nextName}` : `Updated ${nextName}`);
+    } finally {
+      setArtistEditSaving(false);
+    }
   };
 
   const updateTalentOverviewMarketingStatus = async (assignment, nextStatus) => {
@@ -8767,7 +8886,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                     </span>
                   ))}
                   <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{selectedTalentProjectSummaries.length} project{selectedTalentProjectSummaries.length === 1 ? "" : "s"}</span>
-                  <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{selectedTalentProfile.marketingAssignments.length} marketing assignment{selectedTalentProfile.marketingAssignments.length === 1 ? "" : "s"}</span>
+                  {!isKickoffTalentContext && <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{selectedTalentProfile.marketingAssignments.length} marketing assignment{selectedTalentProfile.marketingAssignments.length === 1 ? "" : "s"}</span>}
                   <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{selectedTalentProfile.arRecords.length} A&R record{selectedTalentProfile.arRecords.length === 1 ? "" : "s"}</span>
                 </div>
               </div>
@@ -8857,12 +8976,14 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
               </div>
 
               <div style={{ ...cS, padding: "18px 20px" }}>
-                <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>Workspace Coverage</div>
+                <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>{isKickoffTalentContext ? "Kickoff Coverage" : "Workspace Coverage"}</div>
                 <div style={{ fontSize: 12, color: C.ts, marginBottom: 12 }}>
-                  Identity stays shared here, while kickoff progress, curator context, and live campaign work stay separated underneath.
+                  {isKickoffTalentContext
+                    ? "Kickoff stays focused on pre-live scouting, curator context, and onboarding progress."
+                    : "Identity stays shared here, while kickoff progress, curator context, and live campaign work stay separated underneath."}
                 </div>
                 <div style={{ display: "grid", gap: 10 }}>
-                  {selectedTalentProjectSummaries.length ? selectedTalentProjectSummaries.map(summary => (
+                  {talentOverviewProjectSummaries.length ? talentOverviewProjectSummaries.map(summary => (
                     <div key={summary.projectId} style={{ padding: "12px 14px", borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sa }}>
                       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, marginBottom: 10 }}>
                         <div style={{ minWidth: 0 }}>
@@ -8871,8 +8992,12 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                             {projectTypeLabel(summary.projectType)} record
                             {" · "}
                             {summary.arRecords.length ? `${summary.arRecords.length} A&R record${summary.arRecords.length === 1 ? "" : "s"}` : "No A&R record"}
-                            {" · "}
-                            {summary.marketingAssignments.length ? `${summary.marketingAssignments.length} marketing assignment${summary.marketingAssignments.length === 1 ? "" : "s"}` : "No marketing assignments"}
+                            {!isKickoffTalentContext && (
+                              <>
+                                {" · "}
+                                {summary.marketingAssignments.length ? `${summary.marketingAssignments.length} marketing assignment${summary.marketingAssignments.length === 1 ? "" : "s"}` : "No marketing assignments"}
+                              </>
+                            )}
                           </div>
                         </div>
                         <span style={{ ...mkP(true, C.tt, C.sf), cursor: "default" }}>
@@ -8886,7 +9011,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                         {summary.arStages.map(stage => (
                           <span key={`${summary.projectId}:stage:${stage}`} style={{ ...mkP(true, sc(stage, C), sb(stage, C)), cursor: "default" }}>{SM[stage]?.label || "Prospect"}</span>
                         ))}
-                        {summary.marketingStatuses.map(status => {
+                        {!isKickoffTalentContext && summary.marketingStatuses.map(status => {
                           const tone = marketingStatusTone(status, C);
                           return (
                             <span key={`${summary.projectId}:status:${status}`} style={{ ...mkP(true, tone.tone, tone.bg), cursor: "default" }}>{MM[status]?.label || "Prospect"}</span>
@@ -8901,20 +9026,22 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
               </div>
             </div>
 
-            <div style={{ ...cS, padding: "18px 20px", marginBottom: 16 }}>
+            {showTalentPlacementTools && <div style={{ ...cS, padding: "18px 20px", marginBottom: 16 }}>
               <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "flex-start", marginBottom: 12, flexWrap: "wrap" }}>
                 <div>
                   <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>Latest Notes + Timeline</div>
                   <div style={{ fontSize: 12, color: C.ts }}>
-                    The newest kickoff, curator, and campaign updates tied to this person across the workspace.
+                    {isKickoffTalentContext
+                      ? "The newest kickoff and curator updates tied to this person across the workspace."
+                      : "The newest kickoff, curator, and campaign updates tied to this person across the workspace."}
                   </div>
                 </div>
                 <div style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>
-                  {selectedTalentRecentActivity.length} recent item{selectedTalentRecentActivity.length === 1 ? "" : "s"}
+                  {talentOverviewRecentActivity.length} recent item{talentOverviewRecentActivity.length === 1 ? "" : "s"}
                 </div>
               </div>
               <div style={{ display: "grid", gap: 10 }}>
-                {selectedTalentRecentActivity.length ? selectedTalentRecentActivity.map((entry, index) => (
+                {talentOverviewRecentActivity.length ? talentOverviewRecentActivity.map((entry, index) => (
                   <div key={`${entry.id || entry.time || entry.action || "activity"}:${index}`} style={{ padding: "12px 14px", borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sa }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: 8, flexWrap: "wrap" }}>
                       <div style={{ minWidth: 0 }}>
@@ -8933,7 +9060,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                     </div>
                     <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                       {entry.projectName && <span style={{ ...mkP(true, C.ac, C.al), cursor: "default" }}>{entry.projectName}</span>}
-                      {entry.campaign && entry.campaign !== "No campaign" && <span style={{ ...mkP(true, C.bu, C.bb), cursor: "default" }}>{entry.campaign}</span>}
+                      {!isKickoffTalentContext && entry.campaign && entry.campaign !== "No campaign" && <span style={{ ...mkP(true, C.bu, C.bb), cursor: "default" }}>{entry.campaign}</span>}
                       {entry.actor && <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{entry.actor}</span>}
                       {entry.kind && <span style={{ ...mkP(true, C.tt, C.sa), cursor: "default" }}>{titleCaseWords(entry.kind)}</span>}
                     </div>
@@ -8942,7 +9069,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                   <div style={{ fontSize: 12, color: C.tt }}>No linked notes or timeline items yet.</div>
                 )}
               </div>
-            </div>
+            </div>}
 
             <div style={{ ...cS, padding: "18px 20px", marginBottom: 16 }}>
               <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "flex-start", marginBottom: 14 }}>
@@ -9089,6 +9216,48 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                             <div style={{ fontSize: 11, color: C.tt }}>
                               {[record.genre, record.monthlyListeners ? `${record.monthlyListeners} listeners` : "", record.location].filter(Boolean).join(" · ") || (record.projectType === "curator" ? "Working curator record" : "Working A&R record")}
                             </div>
+                            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
+                              {talentKickoffEditRecordKey === `${record.projectId}::${record.artistName}` ? (
+                                <>
+                                  <button
+                                    onClick={() => { setTalentKickoffEditRecordKey(""); }}
+                                    disabled={artistEditSaving}
+                                    style={{ ...actionBtn(false, "neutral"), ...lockStyle(artistEditSaving) }}
+                                  >
+                                    Cancel Edit
+                                  </button>
+                                  <button
+                                    onClick={() => { void saveTalentOverviewKickoffProfile(record); }}
+                                    disabled={artistEditSaving || isReadOnly}
+                                    style={{ ...actionBtn(false, "accent"), ...lockStyle(artistEditSaving || isReadOnly) }}
+                                  >
+                                    {artistEditSaving ? "Saving..." : "Save Profile"}
+                                  </button>
+                                </>
+                              ) : (
+                                <button
+                                  onClick={() => openTalentOverviewKickoffEditor(record)}
+                                  disabled={isReadOnly}
+                                  style={{ ...actionBtn(false, "neutral"), ...lockStyle(isReadOnly) }}
+                                >
+                                  Edit {record.projectType === "curator" ? "Curator" : "Artist"} Info
+                                </button>
+                              )}
+                            </div>
+                            {talentKickoffEditRecordKey === `${record.projectId}::${record.artistName}` && (
+                              <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10, marginTop: 12 }}>
+                                <input value={artistEditForm.name} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, name: e.target.value }))} placeholder={record.projectType === "curator" ? "Curator name" : "Artist name"} style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
+                                <input value={artistEditForm.genre} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, genre: e.target.value }))} placeholder="Genre / vibe" style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
+                                <input value={artistEditForm.listeners} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, listeners: e.target.value }))} placeholder="Monthly listeners" style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
+                                <input value={artistEditForm.hitTrack} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, hitTrack: e.target.value }))} placeholder="Hit track" style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
+                                <input value={artistEditForm.social} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, social: e.target.value }))} placeholder="@handle or URL" style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
+                                <input value={artistEditForm.email} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, email: e.target.value }))} placeholder="Email" style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
+                                <input value={artistEditForm.location} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, location: e.target.value }))} placeholder="Location" style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
+                                {record.projectType === "curator" && (
+                                  <input value={artistEditForm.curatorPageUrl} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, curatorPageUrl: e.target.value }))} placeholder="Curator page link" style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
+                                )}
+                              </div>
+                            )}
                             {(record.note || record.followUp) && (
                               <div style={{ display: "grid", gap: 4, marginTop: 8, fontSize: 11, color: C.ts, lineHeight: 1.5 }}>
                                 {record.note && <div><strong style={{ color: C.tx }}>Notes:</strong> {record.note}</div>}
@@ -9161,7 +9330,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
               </div>
             </div>
 
-            <div style={{ ...cS, padding: "18px 20px" }}>
+            {!isKickoffTalentContext && <div style={{ ...cS, padding: "18px 20px" }}>
               <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>Live Roster Campaigns</div>
               <div style={{ display: "grid", gap: 10 }}>
                 {selectedTalentMarketingProjectSummaries.length ? selectedTalentMarketingProjectSummaries.map(summary => (
@@ -9240,7 +9409,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                   <div style={{ fontSize: 12, color: C.tt }}>No marketing assignments linked yet.</div>
                 )}
               </div>
-            </div>
+            </div>}
           </div>
         </div>
       )}
