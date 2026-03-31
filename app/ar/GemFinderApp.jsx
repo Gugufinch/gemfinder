@@ -34,6 +34,7 @@ const DEFAULT_WORKSPACE = {
   name: "Songfinch",
   slug: "songfinch",
 };
+const WORKSPACE_VIEW_PREFS_VERSION = 1;
 const MARKETING_STATUSES = [
   { id: "prospect", label: "Prospect", icon: "◎", description: "Talent is identified for the campaign but has not replied yet." },
   { id: "contacted", label: "Contacted", icon: "→", description: "The campaign ask has been sent to the talent." },
@@ -4299,8 +4300,17 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         if (d?.lastActive) setApId(d.lastActive);
         if (d?.dark) setDark(d.dark);
         if (d?.viewMode) setViewMode(d.viewMode);
-        if (d?.kickoffViewMode) setKickoffViewMode(d.kickoffViewMode);
-        if (d?.liveRosterViewMode) setLiveRosterViewMode(d.liveRosterViewMode);
+        const savedWorkspaceViewPrefsVersion = Number(d?.workspaceViewPrefsVersion || 0);
+        const nextKickoffViewMode =
+          savedWorkspaceViewPrefsVersion >= WORKSPACE_VIEW_PREFS_VERSION && d?.kickoffViewMode
+            ? d.kickoffViewMode
+            : "table";
+        const nextLiveRosterViewMode =
+          savedWorkspaceViewPrefsVersion >= WORKSPACE_VIEW_PREFS_VERSION && d?.liveRosterViewMode
+            ? d.liveRosterViewMode
+            : "table";
+        setKickoffViewMode(nextKickoffViewMode);
+        setLiveRosterViewMode(nextLiveRosterViewMode);
         if (d?.projectMode) setProjectMode(d.projectMode);
         setCurrentWorkspaceId(nextCurrentWorkspaceId);
         setWorkspaceUser(nextWorkspaceUser);
@@ -4613,6 +4623,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       viewMode: vm !== undefined ? vm : viewMode,
       kickoffViewMode: kvm !== undefined ? kvm : kickoffViewMode,
       liveRosterViewMode: lvm !== undefined ? lvm : liveRosterViewMode,
+      workspaceViewPrefsVersion: WORKSPACE_VIEW_PREFS_VERSION,
       layoutByUser: lb !== undefined ? lb : layoutByUser,
       workspaceUser: wu !== undefined ? wu : workspaceUser,
       projectMode: pm !== undefined ? pm : projectMode,
