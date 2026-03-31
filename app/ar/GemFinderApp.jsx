@@ -3772,13 +3772,22 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   );
   const liveStatusSummaryParts = useCallback(profile => {
     const counts = {};
-    profile.projectSummaries.forEach(summary => {
-      (summary.marketingAssignments || []).forEach(assignment => {
+    const projectSummaries = Array.isArray(profile?.projectSummaries) ? profile.projectSummaries : null;
+    if (projectSummaries?.length) {
+      projectSummaries.forEach(summary => {
+        (summary.marketingAssignments || []).forEach(assignment => {
+          const status = normalizeMarketingStatus(assignment?.status || "");
+          if (!status) return;
+          counts[status] = (counts[status] || 0) + 1;
+        });
+      });
+    } else {
+      (profile?.marketingAssignments || []).forEach(assignment => {
         const status = normalizeMarketingStatus(assignment?.status || "");
         if (!status) return;
         counts[status] = (counts[status] || 0) + 1;
       });
-    });
+    }
     return Object.entries(counts)
       .sort((a, b) => (MARKETING_STATUS_ORDER[a[0]] ?? 999) - (MARKETING_STATUS_ORDER[b[0]] ?? 999) || b[1] - a[1])
       .map(([status, count]) => ({
