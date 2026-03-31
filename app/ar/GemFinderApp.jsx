@@ -3765,13 +3765,29 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     profile => SM[kickoffStageBucket(profile.stages)]?.label || "Prospect",
     []
   );
-  const liveStatusSummaryLabel = useCallback(profile => {
-    const statuses = uniqStrings(profile.projectSummaries.flatMap(summary => summary.marketingStatuses || []).filter(Boolean));
-    if (!statuses.length) return "No campaign status";
-    const labels = statuses.map(status => MM[status]?.label || titleCaseWords(status));
-    if (labels.length > 2) return `${labels.slice(0, 2).join(", ")} +${labels.length - 2}`;
-    return labels.join(", ");
+  const liveStatusSummaryParts = useCallback(profile => {
+    const counts = {};
+    profile.projectSummaries.forEach(summary => {
+      (summary.marketingAssignments || []).forEach(assignment => {
+        const status = normalizeMarketingStatus(assignment?.status || "");
+        if (!status) return;
+        counts[status] = (counts[status] || 0) + 1;
+      });
+    });
+    return Object.entries(counts)
+      .sort((a, b) => b[1] - a[1])
+      .map(([status, count]) => ({
+        id: status,
+        count,
+        label: MM[status]?.label || titleCaseWords(status),
+      }));
   }, []);
+  const liveStatusSummaryLabel = useCallback(profile => {
+    const parts = liveStatusSummaryParts(profile);
+    if (!parts.length) return "No campaign status";
+    if (parts.length > 2) return `${parts.slice(0, 2).map(part => `${part.label} (${part.count})`).join(", ")} +${parts.length - 2}`;
+    return parts.map(part => `${part.label} (${part.count})`).join(", ");
+  }, [liveStatusSummaryParts]);
   const exportKickoffView = () => {
     if (!kickoffProfiles.length) {
       flash("No kickoff talent in the current view yet", "err");
@@ -3990,10 +4006,10 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     || selectedTalentPrimaryMarketingAssignment?.spotifyMonthlyListeners
     || ""
   ).trim();
-  const selectedTalentSpotifyLabel = selectedTalentListeners
-    ? `${selectedTalentListeners} listeners`
-    : selectedTalentProfile?.spotifyUrl
-      ? "Linked"
+  const selectedTalentSpotifyLabel = selectedTalentProfile?.spotifyUrl
+    ? `Profile linked${selectedTalentListeners ? ` · ${selectedTalentListeners} listeners` : ""}`
+    : selectedTalentListeners
+      ? `Listener count on file · ${selectedTalentListeners}`
       : "Not linked yet";
   const selectedTalentHeadlineOwner = isKickoffTalentContext
     ? String(selectedTalentPrimaryKickoffRecord?.owner || "").trim()
@@ -4062,10 +4078,13 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         assignments: summary.assignments,
         talentCount: summary.talentNames.size,
         owners: [...summary.owners],
-        statusMix: Object.entries(summary.statuses)
+        statusParts: Object.entries(summary.statuses)
           .sort((a, b) => b[1] - a[1])
-          .map(([status, count]) => `${MM[status]?.label || titleCaseWords(status)} (${count})`)
-          .join(" · "),
+          .map(([status, count]) => ({
+            id: status,
+            count,
+            label: MM[status]?.label || titleCaseWords(status),
+          })),
         nextDue: summary.dueDates.sort()[0] || "",
       }))
       .sort((a, b) => b.assignments - a.assignments || a.name.localeCompare(b.name));
@@ -8537,7 +8556,11 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                     {campaign.owners.length ? campaign.owners.map(owner => (
                       <span key={`${campaign.name}:owner:${owner}`} style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{owner}</span>
                     )) : <span style={{ ...mkP(true, C.tt, C.sa), cursor: "default" }}>Unassigned</span>}
-                    {campaign.statusMix && <span style={{ ...mkP(true, C.pr, C.pb), cursor: "default" }}>{campaign.statusMix}</span>}
+                    {campaign.statusParts?.length ? campaign.statusParts.slice(0, 3).map(part => (
+                      <span key={`${campaign.name}:status:${part.id}`} style={{ ...mkP(true, marketingStatusTone(part.id, C).tone, marketingStatusTone(part.id, C).bg), cursor: "default" }}>
+                        {part.label} {part.count}
+                      </span>
+                    )) : null}
                   </div>
                 </div>
               )) : (
@@ -9024,15 +9047,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
               </div>
 
               <div style={{ ...cS, padding: "18px 20px" }}>
-                <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>
-                  {isKickoffTalentContext ? "Current Kickoff Status" : isLiveTalentContext ? "Live Snapshot" : "Workspace Snapshot"}
-                </div>
-                <div style={{ fontSize: 12, color: C.ts, marginBottom: 12 }}>
-                  {isKickoffTalentContext
-                    ? "This is the pre-live status we are actively working from inside Kickoff."
-                    : isLiveTalentContext
-                      ? "This is the live roster snapshot for campaigns currently in motion."
-                      : "This is the shared snapshot across the workspace."}
+                <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>
+                  {isKickoffTalentContext ? "Current Status" : isLiveTalentContext ? "Campaign Snapshot" : "Workspace Snapshot"}
                 </div>
                 {isKickoffTalentContext ? (
                   selectedTalentPrimaryKickoffRecord ? (
@@ -9078,8 +9094,17 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                       <div>
                         <strong style={{ color: C.tx }}>Campaigns:</strong> {selectedTalentProfile.campaigns.length ? selectedTalentProfile.campaigns.join(" · ") : "No campaigns yet"}
                       </div>
-                      <div>
-                        <strong style={{ color: C.tx }}>Status mix:</strong> {liveStatusSummaryLabel(selectedTalentProfile)}
+                      <div style={{ display: "grid", gap: 6 }}>
+                        <strong style={{ color: C.tx }}>Status mix</strong>
+                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                          {liveStatusSummaryParts(selectedTalentProfile).length ? liveStatusSummaryParts(selectedTalentProfile).map(part => (
+                            <span key={`talent-status-${part.id}`} style={{ ...mkP(true, marketingStatusTone(part.id, C).tone, marketingStatusTone(part.id, C).bg), cursor: "default" }}>
+                              {part.label} {part.count}
+                            </span>
+                          )) : (
+                            <span style={{ ...mkP(true, C.tt, C.sa), cursor: "default" }}>No campaign status</span>
+                          )}
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -9304,8 +9329,22 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                             </label>
                           </div>
                           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                            <button
+                              onClick={() => openMarketingItemModal(assignment)}
+                              disabled={isReadOnly}
+                              style={{ ...actionBtn(false, "accent"), ...lockStyle(isReadOnly) }}
+                            >
+                              Edit Assignment
+                            </button>
                             {assignment.briefUrl && <a href={assignment.briefUrl} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Brief</a>}
                             {assignment.contentUrl && <a href={assignment.contentUrl} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Content</a>}
+                            <button
+                              onClick={() => { void deleteMarketingItem(assignment.assignmentId); }}
+                              disabled={isReadOnly}
+                              style={{ ...actionBtn(false, "danger"), ...lockStyle(isReadOnly) }}
+                            >
+                              Remove
+                            </button>
                           </div>
                         </div>
                       ))}
@@ -9999,11 +10038,11 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
             <div>
               <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>Live Roster Actions</div>
               <div style={{ fontSize: 12, color: C.ts, maxWidth: 620 }}>
-                Use the live roster as the main campaign operating surface. This is where live talent, campaign work, groups, and marketing operations should happen.
+                Campaign work, groups, imports, and exports happen here.
               </div>
             </div>
             <div style={{ fontSize: 11, color: C.tt, textAlign: "right" }}>
-              {defaultLiveMarketingProject ? "Campaign tools are ready for this live roster" : "No live campaign record yet"}
+              {defaultLiveMarketingProject ? "Campaign tools are ready" : "No live campaign record yet"}
               <br />
               {liveCrmProfiles.length ? `${liveCrmProfiles.length} live talent in this view` : "Live roster is empty in this view"}
             </div>
@@ -10017,7 +10056,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
             </button>
             <button
               onClick={() => setShowCampaignHubModal(true)}
-              style={{ ...actionBtn(false, "accent"), ...lockStyle(!liveCampaignHubRows.length) }}
+              style={{ ...actionBtn(true, "accent"), ...lockStyle(!liveCampaignHubRows.length) }}
             >
               Campaign Hub
             </button>
@@ -10131,19 +10170,6 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                           {profile.primaryEmail || "No email yet"}
                           {profile.instagramHandle ? ` · @${profile.instagramHandle}` : ""}
                         </div>
-                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
-                          <button onClick={() => openTalentProfileFromWorkspaceProfile(profile)} style={actionBtn(false, "accent")}>
-                            View Talent
-                          </button>
-                          {defaultLiveMarketingProject && (
-                            <button
-                              onClick={() => { launchLiveCampaignAction(profile); }}
-                              style={{ ...actionBtn(true, "good"), ...lockStyle(isReadOnly) }}
-                            >
-                              + Campaign
-                            </button>
-                          )}
-                        </div>
                       </td>
                       <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>{summarizeWorkspaceValues(profile.talentTypes, 2)}</td>
                       <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>{summarizeWorkspaceValues(profile.sources, 2, source => TALENT_SOURCE_LABELS[source] || source)}</td>
@@ -10159,10 +10185,32 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                       </td>
                       <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>{summarizeWorkspaceValues(profile.campaigns, 2)}</td>
                       <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>{profile.marketingAssignments.length}</td>
-                      <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>{liveStatusSummaryLabel(profile)}</td>
+                      <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>
+                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                          {liveStatusSummaryParts(profile).length ? liveStatusSummaryParts(profile).slice(0, 3).map(part => (
+                            <span key={`${profile.id}:status:${part.id}`} style={{ ...mkP(true, marketingStatusTone(part.id, C).tone, marketingStatusTone(part.id, C).bg), cursor: "default" }}>
+                              {part.label} {part.count}
+                            </span>
+                          )) : (
+                            <span style={{ ...mkP(true, C.tt, C.sa), cursor: "default" }}>No status</span>
+                          )}
+                        </div>
+                      </td>
                       <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.tt }}>{profile.lastTouched ? rD(profile.lastTouched) : "—"}</td>
                       <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.tt }}>
-                        Use talent actions
+                        <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-start" }}>
+                          <button onClick={() => openTalentProfileFromWorkspaceProfile(profile)} style={actionBtn(false, "accent")}>
+                            View Talent
+                          </button>
+                          {defaultLiveMarketingProject && (
+                            <button
+                              onClick={() => { launchLiveCampaignAction(profile); }}
+                              style={{ ...actionBtn(true, "good"), ...lockStyle(isReadOnly) }}
+                            >
+                              + Campaign
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))}
