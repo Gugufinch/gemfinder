@@ -3237,13 +3237,13 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [liveCrmTypeFilter, setLiveCrmTypeFilter] = useState("all");
   const [liveCrmSourceFilter, setLiveCrmSourceFilter] = useState("all");
   const [liveCrmOwnerFilter, setLiveCrmOwnerFilter] = useState("all");
-  const [liveRosterViewMode, setLiveRosterViewMode] = useState("cards");
+  const [liveRosterViewMode, setLiveRosterViewMode] = useState("table");
   const [kickoffQuery, setKickoffQuery] = useState("");
   const [kickoffTypeFilter, setKickoffTypeFilter] = useState("all");
   const [kickoffSourceFilter, setKickoffSourceFilter] = useState("all");
   const [kickoffOwnerFilter, setKickoffOwnerFilter] = useState("all");
   const [kickoffStageFilter, setKickoffStageFilter] = useState("all");
-  const [kickoffViewMode, setKickoffViewMode] = useState("cards");
+  const [kickoffViewMode, setKickoffViewMode] = useState("table");
 
   const [batch, setBatch] = useState(false);
   const [bSel, setBSel] = useState(new Set());
@@ -8354,6 +8354,888 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     </button>
   );
 
+  const WorkspaceOverlays = () => (
+    <>
+      {showAddArtist && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 120 }} onClick={e => { if (e.target === e.currentTarget) { setShowAddArtist(false); resetArtistForm(); } }}>
+          <div style={{ background: C.sf, borderRadius: 18, padding: "24px 28px", width: 640, maxWidth: "calc(100vw - 32px)", boxShadow: "0 25px 70px rgba(0,0,0,0.2)" }}>
+            <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 6, color: C.tx }}>{isCuratorProject ? "Add Curator" : "Add Artist"}</div>
+            <div style={{ fontSize: 12, color: C.ts, marginBottom: 14 }}>
+              {isCuratorProject
+                ? "Manual add for curator contacts you want in the pipeline before a CSV import."
+                : "Manual add for artists you want in the pipeline before a CSV import."}
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <input value={artistForm.name} onChange={e => setArtistForm({ ...artistForm, name: e.target.value })} placeholder={isCuratorProject ? "Curator name*" : "Artist name*"} autoFocus style={{ ...iS, width: "100%" }} />
+              <input value={artistForm.genre} onChange={e => setArtistForm({ ...artistForm, genre: e.target.value })} placeholder="Genre / vibe" style={{ ...iS, width: "100%" }} />
+              <input value={artistForm.listeners} onChange={e => setArtistForm({ ...artistForm, listeners: e.target.value })} placeholder="Monthly listeners" style={{ ...iS, width: "100%" }} />
+              <input value={artistForm.hitTrack} onChange={e => setArtistForm({ ...artistForm, hitTrack: e.target.value })} placeholder="Hit track" style={{ ...iS, width: "100%" }} />
+              <input value={artistForm.social} onChange={e => setArtistForm({ ...artistForm, social: e.target.value })} placeholder="@handle or profile URL" style={{ ...iS, width: "100%" }} />
+              {!isCuratorProject ? (
+                <input value={artistForm.email} onChange={e => setArtistForm({ ...artistForm, email: e.target.value })} placeholder="Email" style={{ ...iS, width: "100%" }} />
+              ) : (
+                <input value={artistForm.curatorPageUrl} onChange={e => setArtistForm({ ...artistForm, curatorPageUrl: e.target.value })} placeholder="Curator page link" style={{ ...iS, width: "100%" }} />
+              )}
+              <input value={artistForm.location} onChange={e => setArtistForm({ ...artistForm, location: e.target.value })} placeholder="Location" style={{ ...iS, width: "100%", gridColumn: "1 / span 2" }} />
+              {isCuratorProject && (
+                <div style={{ gridColumn: "1 / span 2" }}>
+                  <div style={{ fontSize: 11, color: C.tt, marginBottom: 8 }}>Curated artists they vouch for</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10 }}>
+                    {artistForm.curatedArtists.map((value, index) => (
+                      <input
+                        key={`new-curated-${index}`}
+                        value={value}
+                        onChange={e => setArtistForm(prev => {
+                          const next = [...prev.curatedArtists];
+                          next[index] = e.target.value;
+                          return { ...prev, curatedArtists: next };
+                        })}
+                        placeholder={`Curated artist ${index + 1}`}
+                        style={{ ...iS, width: "100%" }}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
+              <textarea value={artistForm.note} onChange={e => setArtistForm({ ...artistForm, note: e.target.value })} placeholder="Optional note" style={{ ...iS, width: "100%", minHeight: 80, resize: "vertical", gridColumn: "1 / span 2" }} />
+            </div>
+            <div style={{ marginTop: 10, fontSize: 11, color: C.ts }}>
+              {artistForm.name.trim() && proj?.artists?.some(a => canonicalArtistName(a.n) === canonicalArtistName(artistForm.name)) && (
+                <div style={{ color: C.rd }}>This artist is already in the project.</div>
+              )}
+              {artistForm.name.trim() && (proj?.internalRoster?.names || []).some(name => canonicalArtistName(name) === canonicalArtistName(artistForm.name)) && (
+                <div style={{ color: C.pr }}>This artist appears in your internal roster check.</div>
+              )}
+            </div>
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 18 }}>
+              <button onClick={() => { setShowAddArtist(false); resetArtistForm(); }} style={{ padding: "8px 18px", borderRadius: 10, border: `1px solid ${C.bd}`, background: "transparent", cursor: "pointer", fontSize: 13, fontFamily: ft, color: C.ts }}>Cancel</button>
+              <button disabled={!artistForm.name.trim() || manualArtistSaving} onClick={addManualArtist} style={{ padding: "8px 24px", borderRadius: 10, border: "none", background: C.ac, color: "#fff", cursor: !artistForm.name.trim() || manualArtistSaving ? "not-allowed" : "pointer", fontSize: 13, fontWeight: 600, fontFamily: ft, opacity: artistForm.name.trim() && !manualArtistSaving ? 1 : 0.45 }}>
+                {manualArtistSaving ? "Adding..." : isCuratorProject ? "Add Curator" : "Add Artist"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showMarketingBulkUpdateModal && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 125 }} onClick={e => { if (e.target === e.currentTarget) closeMarketingBulkUpdateModal(); }}>
+          <div style={{ background: C.sf, borderRadius: 18, padding: "24px 28px", width: 880, maxWidth: "calc(100vw - 32px)", boxShadow: "0 25px 70px rgba(0,0,0,0.2)", maxHeight: "88vh", overflowY: "auto" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", marginBottom: 12 }}>
+              <div>
+                <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 6, color: C.tx }}>Bulk Update Assignments</div>
+                <div style={{ fontSize: 12, color: C.ts, lineHeight: 1.6 }}>
+                  Paste a quick list of <code style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>name | campaign | status | owner</code> rows.
+                  We will update exact talent + campaign matches, create a new campaign assignment when the talent already exists in the project, and skip unmatched names safely.
+                </div>
+              </div>
+              <button onClick={closeMarketingBulkUpdateModal} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: C.ts }}>✕</button>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 220px 220px 220px", gap: 10, alignItems: "end", marginBottom: 12 }}>
+              <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 4 }}>
+                <span>Paste list</span>
+                <textarea
+                  value={marketingBulkText}
+                  onChange={e => setMarketingBulkText(e.target.value)}
+                  placeholder={`Patrick James Clark | D2F Paid 1 | Contacted | Greg\nTejai Moore | D2F Paid 1 | Interested\nfeeljones | Direct To Fan Focus | Complete | Brad`}
+                  style={{ ...iS, width: "100%", minHeight: 170, resize: "vertical", fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", lineHeight: 1.5 }}
+                />
+              </label>
+              <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 4 }}>
+                <span>Default campaign</span>
+                <select value={marketingBulkDefaultCampaign} onChange={e => setMarketingBulkDefaultCampaign(e.target.value)} style={{ ...iS, width: "100%" }}>
+                  <option value="">None</option>
+                  {marketingCampaignOptions.map(campaign => <option key={campaign} value={campaign}>{campaign}</option>)}
+                </select>
+                <div style={{ fontSize: 11, color: C.tt }}>Used when a pasted row omits the campaign.</div>
+              </label>
+              <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 4 }}>
+                <span>Default status</span>
+                <select value={marketingBulkDefaultStatus} onChange={e => setMarketingBulkDefaultStatus(e.target.value)} style={{ ...iS, width: "100%" }}>
+                  {MARKETING_STATUSES.map(status => <option key={status.id} value={status.id}>{status.label}</option>)}
+                </select>
+                <div style={{ fontSize: 11, color: C.tt }}>Used when a pasted row omits the status.</div>
+              </label>
+              <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 4 }}>
+                <span>Default owner</span>
+                <select value={marketingBulkDefaultOwner} onChange={e => setMarketingBulkDefaultOwner(e.target.value)} style={{ ...iS, width: "100%" }}>
+                  <option value="">Leave unchanged / unassigned</option>
+                  {(proj?.teamUsers || DEFAULT_TEAM_USERS).map(owner => <option key={owner} value={owner}>{owner}</option>)}
+                </select>
+                <div style={{ fontSize: 11, color: C.tt }}>Used when a pasted row omits the owner.</div>
+              </label>
+            </div>
+
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
+              <span style={{ ...mkP(true, C.ac, C.al), cursor: "default" }}>{marketingBulkRows.length} parsed</span>
+              <span style={{ ...mkP(true, C.bu, C.bb), cursor: "default" }}>{marketingBulkSummary.update || 0} updates</span>
+              <span style={{ ...mkP(true, C.gn, C.gb), cursor: "default" }}>{marketingBulkSummary.create || 0} new assignments</span>
+              <span style={{ ...mkP(true, C.rd, C.rb), cursor: "default" }}>{marketingBulkSummary.skip || 0} unmatched / skipped</span>
+            </div>
+
+            <div style={{ borderRadius: 16, border: `1px solid ${C.bd}`, overflow: "hidden", marginBottom: 18 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "88px minmax(180px, 1.3fr) minmax(160px, 1fr) 120px minmax(160px, 1.2fr)", gap: 0, background: C.sa, padding: "10px 12px", fontSize: 11, color: C.tt, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1 }}>
+                <div>Action</div>
+                <div>Talent</div>
+                <div>Campaign</div>
+                <div>Status</div>
+                <div>Match / Result</div>
+              </div>
+              <div style={{ maxHeight: 280, overflowY: "auto" }}>
+                {marketingBulkPreview.length ? marketingBulkPreview.map(entry => {
+                  const actionTone = entry.action === "update"
+                    ? [C.bu, C.bb]
+                    : entry.action === "create"
+                      ? [C.gn, C.gb]
+                      : [C.rd, C.rb];
+                  return (
+                    <div key={`${entry.lineNumber}-${entry.talentName}-${entry.campaign}`} style={{ display: "grid", gridTemplateColumns: "88px minmax(180px, 1.3fr) minmax(160px, 1fr) 120px minmax(160px, 1.2fr)", gap: 0, padding: "10px 12px", borderTop: `1px solid ${C.bd}`, alignItems: "start" }}>
+                      <div><span style={{ ...mkP(true, actionTone[0], actionTone[1]), cursor: "default", fontSize: 11 }}>{entry.action === "update" ? "Update" : entry.action === "create" ? "Create" : "Skip"}</span></div>
+                      <div>
+                        <div style={{ fontWeight: 600, color: C.tx }}>{entry.talentName}</div>
+                        <div style={{ fontSize: 11, color: C.tt }}>Line {entry.lineNumber}</div>
+                      </div>
+                      <div style={{ color: C.ts }}>{entry.campaign || "No campaign"}</div>
+                      <div style={{ color: C.ts }}>{MM[entry.status]?.label || titleCaseWords(entry.status)}</div>
+                      <div style={{ color: C.ts, lineHeight: 1.45 }}>
+                        {entry.action === "update" && `Existing assignment match${entry.owner ? ` · Owner → ${entry.owner}` : ""}`}
+                        {entry.action === "create" && `${entry.source === "existing_talent" ? "Existing talent found" : "Matched artist from project roster"} · new campaign assignment${entry.owner ? ` · Owner → ${entry.owner}` : ""}`}
+                        {entry.action === "skip" && entry.reason}
+                      </div>
+                    </div>
+                  );
+                }) : (
+                  <div style={{ padding: "18px 14px", fontSize: 12, color: C.tt }}>
+                    Paste rows above to preview what will happen before applying changes.
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+              <div style={{ fontSize: 11, color: C.tt, lineHeight: 1.5 }}>
+                Supported formats: pipe-separated, comma-separated, or tab-separated. Header rows like <code style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>name,campaign,status,owner</code> also work.
+              </div>
+              <div style={{ display: "flex", gap: 10 }}>
+                <button onClick={closeMarketingBulkUpdateModal} style={{ padding: "8px 18px", borderRadius: 10, border: `1px solid ${C.bd}`, background: "transparent", cursor: "pointer", fontSize: 13, fontFamily: ft, color: C.ts }}>
+                  Cancel
+                </button>
+                <button onClick={applyMarketingBulkUpdate} style={{ padding: "8px 24px", borderRadius: 10, border: "none", background: C.ac, color: "#fff", cursor: "pointer", fontSize: 13, fontWeight: 600, fontFamily: ft, opacity: marketingBulkPreview.some(entry => entry.action !== "skip") ? 1 : 0.45 }}>
+                  Apply Updates
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showMarketingItemModal && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 120 }} onClick={e => { if (e.target === e.currentTarget) { closeMarketingItemModal(); } }}>
+          <div style={{ background: C.sf, borderRadius: 18, padding: "24px 28px", width: 720, maxWidth: "calc(100vw - 32px)", boxShadow: "0 25px 70px rgba(0,0,0,0.2)", maxHeight: "88vh", overflowY: "auto" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", marginBottom: 12 }}>
+              <div>
+                <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 6, color: C.tx }}>{marketingForm.id ? "Edit Campaign Assignment" : "New Campaign Assignment"}</div>
+                <div style={{ fontSize: 12, color: C.ts }}>Track the talent, the campaign, the deliverable, and the links your team needs to move the work.</div>
+              </div>
+              <button onClick={closeMarketingItemModal} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: C.ts }}>✕</button>
+            </div>
+
+            {(relatedMarketingAssignments.length > 1 || marketingForm.talentName.trim()) && (
+              <div style={{ display: "flex", gap: 10, alignItems: "end", justifyContent: "space-between", flexWrap: "wrap", marginBottom: 14 }}>
+                <div style={{ display: "grid", gap: 4, minWidth: 280, flex: "1 1 320px" }}>
+                  <span style={{ fontSize: 12, color: C.ts }}>
+                    {relatedMarketingAssignments.length > 1
+                      ? `This talent already has ${relatedMarketingAssignments.length} campaign assignments in this project.`
+                      : "Create a fresh campaign assignment for this same talent without retyping their profile details."}
+                  </span>
+                  {relatedMarketingAssignments.length > 1 && (
+                    <select
+                      value={marketingForm.id || ""}
+                      onChange={e => openRelatedMarketingAssignment(e.target.value)}
+                      style={{ ...iS, width: "100%" }}
+                    >
+                      {!marketingForm.id && (
+                        <option value="">New campaign draft</option>
+                      )}
+                      {relatedMarketingAssignments.map(item => {
+                        const campaignLabel = item.campaigns?.length ? item.campaigns.join(", ") : "No campaign";
+                        const statusLabel = MM[item.status]?.label || "Prospect";
+                        return (
+                          <option key={item.id} value={item.id}>
+                            {`${campaignLabel} · ${statusLabel}`}
+                          </option>
+                        );
+                      })}
+                    </select>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={startNewCampaignFromMarketingForm}
+                  style={{ ...actionBtn(true, "accent"), whiteSpace: "nowrap" }}
+                >
+                  + New Campaign
+                </button>
+              </div>
+            )}
+
+            <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr", gap: 10 }}>
+              <input value={marketingForm.talentName} onChange={e => setMarketingForm({ ...marketingForm, talentName: e.target.value })} placeholder="Talent name*" autoFocus style={{ ...iS, width: "100%" }} />
+              <input value={marketingForm.title} onChange={e => setMarketingForm({ ...marketingForm, title: e.target.value })} placeholder="Title or deliverable headline" style={{ ...iS, width: "100%" }} />
+
+              <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 4 }}>
+                <span>Talent type</span>
+                <select value={marketingForm.talentType} onChange={e => setMarketingForm({ ...marketingForm, talentType: e.target.value })} style={{ ...iS, width: "100%" }}>
+                  {MARKETING_TALENT_TYPES.map(type => <option key={type} value={type}>{type}</option>)}
+                </select>
+              </label>
+              <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 4 }}>
+                <span>Deliverable type</span>
+                <select value={marketingForm.deliverableType} onChange={e => setMarketingForm({ ...marketingForm, deliverableType: e.target.value })} style={{ ...iS, width: "100%" }}>
+                  {MARKETING_DELIVERABLE_TYPES.map(type => <option key={type} value={type}>{type}</option>)}
+                </select>
+              </label>
+
+              <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 4 }}>
+                <span>Campaign</span>
+                <select value={marketingForm.campaign} onChange={e => setMarketingForm({ ...marketingForm, campaign: e.target.value, newCampaign: "" })} style={{ ...iS, width: "100%" }}>
+                  <option value="">Select campaign</option>
+                  {marketingCampaignOptions.map(campaign => <option key={campaign} value={campaign}>{campaign}</option>)}
+                </select>
+              </label>
+              <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 4 }}>
+                <span>Owner</span>
+                <select value={marketingForm.owner} onChange={e => setMarketingForm({ ...marketingForm, owner: e.target.value })} style={{ ...iS, width: "100%" }}>
+                  <option value="">Unassigned</option>
+                  {(proj?.teamUsers || DEFAULT_TEAM_USERS).map(u => <option key={u} value={u}>{u}</option>)}
+                </select>
+              </label>
+
+              <input value={marketingForm.newCampaign} onChange={e => setMarketingForm({ ...marketingForm, newCampaign: e.target.value })} placeholder="Or create a new campaign" style={{ ...iS, width: "100%" }} />
+
+              <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 4 }}>
+                <span>Traffic type</span>
+                <select value={marketingForm.trafficType} onChange={e => setMarketingForm({ ...marketingForm, trafficType: e.target.value })} style={{ ...iS, width: "100%" }}>
+                  {MARKETING_TRAFFIC_TYPES.map(type => <option key={type} value={type}>{type}</option>)}
+                </select>
+              </label>
+              <div style={{ fontSize: 12, color: C.ts, display: "grid", gap: 6 }}>
+                <span>Channels</span>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {MARKETING_CHANNELS.map(type => {
+                    const active = (marketingForm.channels || []).includes(type);
+                    return (
+                      <button
+                        key={type}
+                        type="button"
+                        onClick={() => setMarketingForm({
+                          ...marketingForm,
+                          channels: active
+                            ? (marketingForm.channels || []).filter(channel => channel !== type)
+                            : [...(marketingForm.channels || []), type],
+                        })}
+                        style={mkP(active, C.ac, C.al)}
+                      >
+                        {type}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 4 }}>
+                <span>Status</span>
+                <select value={marketingForm.status} onChange={e => setMarketingForm({ ...marketingForm, status: e.target.value, rejectedReason: e.target.value === "rejected" ? marketingForm.rejectedReason : "" })} style={{ ...iS, width: "100%" }}>
+                  {MARKETING_STATUSES.map(status => <option key={status.id} value={status.id}>{status.label}</option>)}
+                </select>
+              </label>
+              <input value={marketingForm.email} onChange={e => setMarketingForm({ ...marketingForm, email: e.target.value })} placeholder="Talent email" style={{ ...iS, width: "100%" }} />
+
+              <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 4 }}>
+                <span>Due date</span>
+                <input type="date" value={marketingForm.dueDate} onChange={e => setMarketingForm({ ...marketingForm, dueDate: e.target.value })} style={{ ...iS, width: "100%" }} />
+              </label>
+              <input value={marketingForm.instagramUrl} onChange={e => setMarketingForm({ ...marketingForm, instagramUrl: e.target.value, instagramHandle: normalizeSocialHandle(e.target.value) })} placeholder="Instagram URL" style={{ ...iS, width: "100%" }} />
+
+              <input value={marketingForm.instagramFollowers} onChange={e => setMarketingForm({ ...marketingForm, instagramFollowers: normalizeFollowerCount(e.target.value) })} placeholder="Instagram followers" style={{ ...iS, width: "100%" }} />
+              <input value={marketingForm.tiktokUrl} onChange={e => setMarketingForm({ ...marketingForm, tiktokUrl: e.target.value, tiktokHandle: normalizeSocialHandle(e.target.value) })} placeholder="TikTok URL" style={{ ...iS, width: "100%" }} />
+
+              <input value={marketingForm.tiktokFollowers} onChange={e => setMarketingForm({ ...marketingForm, tiktokFollowers: normalizeFollowerCount(e.target.value) })} placeholder="TikTok followers" style={{ ...iS, width: "100%" }} />
+              <input value={marketingForm.spotifyUrl} onChange={e => setMarketingForm({ ...marketingForm, spotifyUrl: e.target.value })} placeholder="Spotify artist link" style={{ ...iS, width: "100%" }} />
+
+              <input value={marketingForm.spotifyMonthlyListeners} onChange={e => setMarketingForm({ ...marketingForm, spotifyMonthlyListeners: normalizeFollowerCount(e.target.value) })} placeholder="Spotify monthly listeners" style={{ ...iS, width: "100%" }} />
+
+              <input value={marketingForm.briefUrl} onChange={e => setMarketingForm({ ...marketingForm, briefUrl: e.target.value })} placeholder="Brief link" style={{ ...iS, width: "100%" }} />
+              <input value={marketingForm.contentUrl} onChange={e => setMarketingForm({ ...marketingForm, contentUrl: e.target.value })} placeholder="Content link" style={{ ...iS, width: "100%" }} />
+
+              {marketingForm.status === "rejected" && (
+                <textarea
+                  value={marketingForm.rejectedReason}
+                  onChange={e => setMarketingForm({ ...marketingForm, rejectedReason: e.target.value })}
+                  placeholder="Why did the artist reject the opportunity?"
+                  style={{ ...iS, width: "100%", minHeight: 84, resize: "vertical", gridColumn: "1 / span 2" }}
+                />
+              )}
+
+              <textarea value={marketingForm.notes} onChange={e => setMarketingForm({ ...marketingForm, notes: e.target.value })} placeholder="Notes, revision context, feedback, deliverable details..." style={{ ...iS, width: "100%", minHeight: 110, resize: "vertical", gridColumn: "1 / span 2" }} />
+            </div>
+
+            {marketingSlackNotice && (
+              <div
+                style={{
+                  marginTop: 14,
+                  padding: "11px 14px",
+                  borderRadius: 12,
+                  border: `1px solid ${marketingSlackNotice.border}`,
+                  background: marketingSlackNotice.bg,
+                }}
+              >
+                <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: marketingSlackNotice.tone, marginBottom: 4 }}>
+                  Slack Notice
+                </div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: marketingSlackNotice.tone, marginBottom: 3 }}>
+                  {marketingSlackNotice.headline}
+                </div>
+                <div style={{ fontSize: 12, color: C.ts, lineHeight: 1.5 }}>
+                  {marketingSlackNotice.detail}
+                </div>
+              </div>
+            )}
+
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginTop: 18 }}>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                {marketingForm.id && workspaceTalentData.marketingTalentIds.get(String(marketingForm.id || "")) && (
+                  <button
+                    type="button"
+                    onClick={() => openTalentProfileFromMarketingItem({ id: marketingForm.id })}
+                    style={{ ...actionBtn(false, "accent") }}
+                  >
+                    Open Talent Profile
+                  </button>
+                )}
+                {marketingForm.email && <a href={`mailto:${marketingForm.email}`} style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Email Talent</a>}
+                {(marketingForm.instagramUrl || marketingForm.instagramHandle) && <a href={marketingForm.instagramUrl || `https://instagram.com/${marketingForm.instagramHandle}`} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Instagram</a>}
+                {(marketingForm.tiktokUrl || marketingForm.tiktokHandle) && <a href={marketingForm.tiktokUrl || `https://www.tiktok.com/@${marketingForm.tiktokHandle}`} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>TikTok</a>}
+                {marketingForm.spotifyUrl && <a href={marketingForm.spotifyUrl} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Spotify</a>}
+                {marketingForm.briefUrl && <a href={marketingForm.briefUrl} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Open Brief</a>}
+                {marketingForm.contentUrl && <a href={marketingForm.contentUrl} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Open Content</a>}
+              </div>
+              <div style={{ display: "flex", gap: 10 }}>
+                {marketingForm.id && (
+                  <button onClick={() => deleteMarketingItem(marketingForm.id)} style={{ padding: "8px 18px", borderRadius: 10, border: `1px solid ${C.rbd}`, background: C.rb, cursor: "pointer", fontSize: 13, fontFamily: ft, color: C.rd }}>
+                    Delete
+                  </button>
+                )}
+                <button onClick={closeMarketingItemModal} style={{ padding: "8px 18px", borderRadius: 10, border: `1px solid ${C.bd}`, background: "transparent", cursor: "pointer", fontSize: 13, fontFamily: ft, color: C.ts }}>Cancel</button>
+                <button disabled={!marketingForm.talentName.trim() || marketingItemSaving} onClick={saveMarketingItem} style={{ padding: "8px 24px", borderRadius: 10, border: "none", background: C.ac, color: "#fff", cursor: !marketingForm.talentName.trim() || marketingItemSaving ? "not-allowed" : "pointer", fontSize: 13, fontWeight: 600, fontFamily: ft, opacity: marketingForm.talentName.trim() && !marketingItemSaving ? 1 : 0.45 }}>
+                  {marketingItemSaving ? (marketingForm.id ? "Saving..." : "Adding...") : (marketingForm.id ? "Save Changes" : "Add Assignment")}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showTalentProfileModal && selectedTalentProfile && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.38)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 126 }} onClick={e => { if (e.target === e.currentTarget) closeTalentProfileModal(); }}>
+          <div style={{ background: C.sf, borderRadius: 18, padding: "24px 28px", width: 960, maxWidth: "calc(100vw - 32px)", boxShadow: "0 25px 70px rgba(0,0,0,0.2)", maxHeight: "88vh", overflowY: "auto" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "flex-start", marginBottom: 16 }}>
+              <div>
+                <div style={{ fontSize: 11, letterSpacing: 2, textTransform: "uppercase", color: C.ac, fontWeight: 700, marginBottom: 8 }}>Talent Overview</div>
+                <div style={{ fontSize: 28, fontWeight: 800, letterSpacing: "-0.04em", color: C.tx, marginBottom: 8 }}>{selectedTalentProfile.displayName}</div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  {selectedTalentProfile.talentTypes.map(type => (
+                    <span key={type} style={{ ...mkP(true, C.ac, C.al), cursor: "default" }}>{type}</span>
+                  ))}
+                  <span style={{ ...mkP(true, talentLifecycleTone(selectedTalentProfile.platformLifecycle, C).tone, talentLifecycleTone(selectedTalentProfile.platformLifecycle, C).bg), cursor: "default" }}>
+                    {TALENT_LIFECYCLE_LABELS[selectedTalentProfile.platformLifecycle] || "Pre-Live"}
+                  </span>
+                  {selectedTalentProfile.sources.map(source => (
+                    <span key={source} style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>
+                      {TALENT_SOURCE_LABELS[source] || source}
+                    </span>
+                  ))}
+                  <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{selectedTalentProjectSummaries.length} project{selectedTalentProjectSummaries.length === 1 ? "" : "s"}</span>
+                  <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{selectedTalentProfile.marketingAssignments.length} marketing assignment{selectedTalentProfile.marketingAssignments.length === 1 ? "" : "s"}</span>
+                  <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{selectedTalentProfile.arRecords.length} A&R record{selectedTalentProfile.arRecords.length === 1 ? "" : "s"}</span>
+                </div>
+              </div>
+              <button onClick={closeTalentProfileModal} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 20, color: C.ts }}>✕</button>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 18 }}>
+              <div style={{ ...cS, padding: "18px 20px" }}>
+                <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>Identity</div>
+                <div style={{ display: "grid", gap: 10, fontSize: 13 }}>
+                  <div className="gf-rail-kv">
+                    <span className="gf-rail-kv-label">Platform lifecycle</span>
+                    <span className="gf-rail-kv-value">{TALENT_LIFECYCLE_LABELS[selectedTalentProfile.platformLifecycle] || "Pre-Live"}</span>
+                  </div>
+                  <div className="gf-rail-kv">
+                    <span className="gf-rail-kv-label">Sources</span>
+                    <span className="gf-rail-kv-value">
+                      {selectedTalentProfile.sources.length
+                        ? selectedTalentProfile.sources.map(source => TALENT_SOURCE_LABELS[source] || source).join(" · ")
+                        : "Not labeled yet"}
+                    </span>
+                  </div>
+                  <div className="gf-rail-kv">
+                    <span className="gf-rail-kv-label">Primary email</span>
+                    <span className="gf-rail-kv-value">{selectedTalentProfile.primaryEmail || "No email yet"}</span>
+                  </div>
+                  <div className="gf-rail-kv">
+                    <span className="gf-rail-kv-label">Instagram</span>
+                    <span className="gf-rail-kv-value">
+                      {selectedTalentProfile.instagramHandle
+                        ? `@${selectedTalentProfile.instagramHandle}${selectedTalentProfile.instagramFollowers ? ` · ${selectedTalentProfile.instagramFollowers}` : ""}`
+                        : "Not linked yet"}
+                    </span>
+                  </div>
+                  <div className="gf-rail-kv">
+                    <span className="gf-rail-kv-label">TikTok</span>
+                    <span className="gf-rail-kv-value">
+                      {selectedTalentProfile.tiktokHandle
+                        ? `@${selectedTalentProfile.tiktokHandle}${selectedTalentProfile.tiktokFollowers ? ` · ${selectedTalentProfile.tiktokFollowers}` : ""}`
+                        : "Not linked yet"}
+                    </span>
+                  </div>
+                  <div className="gf-rail-kv">
+                    <span className="gf-rail-kv-label">Spotify</span>
+                    <span className="gf-rail-kv-value">
+                      {selectedTalentProfile.spotifyUrl
+                        ? `${selectedTalentProfile.spotifyMonthlyListeners || "Linked"}`
+                        : "Not linked yet"}
+                    </span>
+                  </div>
+                  {selectedTalentProfile.curatorPageUrl && (
+                    <div className="gf-rail-kv">
+                      <span className="gf-rail-kv-label">Curator page</span>
+                      <span className="gf-rail-kv-value">Linked</span>
+                    </div>
+                  )}
+                  {selectedTalentProfile.curatedArtists.length > 0 && (
+                    <div className="gf-rail-kv">
+                      <span className="gf-rail-kv-label">Curated artists</span>
+                      <span className="gf-rail-kv-value">{selectedTalentProfile.curatedArtists.length}</span>
+                    </div>
+                  )}
+                  {selectedTalentProfile.aliases.length > 0 && (
+                    <div className="gf-rail-kv">
+                      <span className="gf-rail-kv-label">Aliases</span>
+                      <span className="gf-rail-kv-value">{selectedTalentProfile.aliases.join(" · ")}</span>
+                    </div>
+                  )}
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 4 }}>
+                    {selectedTalentProfile.primaryEmail && (
+                      <a href={`mailto:${selectedTalentProfile.primaryEmail}`} style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Email</a>
+                    )}
+                    {selectedTalentProfile.instagramHandle && (
+                      <a href={selectedTalentProfile.instagramUrl || `https://instagram.com/${selectedTalentProfile.instagramHandle}`} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Instagram</a>
+                    )}
+                    {selectedTalentProfile.tiktokHandle && (
+                      <a href={selectedTalentProfile.tiktokUrl || `https://www.tiktok.com/@${selectedTalentProfile.tiktokHandle}`} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>TikTok</a>
+                    )}
+                    {selectedTalentProfile.spotifyUrl && (
+                      <a href={selectedTalentProfile.spotifyUrl} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Spotify</a>
+                    )}
+                    {selectedTalentProfile.curatorPageUrl && (
+                      <a href={selectedTalentProfile.curatorPageUrl} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Curator Page</a>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ ...cS, padding: "18px 20px" }}>
+                <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>Workspace Coverage</div>
+                <div style={{ fontSize: 12, color: C.ts, marginBottom: 12 }}>
+                  Identity stays shared here, while kickoff progress, curator context, and live campaign work stay separated underneath.
+                </div>
+                <div style={{ display: "grid", gap: 10 }}>
+                  {selectedTalentProjectSummaries.length ? selectedTalentProjectSummaries.map(summary => (
+                    <div key={summary.projectId} style={{ padding: "12px 14px", borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sa }}>
+                      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, marginBottom: 10 }}>
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontSize: 13, fontWeight: 700, color: C.tx, marginBottom: 4 }}>{summary.projectName}</div>
+                          <div style={{ fontSize: 11, color: C.tt }}>
+                            {projectTypeLabel(summary.projectType)} record
+                            {" · "}
+                            {summary.arRecords.length ? `${summary.arRecords.length} A&R record${summary.arRecords.length === 1 ? "" : "s"}` : "No A&R record"}
+                            {" · "}
+                            {summary.marketingAssignments.length ? `${summary.marketingAssignments.length} marketing assignment${summary.marketingAssignments.length === 1 ? "" : "s"}` : "No marketing assignments"}
+                          </div>
+                        </div>
+                        <span style={{ ...mkP(true, C.tt, C.sf), cursor: "default" }}>
+                          Synced backup record
+                        </span>
+                      </div>
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        {summary.owners.map(owner => (
+                          <span key={`${summary.projectId}:owner:${owner}`} style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>Owner: {owner}</span>
+                        ))}
+                        {summary.arStages.map(stage => (
+                          <span key={`${summary.projectId}:stage:${stage}`} style={{ ...mkP(true, sc(stage, C), sb(stage, C)), cursor: "default" }}>{SM[stage]?.label || "Prospect"}</span>
+                        ))}
+                        {summary.marketingStatuses.map(status => {
+                          const tone = marketingStatusTone(status, C);
+                          return (
+                            <span key={`${summary.projectId}:status:${status}`} style={{ ...mkP(true, tone.tone, tone.bg), cursor: "default" }}>{MM[status]?.label || "Prospect"}</span>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )) : (
+                    <div style={{ fontSize: 12, color: C.tt }}>No linked projects yet.</div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div style={{ ...cS, padding: "18px 20px", marginBottom: 16 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "flex-start", marginBottom: 12, flexWrap: "wrap" }}>
+                <div>
+                  <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>Latest Notes + Timeline</div>
+                  <div style={{ fontSize: 12, color: C.ts }}>
+                    The newest kickoff, curator, and campaign updates tied to this person across the workspace.
+                  </div>
+                </div>
+                <div style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>
+                  {selectedTalentRecentActivity.length} recent item{selectedTalentRecentActivity.length === 1 ? "" : "s"}
+                </div>
+              </div>
+              <div style={{ display: "grid", gap: 10 }}>
+                {selectedTalentRecentActivity.length ? selectedTalentRecentActivity.map((entry, index) => (
+                  <div key={`${entry.id || entry.time || entry.action || "activity"}:${index}`} style={{ padding: "12px 14px", borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sa }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: 8, flexWrap: "wrap" }}>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: C.tx, marginBottom: 4 }}>
+                          {entry.action || "Workspace update"}
+                        </div>
+                        {entry.note && entry.note !== entry.action && (
+                          <div style={{ fontSize: 12, color: C.ts, lineHeight: 1.6 }}>
+                            {entry.note}
+                          </div>
+                        )}
+                      </div>
+                      <div style={{ fontSize: 11, color: C.tt, whiteSpace: "nowrap" }}>
+                        {entry.time ? fmtDateTime(entry.time) : "Time unknown"}
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      {entry.projectName && <span style={{ ...mkP(true, C.ac, C.al), cursor: "default" }}>{entry.projectName}</span>}
+                      {entry.campaign && entry.campaign !== "No campaign" && <span style={{ ...mkP(true, C.bu, C.bb), cursor: "default" }}>{entry.campaign}</span>}
+                      {entry.actor && <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{entry.actor}</span>}
+                      {entry.kind && <span style={{ ...mkP(true, C.tt, C.sa), cursor: "default" }}>{titleCaseWords(entry.kind)}</span>}
+                    </div>
+                  </div>
+                )) : (
+                  <div style={{ fontSize: 12, color: C.tt }}>No linked notes or timeline items yet.</div>
+                )}
+              </div>
+            </div>
+
+            <div style={{ ...cS, padding: "18px 20px", marginBottom: 16 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "flex-start", marginBottom: 14 }}>
+                <div>
+                  <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>Place in workspace</div>
+                  <div style={{ fontSize: 12, color: C.ts }}>
+                    Reuse this shared talent in another workspace without retyping their profile details.
+                  </div>
+                </div>
+                <button
+                  onClick={addTalentProfileToProject}
+                  disabled={!talentTargetProjectId || talentTargetSaving}
+                  style={{
+                    ...actionBtn(false, "accent"),
+                    opacity: talentTargetProjectId && !talentTargetSaving ? 1 : 0.45,
+                    cursor: talentTargetProjectId && !talentTargetSaving ? "pointer" : "not-allowed",
+                  }}
+                >
+                  {talentTargetSaving
+                    ? "Adding..."
+                    : talentTargetProjectType === "marketing" && talentTargetExistingMarketingAssignment
+                      ? "Open Existing Assignment"
+                      : talentTargetProjectType !== "marketing" && talentTargetExistingArRecord
+                        ? `Open Existing ${talentTargetProjectType === "curator" ? "Curator" : "Artist"}`
+                      : "Add to Record"}
+                </button>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: talentTargetProjectType === "marketing" ? "1.2fr 1fr 1fr 1fr" : "1.4fr 1fr 1fr", gap: 12, alignItems: "end", marginBottom: 12 }}>
+                <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 6 }}>
+                  <span>Target record</span>
+                  <select
+                    value={talentTargetProjectId}
+                    onChange={e => setTalentTargetProjectId(e.target.value)}
+                    style={{ ...iS, width: "100%" }}
+                  >
+                    <option value="">Choose a project…</option>
+                    {talentTargetProjectOptions.map(option => (
+                      <option key={option.id} value={option.id}>{option.label}</option>
+                    ))}
+                  </select>
+                </label>
+
+                {talentTargetProjectType === "marketing" && (
+                  <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 6 }}>
+                    <span>Campaign</span>
+                    <select
+                      value={talentTargetCampaign}
+                      onChange={e => setTalentTargetCampaign(e.target.value)}
+                      style={{ ...iS, width: "100%" }}
+                    >
+                      <option value="">No campaign</option>
+                      {talentTargetCampaignOptions.map(campaign => (
+                        <option key={campaign} value={campaign}>{campaign}</option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+
+                <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 6 }}>
+                  <span>{talentTargetProjectType === "marketing" ? "Assignment status" : "Pipeline stage"}</span>
+                  <select
+                    value={talentTargetStatus}
+                    onChange={e => setTalentTargetStatus(e.target.value)}
+                    style={{ ...iS, width: "100%" }}
+                  >
+                    {(talentTargetProjectType === "marketing" ? MARKETING_STATUSES : STAGES).map(status => (
+                      <option key={status.id} value={status.id}>{status.label}</option>
+                    ))}
+                  </select>
+                </label>
+
+                <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 6 }}>
+                  <span>Owner</span>
+                  <select
+                    value={talentTargetOwner}
+                    onChange={e => setTalentTargetOwner(e.target.value)}
+                    style={{ ...iS, width: "100%" }}
+                  >
+                    <option value="">Unassigned</option>
+                    {talentTargetTeamUsers.map(user => (
+                      <option key={user} value={user}>{user}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+
+              {talentTargetProjectType === "marketing" && (
+                <div style={{ display: "grid", gap: 6, marginBottom: 12 }}>
+                  <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 6 }}>
+                    <span>Or create a new campaign</span>
+                    <input
+                      value={talentTargetNewCampaign}
+                      onChange={e => setTalentTargetNewCampaign(e.target.value)}
+                      placeholder="Type a new campaign name"
+                      style={{ ...iS, width: "100%" }}
+                    />
+                  </label>
+                  <div style={{ fontSize: 11, color: C.tt }}>
+                    {talentTargetNewCampaign.trim()
+                      ? `New assignment will use "${talentTargetNewCampaign.trim()}".`
+                      : talentTargetCampaign
+                        ? `New assignment will use "${talentTargetCampaign}".`
+                        : "Leave both blank if this belongs in the project without a campaign yet."}
+                  </div>
+                </div>
+              )}
+
+              <div style={{ fontSize: 12, color: C.ts, background: C.sa, border: `1px solid ${C.bd}`, borderRadius: 14, padding: "10px 12px" }}>
+                {!talentTargetProjectId
+                  ? "Choose a destination project to prepare the new placement."
+                  : talentTargetProjectType === "marketing" && talentTargetExistingMarketingAssignment
+                    ? `This talent already has an assignment in ${talentTargetProject?.name} for ${talentTargetExistingMarketingAssignment.campaign || "No campaign"}. Clicking the button will open it.`
+                    : talentTargetProjectType === "marketing" && talentTargetMarketingAssignments.length
+                      ? `This talent is already in ${talentTargetProject?.name} on ${talentTargetMarketingAssignments.length} other marketing assignment${talentTargetMarketingAssignments.length === 1 ? "" : "s"}.`
+                      : talentTargetProjectType !== "marketing" && talentTargetExistingArRecord
+                        ? `This talent is already in ${talentTargetProject?.name} as a ${talentTargetProjectType === "curator" ? "curator" : "pipeline"} record. Clicking the button will open it.`
+                        : talentTargetProjectType === "marketing"
+                          ? "We’ll create a new campaign assignment and keep the shared talent profile intact."
+                          : talentTargetProjectType === "curator"
+                            ? "We’ll add this talent into the curator roster for that project and keep their shared profile linked here."
+                            : "We’ll add this talent into the A&R roster for that project and keep their shared profile linked here."}
+              </div>
+            </div>
+
+            <div style={{ ...cS, padding: "18px 20px", marginBottom: 16 }}>
+              <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>Kickoff Details</div>
+              <div style={{ display: "grid", gap: 10 }}>
+                {selectedTalentArProjectSummaries.length ? selectedTalentArProjectSummaries.map(summary => (
+                  <div key={`ar:${summary.projectId}`} style={{ padding: "12px 14px", borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sa }}>
+                    <div style={{ fontSize: 12, color: C.tt, marginBottom: 10 }}>{summary.projectName}</div>
+                    <div style={{ display: "grid", gap: 10 }}>
+                      {summary.arRecords.map(record => (
+                        <div key={`${record.projectId}:${record.artistName}`} style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", padding: "12px 14px", borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sf }}>
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 6 }}>
+                              <div style={{ fontSize: 14, fontWeight: 700, color: C.tx }}>{record.artistName}</div>
+                              <span style={{ ...mkP(true, record.projectType === "curator" ? C.ac : C.ts, record.projectType === "curator" ? C.al : C.sa), cursor: "default" }}>
+                                {record.projectType === "curator" ? "Curator" : "A&R"}
+                              </span>
+                              <span style={{ ...mkP(true, sc(record.stage, C), sb(record.stage, C)), cursor: "default" }}>{SM[record.stage]?.label || "Prospect"}</span>
+                              {record.owner && <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{record.owner}</span>}
+                            </div>
+                            <div style={{ fontSize: 11, color: C.tt }}>
+                              {[record.genre, record.monthlyListeners ? `${record.monthlyListeners} listeners` : "", record.location].filter(Boolean).join(" · ") || (record.projectType === "curator" ? "Working curator record" : "Working A&R record")}
+                            </div>
+                            {(record.note || record.followUp) && (
+                              <div style={{ display: "grid", gap: 4, marginTop: 8, fontSize: 11, color: C.ts, lineHeight: 1.5 }}>
+                                {record.note && <div><strong style={{ color: C.tx }}>Notes:</strong> {record.note}</div>}
+                                {record.followUp && <div><strong style={{ color: C.tx }}>Follow-up:</strong> {record.followUp}</div>}
+                              </div>
+                            )}
+                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 10 }}>
+                              <label style={{ fontSize: 11, color: C.ts, display: "grid", gap: 4 }}>
+                                <span>Kickoff stage</span>
+                                <select
+                                  value={normalizeStageId(record.stage || "prospect")}
+                                  disabled={isReadOnly}
+                                  onChange={e => { void updateTalentOverviewKickoffStage(record, e.target.value); }}
+                                  style={{ ...iS, width: "100%", fontSize: 12, ...lockStyle(isReadOnly) }}
+                                >
+                                  {KICKOFF_STAGE_ACTIONS.map(stage => (
+                                    <option key={`talent-stage-${record.projectId}-${record.artistName}-${stage.id}`} value={stage.id}>
+                                      {stage.label}
+                                    </option>
+                                  ))}
+                                </select>
+                              </label>
+                              <label style={{ fontSize: 11, color: C.ts, display: "grid", gap: 4 }}>
+                                <span>Owner</span>
+                                <select
+                                  value={record.owner || ""}
+                                  disabled={isReadOnly}
+                                  onChange={e => { void updateTalentOverviewKickoffOwner(record, e.target.value); }}
+                                  style={{ ...iS, width: "100%", fontSize: 12, ...lockStyle(isReadOnly) }}
+                                >
+                                  <option value="">Unassigned</option>
+                                  {(projects.find(project => project.id === record.projectId)?.teamUsers || DEFAULT_TEAM_USERS).map(user => (
+                                    <option key={`talent-owner-${record.projectId}-${record.artistName}-${user}`} value={user}>{user}</option>
+                                  ))}
+                                </select>
+                              </label>
+                            </div>
+                            <div style={{ display: "grid", gap: 8, marginTop: 10 }}>
+                              <label style={{ fontSize: 11, color: C.ts, display: "grid", gap: 4 }}>
+                                <span>Kickoff notes</span>
+                                <textarea
+                                  defaultValue={record.note || ""}
+                                  readOnly={isReadOnly}
+                                  onClick={e => e.stopPropagation()}
+                                  onBlur={e => { void updateTalentOverviewKickoffNote(record, e.currentTarget.value.trim()); }}
+                                  placeholder="Add kickoff notes here..."
+                                  style={{ ...iS, width: "100%", minHeight: 72, resize: "vertical", fontSize: 12, ...lockStyle(isReadOnly) }}
+                                />
+                              </label>
+                              <label style={{ fontSize: 11, color: C.ts, display: "grid", gap: 4 }}>
+                                <span>Follow-up date</span>
+                                <input
+                                  type="date"
+                                  defaultValue={record.followUp || ""}
+                                  disabled={isReadOnly}
+                                  onClick={e => e.stopPropagation()}
+                                  onChange={e => { void updateTalentOverviewKickoffFollowUp(record, e.target.value); }}
+                                  style={{ ...iS, width: "100%", fontSize: 12, ...lockStyle(isReadOnly) }}
+                                />
+                              </label>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )) : (
+                  <div style={{ fontSize: 12, color: C.tt }}>No A&R placements linked yet.</div>
+                )}
+              </div>
+            </div>
+
+            <div style={{ ...cS, padding: "18px 20px" }}>
+              <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>Live Roster Campaigns</div>
+              <div style={{ display: "grid", gap: 10 }}>
+                {selectedTalentMarketingProjectSummaries.length ? selectedTalentMarketingProjectSummaries.map(summary => (
+                  <div key={`marketing:${summary.projectId}`} style={{ padding: "12px 14px", borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sa }}>
+                    <div style={{ fontSize: 12, color: C.tt, marginBottom: 10 }}>{summary.projectName}</div>
+                    <div style={{ display: "grid", gap: 10 }}>
+                      {summary.marketingAssignments.map(assignment => (
+                        <div key={assignment.assignmentId} style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", padding: "12px 14px", borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sf }}>
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 6 }}>
+                              <div style={{ fontSize: 14, fontWeight: 700, color: C.tx }}>{assignment.campaign || "No campaign"}</div>
+                              <span style={{ ...mkP(true, marketingStatusTone(assignment.status, C).tone, marketingStatusTone(assignment.status, C).bg), cursor: "default" }}>{MM[assignment.status]?.label || "Prospect"}</span>
+                              {assignment.owner && <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{assignment.owner}</span>}
+                            </div>
+                            <div style={{ fontSize: 11, color: C.tt }}>
+                              {[assignment.title, assignment.trafficType, assignment.deliverableType, assignment.dueDate ? `Due ${sD(assignment.dueDate)}` : ""].filter(Boolean).join(" · ") || "Marketing assignment"}
+                            </div>
+                            {(assignment.notes || assignment.rejectedReason) && (
+                              <div style={{ display: "grid", gap: 4, marginTop: 8, fontSize: 11, color: C.ts, lineHeight: 1.5 }}>
+                                {assignment.notes && <div><strong style={{ color: C.tx }}>Notes:</strong> {assignment.notes}</div>}
+                                {assignment.rejectedReason && <div><strong style={{ color: C.tx }}>Rejected:</strong> {assignment.rejectedReason}</div>}
+                              </div>
+                            )}
+                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 10 }}>
+                              <label style={{ fontSize: 11, color: C.ts, display: "grid", gap: 4 }}>
+                                <span>Campaign status</span>
+                                <select
+                                  value={normalizeMarketingStatus(assignment.status || "prospect")}
+                                  disabled={isReadOnly}
+                                  onChange={e => { void updateTalentOverviewMarketingStatus(assignment, e.target.value); }}
+                                  style={{ ...iS, width: "100%", fontSize: 12, ...lockStyle(isReadOnly) }}
+                                >
+                                  {MARKETING_STATUSES.map(status => (
+                                    <option key={`talent-assignment-status-${assignment.assignmentId}-${status.id}`} value={status.id}>
+                                      {status.label}
+                                    </option>
+                                  ))}
+                                </select>
+                              </label>
+                              <label style={{ fontSize: 11, color: C.ts, display: "grid", gap: 4 }}>
+                                <span>Owner</span>
+                                <select
+                                  value={assignment.owner || ""}
+                                  disabled={isReadOnly}
+                                  onChange={e => { void updateTalentOverviewMarketingOwner(assignment, e.target.value); }}
+                                  style={{ ...iS, width: "100%", fontSize: 12, ...lockStyle(isReadOnly) }}
+                                >
+                                  <option value="">Unassigned</option>
+                                  {(projects.find(project => project.id === assignment.projectId)?.teamUsers || DEFAULT_TEAM_USERS).map(user => (
+                                    <option key={`talent-assignment-owner-${assignment.assignmentId}-${user}`} value={user}>{user}</option>
+                                  ))}
+                                </select>
+                              </label>
+                            </div>
+                            <label style={{ fontSize: 11, color: C.ts, display: "grid", gap: 4, marginTop: 10 }}>
+                              <span>Campaign notes</span>
+                              <textarea
+                                defaultValue={assignment.notes || ""}
+                                readOnly={isReadOnly}
+                                onClick={e => e.stopPropagation()}
+                                onBlur={e => { void updateTalentOverviewMarketingNotes(assignment, e.currentTarget.value.trim()); }}
+                                placeholder="Add campaign notes here..."
+                                style={{ ...iS, width: "100%", minHeight: 78, resize: "vertical", fontSize: 12, ...lockStyle(isReadOnly) }}
+                              />
+                            </label>
+                          </div>
+                          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                            {assignment.briefUrl && <a href={assignment.briefUrl} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Brief</a>}
+                            {assignment.contentUrl && <a href={assignment.contentUrl} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Content</a>}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )) : (
+                  <div style={{ fontSize: 12, color: C.tt }}>No marketing assignments linked yet.</div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+
   // ═══ WORKSPACE ═══
   if (screen === "workspace") return (
     <div style={{ fontFamily: ft, background: C.bg, minHeight: "100vh", color: C.tx }}>
@@ -8489,6 +9371,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
             })}
           </div>
         )}
+        <WorkspaceOverlays />
       </div>
     </div>
   );
@@ -8963,6 +9846,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
             ))}
           </div>
         )}
+        <WorkspaceOverlays />
       </div>
     </div>
   );
@@ -9303,6 +10187,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
             ))}
           </div>
         )}
+        <WorkspaceOverlays />
       </div>
     </div>
   );
@@ -12891,889 +13776,7 @@ Requirements:
         </div>
         )}
 
-        {showAddArtist && (
-          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 120 }} onClick={e => { if (e.target === e.currentTarget) { setShowAddArtist(false); resetArtistForm(); } }}>
-            <div style={{ background: C.sf, borderRadius: 18, padding: "24px 28px", width: 640, maxWidth: "calc(100vw - 32px)", boxShadow: "0 25px 70px rgba(0,0,0,0.2)" }}>
-              <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 6, color: C.tx }}>{isCuratorProject ? "Add Curator" : "Add Artist"}</div>
-              <div style={{ fontSize: 12, color: C.ts, marginBottom: 14 }}>
-                {isCuratorProject
-                  ? "Manual add for curator contacts you want in the pipeline before a CSV import."
-                  : "Manual add for artists you want in the pipeline before a CSV import."}
-              </div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                <input value={artistForm.name} onChange={e => setArtistForm({ ...artistForm, name: e.target.value })} placeholder={isCuratorProject ? "Curator name*" : "Artist name*"} autoFocus style={{ ...iS, width: "100%" }} />
-                <input value={artistForm.genre} onChange={e => setArtistForm({ ...artistForm, genre: e.target.value })} placeholder="Genre / vibe" style={{ ...iS, width: "100%" }} />
-                <input value={artistForm.listeners} onChange={e => setArtistForm({ ...artistForm, listeners: e.target.value })} placeholder="Monthly listeners" style={{ ...iS, width: "100%" }} />
-                <input value={artistForm.hitTrack} onChange={e => setArtistForm({ ...artistForm, hitTrack: e.target.value })} placeholder="Hit track" style={{ ...iS, width: "100%" }} />
-                <input value={artistForm.social} onChange={e => setArtistForm({ ...artistForm, social: e.target.value })} placeholder="@handle or profile URL" style={{ ...iS, width: "100%" }} />
-                {!isCuratorProject ? (
-                  <input value={artistForm.email} onChange={e => setArtistForm({ ...artistForm, email: e.target.value })} placeholder="Email" style={{ ...iS, width: "100%" }} />
-                ) : (
-                  <input value={artistForm.curatorPageUrl} onChange={e => setArtistForm({ ...artistForm, curatorPageUrl: e.target.value })} placeholder="Curator page link" style={{ ...iS, width: "100%" }} />
-                )}
-                <input value={artistForm.location} onChange={e => setArtistForm({ ...artistForm, location: e.target.value })} placeholder="Location" style={{ ...iS, width: "100%", gridColumn: "1 / span 2" }} />
-                {isCuratorProject && (
-                  <div style={{ gridColumn: "1 / span 2" }}>
-                    <div style={{ fontSize: 11, color: C.tt, marginBottom: 8 }}>Curated artists they vouch for</div>
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10 }}>
-                      {artistForm.curatedArtists.map((value, index) => (
-                        <input
-                          key={`new-curated-${index}`}
-                          value={value}
-                          onChange={e => setArtistForm(prev => {
-                            const next = [...prev.curatedArtists];
-                            next[index] = e.target.value;
-                            return { ...prev, curatedArtists: next };
-                          })}
-                          placeholder={`Curated artist ${index + 1}`}
-                          style={{ ...iS, width: "100%" }}
-                        />
-                      ))}
-                    </div>
-                  </div>
-                )}
-                <textarea value={artistForm.note} onChange={e => setArtistForm({ ...artistForm, note: e.target.value })} placeholder="Optional note" style={{ ...iS, width: "100%", minHeight: 80, resize: "vertical", gridColumn: "1 / span 2" }} />
-              </div>
-              <div style={{ marginTop: 10, fontSize: 11, color: C.ts }}>
-                {artistForm.name.trim() && proj?.artists?.some(a => canonicalArtistName(a.n) === canonicalArtistName(artistForm.name)) && (
-                  <div style={{ color: C.rd }}>This artist is already in the project.</div>
-                )}
-                {artistForm.name.trim() && (proj?.internalRoster?.names || []).some(name => canonicalArtistName(name) === canonicalArtistName(artistForm.name)) && (
-                  <div style={{ color: C.pr }}>This artist appears in your internal roster check.</div>
-                )}
-              </div>
-              <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 18 }}>
-                <button onClick={() => { setShowAddArtist(false); resetArtistForm(); }} style={{ padding: "8px 18px", borderRadius: 10, border: `1px solid ${C.bd}`, background: "transparent", cursor: "pointer", fontSize: 13, fontFamily: ft, color: C.ts }}>Cancel</button>
-                <button disabled={!artistForm.name.trim() || manualArtistSaving} onClick={addManualArtist} style={{ padding: "8px 24px", borderRadius: 10, border: "none", background: C.ac, color: "#fff", cursor: !artistForm.name.trim() || manualArtistSaving ? "not-allowed" : "pointer", fontSize: 13, fontWeight: 600, fontFamily: ft, opacity: artistForm.name.trim() && !manualArtistSaving ? 1 : 0.45 }}>
-                  {manualArtistSaving ? "Adding..." : isCuratorProject ? "Add Curator" : "Add Artist"}
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {showMarketingBulkUpdateModal && (
-          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 125 }} onClick={e => { if (e.target === e.currentTarget) closeMarketingBulkUpdateModal(); }}>
-            <div style={{ background: C.sf, borderRadius: 18, padding: "24px 28px", width: 880, maxWidth: "calc(100vw - 32px)", boxShadow: "0 25px 70px rgba(0,0,0,0.2)", maxHeight: "88vh", overflowY: "auto" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", marginBottom: 12 }}>
-                <div>
-                  <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 6, color: C.tx }}>Bulk Update Assignments</div>
-                  <div style={{ fontSize: 12, color: C.ts, lineHeight: 1.6 }}>
-                    Paste a quick list of <code style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>name | campaign | status | owner</code> rows.
-                    We will update exact talent + campaign matches, create a new campaign assignment when the talent already exists in the project, and skip unmatched names safely.
-                  </div>
-                </div>
-                <button onClick={closeMarketingBulkUpdateModal} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: C.ts }}>✕</button>
-              </div>
-
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 220px 220px 220px", gap: 10, alignItems: "end", marginBottom: 12 }}>
-                <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 4 }}>
-                  <span>Paste list</span>
-                  <textarea
-                    value={marketingBulkText}
-                    onChange={e => setMarketingBulkText(e.target.value)}
-                    placeholder={`Patrick James Clark | D2F Paid 1 | Contacted | Greg\nTejai Moore | D2F Paid 1 | Interested\nfeeljones | Direct To Fan Focus | Complete | Brad`}
-                    style={{ ...iS, width: "100%", minHeight: 170, resize: "vertical", fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", lineHeight: 1.5 }}
-                  />
-                </label>
-                <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 4 }}>
-                  <span>Default campaign</span>
-                  <select value={marketingBulkDefaultCampaign} onChange={e => setMarketingBulkDefaultCampaign(e.target.value)} style={{ ...iS, width: "100%" }}>
-                    <option value="">None</option>
-                    {marketingCampaignOptions.map(campaign => <option key={campaign} value={campaign}>{campaign}</option>)}
-                  </select>
-                  <div style={{ fontSize: 11, color: C.tt }}>Used when a pasted row omits the campaign.</div>
-                </label>
-                <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 4 }}>
-                  <span>Default status</span>
-                  <select value={marketingBulkDefaultStatus} onChange={e => setMarketingBulkDefaultStatus(e.target.value)} style={{ ...iS, width: "100%" }}>
-                    {MARKETING_STATUSES.map(status => <option key={status.id} value={status.id}>{status.label}</option>)}
-                  </select>
-                  <div style={{ fontSize: 11, color: C.tt }}>Used when a pasted row omits the status.</div>
-                </label>
-                <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 4 }}>
-                  <span>Default owner</span>
-                  <select value={marketingBulkDefaultOwner} onChange={e => setMarketingBulkDefaultOwner(e.target.value)} style={{ ...iS, width: "100%" }}>
-                    <option value="">Leave unchanged / unassigned</option>
-                    {(proj?.teamUsers || DEFAULT_TEAM_USERS).map(owner => <option key={owner} value={owner}>{owner}</option>)}
-                  </select>
-                  <div style={{ fontSize: 11, color: C.tt }}>Used when a pasted row omits the owner.</div>
-                </label>
-              </div>
-
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
-                <span style={{ ...mkP(true, C.ac, C.al), cursor: "default" }}>{marketingBulkRows.length} parsed</span>
-                <span style={{ ...mkP(true, C.bu, C.bb), cursor: "default" }}>{marketingBulkSummary.update || 0} updates</span>
-                <span style={{ ...mkP(true, C.gn, C.gb), cursor: "default" }}>{marketingBulkSummary.create || 0} new assignments</span>
-                <span style={{ ...mkP(true, C.rd, C.rb), cursor: "default" }}>{marketingBulkSummary.skip || 0} unmatched / skipped</span>
-              </div>
-
-              <div style={{ borderRadius: 16, border: `1px solid ${C.bd}`, overflow: "hidden", marginBottom: 18 }}>
-                <div style={{ display: "grid", gridTemplateColumns: "88px minmax(180px, 1.3fr) minmax(160px, 1fr) 120px minmax(160px, 1.2fr)", gap: 0, background: C.sa, padding: "10px 12px", fontSize: 11, color: C.tt, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1 }}>
-                  <div>Action</div>
-                  <div>Talent</div>
-                  <div>Campaign</div>
-                  <div>Status</div>
-                  <div>Match / Result</div>
-                </div>
-                <div style={{ maxHeight: 280, overflowY: "auto" }}>
-                  {marketingBulkPreview.length ? marketingBulkPreview.map(entry => {
-                    const actionTone = entry.action === "update"
-                      ? [C.bu, C.bb]
-                      : entry.action === "create"
-                        ? [C.gn, C.gb]
-                        : [C.rd, C.rb];
-                    return (
-                      <div key={`${entry.lineNumber}-${entry.talentName}-${entry.campaign}`} style={{ display: "grid", gridTemplateColumns: "88px minmax(180px, 1.3fr) minmax(160px, 1fr) 120px minmax(160px, 1.2fr)", gap: 0, padding: "10px 12px", borderTop: `1px solid ${C.bd}`, alignItems: "start" }}>
-                        <div><span style={{ ...mkP(true, actionTone[0], actionTone[1]), cursor: "default", fontSize: 11 }}>{entry.action === "update" ? "Update" : entry.action === "create" ? "Create" : "Skip"}</span></div>
-                        <div>
-                          <div style={{ fontWeight: 600, color: C.tx }}>{entry.talentName}</div>
-                          <div style={{ fontSize: 11, color: C.tt }}>Line {entry.lineNumber}</div>
-                        </div>
-                        <div style={{ color: C.ts }}>{entry.campaign || "No campaign"}</div>
-                        <div style={{ color: C.ts }}>{MM[entry.status]?.label || titleCaseWords(entry.status)}</div>
-                        <div style={{ color: C.ts, lineHeight: 1.45 }}>
-                          {entry.action === "update" && `Existing assignment match${entry.owner ? ` · Owner → ${entry.owner}` : ""}`}
-                          {entry.action === "create" && `${entry.source === "existing_talent" ? "Existing talent found" : "Matched artist from project roster"} · new campaign assignment${entry.owner ? ` · Owner → ${entry.owner}` : ""}`}
-                          {entry.action === "skip" && entry.reason}
-                        </div>
-                      </div>
-                    );
-                  }) : (
-                    <div style={{ padding: "18px 14px", fontSize: 12, color: C.tt }}>
-                      Paste rows above to preview what will happen before applying changes.
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
-                <div style={{ fontSize: 11, color: C.tt, lineHeight: 1.5 }}>
-                  Supported formats: pipe-separated, comma-separated, or tab-separated. Header rows like <code style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>name,campaign,status,owner</code> also work.
-                </div>
-                <div style={{ display: "flex", gap: 10 }}>
-                  <button onClick={closeMarketingBulkUpdateModal} style={{ padding: "8px 18px", borderRadius: 10, border: `1px solid ${C.bd}`, background: "transparent", cursor: "pointer", fontSize: 13, fontFamily: ft, color: C.ts }}>
-                    Cancel
-                  </button>
-                  <button onClick={applyMarketingBulkUpdate} style={{ padding: "8px 24px", borderRadius: 10, border: "none", background: C.ac, color: "#fff", cursor: "pointer", fontSize: 13, fontWeight: 600, fontFamily: ft, opacity: marketingBulkPreview.some(entry => entry.action !== "skip") ? 1 : 0.45 }}>
-                    Apply Updates
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {showMarketingItemModal && (
-          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 120 }} onClick={e => { if (e.target === e.currentTarget) { closeMarketingItemModal(); } }}>
-            <div style={{ background: C.sf, borderRadius: 18, padding: "24px 28px", width: 720, maxWidth: "calc(100vw - 32px)", boxShadow: "0 25px 70px rgba(0,0,0,0.2)", maxHeight: "88vh", overflowY: "auto" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", marginBottom: 12 }}>
-                <div>
-                  <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 6, color: C.tx }}>{marketingForm.id ? "Edit Campaign Assignment" : "New Campaign Assignment"}</div>
-                  <div style={{ fontSize: 12, color: C.ts }}>Track the talent, the campaign, the deliverable, and the links your team needs to move the work.</div>
-                </div>
-                <button onClick={closeMarketingItemModal} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: C.ts }}>✕</button>
-              </div>
-
-              {(relatedMarketingAssignments.length > 1 || marketingForm.talentName.trim()) && (
-                <div style={{ display: "flex", gap: 10, alignItems: "end", justifyContent: "space-between", flexWrap: "wrap", marginBottom: 14 }}>
-                  <div style={{ display: "grid", gap: 4, minWidth: 280, flex: "1 1 320px" }}>
-                    <span style={{ fontSize: 12, color: C.ts }}>
-                      {relatedMarketingAssignments.length > 1
-                        ? `This talent already has ${relatedMarketingAssignments.length} campaign assignments in this project.`
-                        : "Create a fresh campaign assignment for this same talent without retyping their profile details."}
-                    </span>
-                    {relatedMarketingAssignments.length > 1 && (
-                      <select
-                        value={marketingForm.id || ""}
-                        onChange={e => openRelatedMarketingAssignment(e.target.value)}
-                        style={{ ...iS, width: "100%" }}
-                      >
-                        {!marketingForm.id && (
-                          <option value="">New campaign draft</option>
-                        )}
-                        {relatedMarketingAssignments.map(item => {
-                          const campaignLabel = item.campaigns?.length ? item.campaigns.join(", ") : "No campaign";
-                          const statusLabel = MM[item.status]?.label || "Prospect";
-                          return (
-                            <option key={item.id} value={item.id}>
-                              {`${campaignLabel} · ${statusLabel}`}
-                            </option>
-                          );
-                        })}
-                      </select>
-                    )}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={startNewCampaignFromMarketingForm}
-                    style={{ ...actionBtn(true, "accent"), whiteSpace: "nowrap" }}
-                  >
-                    + New Campaign
-                  </button>
-                </div>
-              )}
-
-              <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr", gap: 10 }}>
-                <input value={marketingForm.talentName} onChange={e => setMarketingForm({ ...marketingForm, talentName: e.target.value })} placeholder="Talent name*" autoFocus style={{ ...iS, width: "100%" }} />
-                <input value={marketingForm.title} onChange={e => setMarketingForm({ ...marketingForm, title: e.target.value })} placeholder="Title or deliverable headline" style={{ ...iS, width: "100%" }} />
-
-                <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 4 }}>
-                  <span>Talent type</span>
-                  <select value={marketingForm.talentType} onChange={e => setMarketingForm({ ...marketingForm, talentType: e.target.value })} style={{ ...iS, width: "100%" }}>
-                    {MARKETING_TALENT_TYPES.map(type => <option key={type} value={type}>{type}</option>)}
-                  </select>
-                </label>
-                <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 4 }}>
-                  <span>Deliverable type</span>
-                  <select value={marketingForm.deliverableType} onChange={e => setMarketingForm({ ...marketingForm, deliverableType: e.target.value })} style={{ ...iS, width: "100%" }}>
-                    {MARKETING_DELIVERABLE_TYPES.map(type => <option key={type} value={type}>{type}</option>)}
-                  </select>
-                </label>
-
-                <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 4 }}>
-                  <span>Campaign</span>
-                  <select value={marketingForm.campaign} onChange={e => setMarketingForm({ ...marketingForm, campaign: e.target.value, newCampaign: "" })} style={{ ...iS, width: "100%" }}>
-                    <option value="">Select campaign</option>
-                    {marketingCampaignOptions.map(campaign => <option key={campaign} value={campaign}>{campaign}</option>)}
-                  </select>
-                </label>
-                <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 4 }}>
-                  <span>Owner</span>
-                  <select value={marketingForm.owner} onChange={e => setMarketingForm({ ...marketingForm, owner: e.target.value })} style={{ ...iS, width: "100%" }}>
-                    <option value="">Unassigned</option>
-                    {(proj?.teamUsers || DEFAULT_TEAM_USERS).map(u => <option key={u} value={u}>{u}</option>)}
-                  </select>
-                </label>
-
-                <input value={marketingForm.newCampaign} onChange={e => setMarketingForm({ ...marketingForm, newCampaign: e.target.value })} placeholder="Or create a new campaign" style={{ ...iS, width: "100%" }} />
-
-                <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 4 }}>
-                  <span>Traffic type</span>
-                  <select value={marketingForm.trafficType} onChange={e => setMarketingForm({ ...marketingForm, trafficType: e.target.value })} style={{ ...iS, width: "100%" }}>
-                    {MARKETING_TRAFFIC_TYPES.map(type => <option key={type} value={type}>{type}</option>)}
-                  </select>
-                </label>
-                <div style={{ fontSize: 12, color: C.ts, display: "grid", gap: 6 }}>
-                  <span>Channels</span>
-                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                    {MARKETING_CHANNELS.map(type => {
-                      const active = (marketingForm.channels || []).includes(type);
-                      return (
-                        <button
-                          key={type}
-                          type="button"
-                          onClick={() => setMarketingForm({
-                            ...marketingForm,
-                            channels: active
-                              ? (marketingForm.channels || []).filter(channel => channel !== type)
-                              : [...(marketingForm.channels || []), type],
-                          })}
-                          style={mkP(active, C.ac, C.al)}
-                        >
-                          {type}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 4 }}>
-                  <span>Status</span>
-                  <select value={marketingForm.status} onChange={e => setMarketingForm({ ...marketingForm, status: e.target.value, rejectedReason: e.target.value === "rejected" ? marketingForm.rejectedReason : "" })} style={{ ...iS, width: "100%" }}>
-                    {MARKETING_STATUSES.map(status => <option key={status.id} value={status.id}>{status.label}</option>)}
-                  </select>
-                </label>
-                <input value={marketingForm.email} onChange={e => setMarketingForm({ ...marketingForm, email: e.target.value })} placeholder="Talent email" style={{ ...iS, width: "100%" }} />
-
-                <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 4 }}>
-                  <span>Due date</span>
-                  <input type="date" value={marketingForm.dueDate} onChange={e => setMarketingForm({ ...marketingForm, dueDate: e.target.value })} style={{ ...iS, width: "100%" }} />
-                </label>
-                <input value={marketingForm.instagramUrl} onChange={e => setMarketingForm({ ...marketingForm, instagramUrl: e.target.value, instagramHandle: normalizeSocialHandle(e.target.value) })} placeholder="Instagram URL" style={{ ...iS, width: "100%" }} />
-
-                <input value={marketingForm.instagramFollowers} onChange={e => setMarketingForm({ ...marketingForm, instagramFollowers: normalizeFollowerCount(e.target.value) })} placeholder="Instagram followers" style={{ ...iS, width: "100%" }} />
-                <input value={marketingForm.tiktokUrl} onChange={e => setMarketingForm({ ...marketingForm, tiktokUrl: e.target.value, tiktokHandle: normalizeSocialHandle(e.target.value) })} placeholder="TikTok URL" style={{ ...iS, width: "100%" }} />
-
-                <input value={marketingForm.tiktokFollowers} onChange={e => setMarketingForm({ ...marketingForm, tiktokFollowers: normalizeFollowerCount(e.target.value) })} placeholder="TikTok followers" style={{ ...iS, width: "100%" }} />
-                <input value={marketingForm.spotifyUrl} onChange={e => setMarketingForm({ ...marketingForm, spotifyUrl: e.target.value })} placeholder="Spotify artist link" style={{ ...iS, width: "100%" }} />
-
-                <input value={marketingForm.spotifyMonthlyListeners} onChange={e => setMarketingForm({ ...marketingForm, spotifyMonthlyListeners: normalizeFollowerCount(e.target.value) })} placeholder="Spotify monthly listeners" style={{ ...iS, width: "100%" }} />
-
-                <input value={marketingForm.briefUrl} onChange={e => setMarketingForm({ ...marketingForm, briefUrl: e.target.value })} placeholder="Brief link" style={{ ...iS, width: "100%" }} />
-                <input value={marketingForm.contentUrl} onChange={e => setMarketingForm({ ...marketingForm, contentUrl: e.target.value })} placeholder="Content link" style={{ ...iS, width: "100%" }} />
-
-                {marketingForm.status === "rejected" && (
-                  <textarea
-                    value={marketingForm.rejectedReason}
-                    onChange={e => setMarketingForm({ ...marketingForm, rejectedReason: e.target.value })}
-                    placeholder="Why did the artist reject the opportunity?"
-                    style={{ ...iS, width: "100%", minHeight: 84, resize: "vertical", gridColumn: "1 / span 2" }}
-                  />
-                )}
-
-                <textarea value={marketingForm.notes} onChange={e => setMarketingForm({ ...marketingForm, notes: e.target.value })} placeholder="Notes, revision context, feedback, deliverable details..." style={{ ...iS, width: "100%", minHeight: 110, resize: "vertical", gridColumn: "1 / span 2" }} />
-              </div>
-
-              {marketingSlackNotice && (
-                <div
-                  style={{
-                    marginTop: 14,
-                    padding: "11px 14px",
-                    borderRadius: 12,
-                    border: `1px solid ${marketingSlackNotice.border}`,
-                    background: marketingSlackNotice.bg,
-                  }}
-                >
-                  <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: marketingSlackNotice.tone, marginBottom: 4 }}>
-                    Slack Notice
-                  </div>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: marketingSlackNotice.tone, marginBottom: 3 }}>
-                    {marketingSlackNotice.headline}
-                  </div>
-                  <div style={{ fontSize: 12, color: C.ts, lineHeight: 1.5 }}>
-                    {marketingSlackNotice.detail}
-                  </div>
-                </div>
-              )}
-
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginTop: 18 }}>
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                  {marketingForm.id && workspaceTalentData.marketingTalentIds.get(String(marketingForm.id || "")) && (
-                    <button
-                      type="button"
-                      onClick={() => openTalentProfileFromMarketingItem({ id: marketingForm.id })}
-                      style={{ ...actionBtn(false, "accent") }}
-                    >
-                      Open Talent Profile
-                    </button>
-                  )}
-                  {marketingForm.email && <a href={`mailto:${marketingForm.email}`} style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Email Talent</a>}
-                  {(marketingForm.instagramUrl || marketingForm.instagramHandle) && <a href={marketingForm.instagramUrl || `https://instagram.com/${marketingForm.instagramHandle}`} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Instagram</a>}
-                  {(marketingForm.tiktokUrl || marketingForm.tiktokHandle) && <a href={marketingForm.tiktokUrl || `https://www.tiktok.com/@${marketingForm.tiktokHandle}`} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>TikTok</a>}
-                  {marketingForm.spotifyUrl && <a href={marketingForm.spotifyUrl} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Spotify</a>}
-                  {marketingForm.briefUrl && <a href={marketingForm.briefUrl} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Open Brief</a>}
-                  {marketingForm.contentUrl && <a href={marketingForm.contentUrl} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Open Content</a>}
-                </div>
-                <div style={{ display: "flex", gap: 10 }}>
-                  {marketingForm.id && (
-                    <button onClick={() => deleteMarketingItem(marketingForm.id)} style={{ padding: "8px 18px", borderRadius: 10, border: `1px solid ${C.rbd}`, background: C.rb, cursor: "pointer", fontSize: 13, fontFamily: ft, color: C.rd }}>
-                      Delete
-                    </button>
-                  )}
-                  <button onClick={closeMarketingItemModal} style={{ padding: "8px 18px", borderRadius: 10, border: `1px solid ${C.bd}`, background: "transparent", cursor: "pointer", fontSize: 13, fontFamily: ft, color: C.ts }}>Cancel</button>
-                  <button disabled={!marketingForm.talentName.trim() || marketingItemSaving} onClick={saveMarketingItem} style={{ padding: "8px 24px", borderRadius: 10, border: "none", background: C.ac, color: "#fff", cursor: !marketingForm.talentName.trim() || marketingItemSaving ? "not-allowed" : "pointer", fontSize: 13, fontWeight: 600, fontFamily: ft, opacity: marketingForm.talentName.trim() && !marketingItemSaving ? 1 : 0.45 }}>
-                    {marketingItemSaving ? (marketingForm.id ? "Saving..." : "Adding...") : (marketingForm.id ? "Save Changes" : "Add Assignment")}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-        {showTalentProfileModal && selectedTalentProfile && (
-          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.38)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 126 }} onClick={e => { if (e.target === e.currentTarget) closeTalentProfileModal(); }}>
-            <div style={{ background: C.sf, borderRadius: 18, padding: "24px 28px", width: 960, maxWidth: "calc(100vw - 32px)", boxShadow: "0 25px 70px rgba(0,0,0,0.2)", maxHeight: "88vh", overflowY: "auto" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "flex-start", marginBottom: 16 }}>
-                <div>
-                  <div style={{ fontSize: 11, letterSpacing: 2, textTransform: "uppercase", color: C.ac, fontWeight: 700, marginBottom: 8 }}>Talent Overview</div>
-                  <div style={{ fontSize: 28, fontWeight: 800, letterSpacing: "-0.04em", color: C.tx, marginBottom: 8 }}>{selectedTalentProfile.displayName}</div>
-                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                    {selectedTalentProfile.talentTypes.map(type => (
-                      <span key={type} style={{ ...mkP(true, C.ac, C.al), cursor: "default" }}>{type}</span>
-                    ))}
-                    <span style={{ ...mkP(true, talentLifecycleTone(selectedTalentProfile.platformLifecycle, C).tone, talentLifecycleTone(selectedTalentProfile.platformLifecycle, C).bg), cursor: "default" }}>
-                      {TALENT_LIFECYCLE_LABELS[selectedTalentProfile.platformLifecycle] || "Pre-Live"}
-                    </span>
-                    {selectedTalentProfile.sources.map(source => (
-                      <span key={source} style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>
-                        {TALENT_SOURCE_LABELS[source] || source}
-                      </span>
-                    ))}
-                    <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{selectedTalentProjectSummaries.length} project{selectedTalentProjectSummaries.length === 1 ? "" : "s"}</span>
-                    <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{selectedTalentProfile.marketingAssignments.length} marketing assignment{selectedTalentProfile.marketingAssignments.length === 1 ? "" : "s"}</span>
-                    <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{selectedTalentProfile.arRecords.length} A&R record{selectedTalentProfile.arRecords.length === 1 ? "" : "s"}</span>
-                  </div>
-                </div>
-                <button onClick={closeTalentProfileModal} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 20, color: C.ts }}>✕</button>
-              </div>
-
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 18 }}>
-                <div style={{ ...cS, padding: "18px 20px" }}>
-                  <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>Identity</div>
-                  <div style={{ display: "grid", gap: 10, fontSize: 13 }}>
-                    <div className="gf-rail-kv">
-                      <span className="gf-rail-kv-label">Platform lifecycle</span>
-                      <span className="gf-rail-kv-value">{TALENT_LIFECYCLE_LABELS[selectedTalentProfile.platformLifecycle] || "Pre-Live"}</span>
-                    </div>
-                    <div className="gf-rail-kv">
-                      <span className="gf-rail-kv-label">Sources</span>
-                      <span className="gf-rail-kv-value">
-                        {selectedTalentProfile.sources.length
-                          ? selectedTalentProfile.sources.map(source => TALENT_SOURCE_LABELS[source] || source).join(" · ")
-                          : "Not labeled yet"}
-                      </span>
-                    </div>
-                    <div className="gf-rail-kv">
-                      <span className="gf-rail-kv-label">Primary email</span>
-                      <span className="gf-rail-kv-value">{selectedTalentProfile.primaryEmail || "No email yet"}</span>
-                    </div>
-                    <div className="gf-rail-kv">
-                      <span className="gf-rail-kv-label">Instagram</span>
-                      <span className="gf-rail-kv-value">
-                        {selectedTalentProfile.instagramHandle
-                          ? `@${selectedTalentProfile.instagramHandle}${selectedTalentProfile.instagramFollowers ? ` · ${selectedTalentProfile.instagramFollowers}` : ""}`
-                          : "Not linked yet"}
-                      </span>
-                    </div>
-                    <div className="gf-rail-kv">
-                      <span className="gf-rail-kv-label">TikTok</span>
-                      <span className="gf-rail-kv-value">
-                        {selectedTalentProfile.tiktokHandle
-                          ? `@${selectedTalentProfile.tiktokHandle}${selectedTalentProfile.tiktokFollowers ? ` · ${selectedTalentProfile.tiktokFollowers}` : ""}`
-                          : "Not linked yet"}
-                      </span>
-                    </div>
-                    <div className="gf-rail-kv">
-                      <span className="gf-rail-kv-label">Spotify</span>
-                      <span className="gf-rail-kv-value">
-                        {selectedTalentProfile.spotifyUrl
-                          ? `${selectedTalentProfile.spotifyMonthlyListeners || "Linked"}`
-                          : "Not linked yet"}
-                      </span>
-                    </div>
-                    {selectedTalentProfile.curatorPageUrl && (
-                      <div className="gf-rail-kv">
-                        <span className="gf-rail-kv-label">Curator page</span>
-                        <span className="gf-rail-kv-value">Linked</span>
-                      </div>
-                    )}
-                    {selectedTalentProfile.curatedArtists.length > 0 && (
-                      <div className="gf-rail-kv">
-                        <span className="gf-rail-kv-label">Curated artists</span>
-                        <span className="gf-rail-kv-value">{selectedTalentProfile.curatedArtists.length}</span>
-                      </div>
-                    )}
-                    {selectedTalentProfile.aliases.length > 0 && (
-                      <div className="gf-rail-kv">
-                        <span className="gf-rail-kv-label">Aliases</span>
-                        <span className="gf-rail-kv-value">{selectedTalentProfile.aliases.join(" · ")}</span>
-                      </div>
-                    )}
-                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 4 }}>
-                      {selectedTalentProfile.primaryEmail && (
-                        <a href={`mailto:${selectedTalentProfile.primaryEmail}`} style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Email</a>
-                      )}
-                      {selectedTalentProfile.instagramHandle && (
-                        <a href={selectedTalentProfile.instagramUrl || `https://instagram.com/${selectedTalentProfile.instagramHandle}`} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Instagram</a>
-                      )}
-                      {selectedTalentProfile.tiktokHandle && (
-                        <a href={selectedTalentProfile.tiktokUrl || `https://www.tiktok.com/@${selectedTalentProfile.tiktokHandle}`} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>TikTok</a>
-                      )}
-                      {selectedTalentProfile.spotifyUrl && (
-                        <a href={selectedTalentProfile.spotifyUrl} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Spotify</a>
-                      )}
-                      {selectedTalentProfile.curatorPageUrl && (
-                        <a href={selectedTalentProfile.curatorPageUrl} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Curator Page</a>
-                      )}
-                    </div>
-                    {selectedTalentProfile.curatedArtists.length > 0 && (
-                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
-                        {selectedTalentProfile.curatedArtists.map(name => (
-                          <span key={name} style={{ ...mkP(true, C.ac, C.al), cursor: "default" }}>{name}</span>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                <div style={{ ...cS, padding: "18px 20px" }}>
-                  <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>Workspace Coverage</div>
-                  <div style={{ fontSize: 12, color: C.ts, marginBottom: 12 }}>
-                    Identity stays shared here, while kickoff progress, curator context, and live campaign work stay separated underneath.
-                  </div>
-                  <div style={{ display: "grid", gap: 10 }}>
-                    {selectedTalentProjectSummaries.length ? selectedTalentProjectSummaries.map(summary => (
-                      <div key={summary.projectId} style={{ padding: "12px 14px", borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sa }}>
-                        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, marginBottom: 10 }}>
-                          <div style={{ minWidth: 0 }}>
-                            <div style={{ fontSize: 13, fontWeight: 700, color: C.tx, marginBottom: 4 }}>{summary.projectName}</div>
-                            <div style={{ fontSize: 11, color: C.tt }}>
-                              {projectTypeLabel(summary.projectType)} record
-                              {" · "}
-                              {summary.arRecords.length ? `${summary.arRecords.length} A&R record${summary.arRecords.length === 1 ? "" : "s"}` : "No A&R record"}
-                              {" · "}
-                              {summary.marketingAssignments.length ? `${summary.marketingAssignments.length} marketing assignment${summary.marketingAssignments.length === 1 ? "" : "s"}` : "No marketing assignments"}
-                            </div>
-                          </div>
-                          <span style={{ ...mkP(true, C.tt, C.sf), cursor: "default" }}>
-                            Synced backup record
-                          </span>
-                        </div>
-                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                          {summary.owners.map(owner => (
-                            <span key={`${summary.projectId}:owner:${owner}`} style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>Owner: {owner}</span>
-                          ))}
-                          {summary.arStages.map(stage => (
-                            <span key={`${summary.projectId}:stage:${stage}`} style={{ ...mkP(true, sc(stage, C), sb(stage, C)), cursor: "default" }}>{SM[stage]?.label || "Prospect"}</span>
-                          ))}
-                          {summary.marketingStatuses.map(status => {
-                            const tone = marketingStatusTone(status, C);
-                            return (
-                              <span key={`${summary.projectId}:status:${status}`} style={{ ...mkP(true, tone.tone, tone.bg), cursor: "default" }}>{MM[status]?.label || "Prospect"}</span>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    )) : (
-                      <div style={{ fontSize: 12, color: C.tt }}>No linked projects yet.</div>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              <div style={{ ...cS, padding: "18px 20px", marginBottom: 16 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "flex-start", marginBottom: 12, flexWrap: "wrap" }}>
-                  <div>
-                    <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>Latest Notes + Timeline</div>
-                    <div style={{ fontSize: 12, color: C.ts }}>
-                      The newest kickoff, curator, and campaign updates tied to this person across the workspace.
-                    </div>
-                  </div>
-                  <div style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>
-                    {selectedTalentRecentActivity.length} recent item{selectedTalentRecentActivity.length === 1 ? "" : "s"}
-                  </div>
-                </div>
-                <div style={{ display: "grid", gap: 10 }}>
-                  {selectedTalentRecentActivity.length ? selectedTalentRecentActivity.map((entry, index) => (
-                    <div key={`${entry.id || entry.time || entry.action || "activity"}:${index}`} style={{ padding: "12px 14px", borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sa }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: 8, flexWrap: "wrap" }}>
-                        <div style={{ minWidth: 0 }}>
-                          <div style={{ fontSize: 13, fontWeight: 700, color: C.tx, marginBottom: 4 }}>
-                            {entry.action || "Workspace update"}
-                          </div>
-                          {entry.note && entry.note !== entry.action && (
-                            <div style={{ fontSize: 12, color: C.ts, lineHeight: 1.6 }}>
-                              {entry.note}
-                            </div>
-                          )}
-                        </div>
-                        <div style={{ fontSize: 11, color: C.tt, whiteSpace: "nowrap" }}>
-                          {entry.time ? fmtDateTime(entry.time) : "Time unknown"}
-                        </div>
-                      </div>
-                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                        {entry.projectName && <span style={{ ...mkP(true, C.ac, C.al), cursor: "default" }}>{entry.projectName}</span>}
-                        {entry.campaign && entry.campaign !== "No campaign" && <span style={{ ...mkP(true, C.bu, C.bb), cursor: "default" }}>{entry.campaign}</span>}
-                        {entry.actor && <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{entry.actor}</span>}
-                        {entry.kind && <span style={{ ...mkP(true, C.tt, C.sa), cursor: "default" }}>{titleCaseWords(entry.kind)}</span>}
-                      </div>
-                    </div>
-                  )) : (
-                    <div style={{ fontSize: 12, color: C.tt }}>No linked notes or timeline items yet.</div>
-                  )}
-                </div>
-              </div>
-
-              <div style={{ ...cS, padding: "18px 20px", marginBottom: 16 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, marginBottom: 14 }}>
-                  <div>
-                    <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>Place in workspace</div>
-                    <div style={{ fontSize: 12, color: C.ts }}>
-                      Reuse this shared talent in another workspace without retyping their profile details.
-                    </div>
-                  </div>
-                  <button
-                    onClick={addTalentProfileToProject}
-                    disabled={!talentTargetProjectId || talentTargetSaving}
-                    style={{
-                      ...actionBtn(false, "accent"),
-                      opacity: talentTargetProjectId && !talentTargetSaving ? 1 : 0.45,
-                      cursor: talentTargetProjectId && !talentTargetSaving ? "pointer" : "not-allowed",
-                    }}
-                  >
-                    {talentTargetSaving
-                      ? "Adding..."
-                      : talentTargetProjectType === "marketing" && talentTargetExistingMarketingAssignment
-                        ? "Open Existing Assignment"
-                        : talentTargetProjectType !== "marketing" && talentTargetExistingArRecord
-                          ? `Open Existing ${talentTargetProjectType === "curator" ? "Curator" : "Artist"}`
-                        : "Add to Record"}
-                  </button>
-                </div>
-
-                <div style={{ display: "grid", gridTemplateColumns: talentTargetProjectType === "marketing" ? "1.2fr 1fr 1fr 1fr" : "1.4fr 1fr 1fr", gap: 12, alignItems: "end", marginBottom: 12 }}>
-                  <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 6 }}>
-                    <span>Target record</span>
-                    <select
-                      value={talentTargetProjectId}
-                      onChange={e => setTalentTargetProjectId(e.target.value)}
-                      style={{ ...iS, width: "100%" }}
-                    >
-                      <option value="">Choose a project…</option>
-                      {talentTargetProjectOptions.map(option => (
-                        <option key={option.id} value={option.id}>{option.label}</option>
-                      ))}
-                    </select>
-                  </label>
-
-                  {talentTargetProjectType === "marketing" && (
-                    <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 6 }}>
-                      <span>Campaign</span>
-                      <select
-                        value={talentTargetCampaign}
-                        onChange={e => setTalentTargetCampaign(e.target.value)}
-                        style={{ ...iS, width: "100%" }}
-                      >
-                        <option value="">No campaign</option>
-                        {talentTargetCampaignOptions.map(campaign => (
-                          <option key={campaign} value={campaign}>{campaign}</option>
-                        ))}
-                      </select>
-                    </label>
-                  )}
-
-                  <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 6 }}>
-                    <span>{talentTargetProjectType === "marketing" ? "Assignment status" : "Pipeline stage"}</span>
-                    <select
-                      value={talentTargetStatus}
-                      onChange={e => setTalentTargetStatus(e.target.value)}
-                      style={{ ...iS, width: "100%" }}
-                    >
-                      {(talentTargetProjectType === "marketing" ? MARKETING_STATUSES : STAGES).map(status => (
-                        <option key={status.id} value={status.id}>{status.label}</option>
-                      ))}
-                    </select>
-                  </label>
-
-                  <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 6 }}>
-                    <span>Owner</span>
-                    <select
-                      value={talentTargetOwner}
-                      onChange={e => setTalentTargetOwner(e.target.value)}
-                      style={{ ...iS, width: "100%" }}
-                    >
-                      <option value="">Unassigned</option>
-                      {talentTargetTeamUsers.map(user => (
-                        <option key={user} value={user}>{user}</option>
-                      ))}
-                    </select>
-                  </label>
-                </div>
-
-                {talentTargetProjectType === "marketing" && (
-                  <div style={{ display: "grid", gap: 6, marginBottom: 12 }}>
-                    <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 6 }}>
-                      <span>Or create a new campaign</span>
-                      <input
-                        value={talentTargetNewCampaign}
-                        onChange={e => setTalentTargetNewCampaign(e.target.value)}
-                        placeholder="Type a new campaign name"
-                        style={{ ...iS, width: "100%" }}
-                      />
-                    </label>
-                    <div style={{ fontSize: 11, color: C.tt }}>
-                      {talentTargetNewCampaign.trim()
-                        ? `New assignment will use "${talentTargetNewCampaign.trim()}".`
-                        : talentTargetCampaign
-                          ? `New assignment will use "${talentTargetCampaign}".`
-                          : "Leave both blank if this belongs in the project without a campaign yet."}
-                    </div>
-                  </div>
-                )}
-
-                <div style={{ fontSize: 12, color: C.ts, background: C.sa, border: `1px solid ${C.bd}`, borderRadius: 14, padding: "10px 12px" }}>
-                  {!talentTargetProjectId
-                    ? "Choose a destination project to prepare the new placement."
-                    : talentTargetProjectType === "marketing" && talentTargetExistingMarketingAssignment
-                      ? `This talent already has an assignment in ${talentTargetProject?.name} for ${talentTargetExistingMarketingAssignment.campaign || "No campaign"}. Clicking the button will open it.`
-                      : talentTargetProjectType === "marketing" && talentTargetMarketingAssignments.length
-                        ? `This talent is already in ${talentTargetProject?.name} on ${talentTargetMarketingAssignments.length} other marketing assignment${talentTargetMarketingAssignments.length === 1 ? "" : "s"}.`
-                        : talentTargetProjectType !== "marketing" && talentTargetExistingArRecord
-                          ? `This talent is already in ${talentTargetProject?.name} as a ${talentTargetProjectType === "curator" ? "curator" : "pipeline"} record. Clicking the button will open it.`
-                          : talentTargetProjectType === "marketing"
-                            ? "We’ll create a new campaign assignment and keep the shared talent profile intact."
-                            : talentTargetProjectType === "curator"
-                              ? "We’ll add this talent into the curator roster for that project and keep their shared profile linked here."
-                              : "We’ll add this talent into the A&R roster for that project and keep their shared profile linked here."}
-                </div>
-              </div>
-
-              <div style={{ ...cS, padding: "18px 20px", marginBottom: 16 }}>
-                <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>Kickoff Details</div>
-                <div style={{ display: "grid", gap: 10 }}>
-                  {selectedTalentArProjectSummaries.length ? selectedTalentArProjectSummaries.map(summary => (
-                    <div key={`ar:${summary.projectId}`} style={{ padding: "12px 14px", borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sa }}>
-                      <div style={{ fontSize: 12, color: C.tt, marginBottom: 10 }}>{summary.projectName}</div>
-                      <div style={{ display: "grid", gap: 10 }}>
-                        {summary.arRecords.map(record => (
-                          <div key={`${record.projectId}:${record.artistName}`} style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", padding: "12px 14px", borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sf }}>
-                            <div style={{ minWidth: 0 }}>
-                              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 6 }}>
-                                <div style={{ fontSize: 14, fontWeight: 700, color: C.tx }}>{record.artistName}</div>
-                                <span style={{ ...mkP(true, record.projectType === "curator" ? C.ac : C.ts, record.projectType === "curator" ? C.al : C.sa), cursor: "default" }}>
-                                  {record.projectType === "curator" ? "Curator" : "A&R"}
-                                </span>
-                                <span style={{ ...mkP(true, sc(record.stage, C), sb(record.stage, C)), cursor: "default" }}>{SM[record.stage]?.label || "Prospect"}</span>
-                                {record.owner && <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{record.owner}</span>}
-                              </div>
-                              <div style={{ fontSize: 11, color: C.tt }}>
-                                {[record.genre, record.monthlyListeners ? `${record.monthlyListeners} listeners` : "", record.location].filter(Boolean).join(" · ") || (record.projectType === "curator" ? "Working curator record" : "Working A&R record")}
-                              </div>
-                              {(record.note || record.followUp) && (
-                                <div style={{ display: "grid", gap: 4, marginTop: 8, fontSize: 11, color: C.ts, lineHeight: 1.5 }}>
-                                  {record.note && <div><strong style={{ color: C.tx }}>Notes:</strong> {record.note}</div>}
-                                  {record.followUp && <div><strong style={{ color: C.tx }}>Follow-up:</strong> {record.followUp}</div>}
-                                </div>
-                              )}
-                              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 10 }}>
-                                <label style={{ fontSize: 11, color: C.ts, display: "grid", gap: 4 }}>
-                                  <span>Kickoff stage</span>
-                                  <select
-                                    value={normalizeStageId(record.stage || "prospect")}
-                                    disabled={isReadOnly}
-                                    onChange={e => { void updateTalentOverviewKickoffStage(record, e.target.value); }}
-                                    style={{ ...iS, width: "100%", fontSize: 12, ...lockStyle(isReadOnly) }}
-                                  >
-                                    {KICKOFF_STAGE_ACTIONS.map(stage => (
-                                      <option key={`talent-stage-${record.projectId}-${record.artistName}-${stage.id}`} value={stage.id}>
-                                        {stage.label}
-                                      </option>
-                                    ))}
-                                  </select>
-                                </label>
-                                <label style={{ fontSize: 11, color: C.ts, display: "grid", gap: 4 }}>
-                                  <span>Owner</span>
-                                  <select
-                                    value={record.owner || ""}
-                                    disabled={isReadOnly}
-                                    onChange={e => { void updateTalentOverviewKickoffOwner(record, e.target.value); }}
-                                    style={{ ...iS, width: "100%", fontSize: 12, ...lockStyle(isReadOnly) }}
-                                  >
-                                    <option value="">Unassigned</option>
-                                    {(projects.find(project => project.id === record.projectId)?.teamUsers || DEFAULT_TEAM_USERS).map(user => (
-                                      <option key={`talent-owner-${record.projectId}-${record.artistName}-${user}`} value={user}>{user}</option>
-                                    ))}
-                                  </select>
-                                </label>
-                              </div>
-                              <div style={{ display: "grid", gap: 8, marginTop: 10 }}>
-                                <label style={{ fontSize: 11, color: C.ts, display: "grid", gap: 4 }}>
-                                  <span>Kickoff notes</span>
-                                  <textarea
-                                    defaultValue={record.note || ""}
-                                    readOnly={isReadOnly}
-                                    onClick={e => e.stopPropagation()}
-                                    onBlur={e => { void updateTalentOverviewKickoffNote(record, e.currentTarget.value.trim()); }}
-                                    placeholder="Add kickoff notes here..."
-                                    style={{ ...iS, width: "100%", minHeight: 72, resize: "vertical", fontSize: 12, ...lockStyle(isReadOnly) }}
-                                  />
-                                </label>
-                                <label style={{ fontSize: 11, color: C.ts, display: "grid", gap: 4 }}>
-                                  <span>Follow-up date</span>
-                                  <input
-                                    type="date"
-                                    defaultValue={record.followUp || ""}
-                                    disabled={isReadOnly}
-                                    onClick={e => e.stopPropagation()}
-                                    onChange={e => { void updateTalentOverviewKickoffFollowUp(record, e.target.value); }}
-                                    style={{ ...iS, width: "100%", fontSize: 12, ...lockStyle(isReadOnly) }}
-                                  />
-                                </label>
-                              </div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )) : (
-                    <div style={{ fontSize: 12, color: C.tt }}>No A&R placements linked yet.</div>
-                  )}
-                </div>
-              </div>
-
-              <div style={{ ...cS, padding: "18px 20px" }}>
-                <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>Live Roster Campaigns</div>
-                <div style={{ display: "grid", gap: 10 }}>
-                  {selectedTalentMarketingProjectSummaries.length ? selectedTalentMarketingProjectSummaries.map(summary => (
-                    <div key={`marketing:${summary.projectId}`} style={{ padding: "12px 14px", borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sa }}>
-                      <div style={{ fontSize: 12, color: C.tt, marginBottom: 10 }}>{summary.projectName}</div>
-                      <div style={{ display: "grid", gap: 10 }}>
-                        {summary.marketingAssignments.map(assignment => (
-                          <div key={assignment.assignmentId} style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", padding: "12px 14px", borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sf }}>
-                            <div style={{ minWidth: 0 }}>
-                              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 6 }}>
-                                <div style={{ fontSize: 14, fontWeight: 700, color: C.tx }}>{assignment.campaign || "No campaign"}</div>
-                                <span style={{ ...mkP(true, marketingStatusTone(assignment.status, C).tone, marketingStatusTone(assignment.status, C).bg), cursor: "default" }}>{MM[assignment.status]?.label || "Prospect"}</span>
-                                {assignment.owner && <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{assignment.owner}</span>}
-                              </div>
-                              <div style={{ fontSize: 11, color: C.tt }}>
-                                {[assignment.title, assignment.trafficType, assignment.deliverableType, assignment.dueDate ? `Due ${sD(assignment.dueDate)}` : ""].filter(Boolean).join(" · ") || "Marketing assignment"}
-                              </div>
-                              {(assignment.notes || assignment.rejectedReason) && (
-                                <div style={{ display: "grid", gap: 4, marginTop: 8, fontSize: 11, color: C.ts, lineHeight: 1.5 }}>
-                                  {assignment.notes && <div><strong style={{ color: C.tx }}>Notes:</strong> {assignment.notes}</div>}
-                                  {assignment.rejectedReason && <div><strong style={{ color: C.tx }}>Rejected:</strong> {assignment.rejectedReason}</div>}
-                                </div>
-                              )}
-                              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 10 }}>
-                                <label style={{ fontSize: 11, color: C.ts, display: "grid", gap: 4 }}>
-                                  <span>Campaign status</span>
-                                  <select
-                                    value={normalizeMarketingStatus(assignment.status || "prospect")}
-                                    disabled={isReadOnly}
-                                    onChange={e => { void updateTalentOverviewMarketingStatus(assignment, e.target.value); }}
-                                    style={{ ...iS, width: "100%", fontSize: 12, ...lockStyle(isReadOnly) }}
-                                  >
-                                    {MARKETING_STATUSES.map(status => (
-                                      <option key={`talent-assignment-status-${assignment.assignmentId}-${status.id}`} value={status.id}>
-                                        {status.label}
-                                      </option>
-                                    ))}
-                                  </select>
-                                </label>
-                                <label style={{ fontSize: 11, color: C.ts, display: "grid", gap: 4 }}>
-                                  <span>Owner</span>
-                                  <select
-                                    value={assignment.owner || ""}
-                                    disabled={isReadOnly}
-                                    onChange={e => { void updateTalentOverviewMarketingOwner(assignment, e.target.value); }}
-                                    style={{ ...iS, width: "100%", fontSize: 12, ...lockStyle(isReadOnly) }}
-                                  >
-                                    <option value="">Unassigned</option>
-                                    {(projects.find(project => project.id === assignment.projectId)?.teamUsers || DEFAULT_TEAM_USERS).map(user => (
-                                      <option key={`talent-assignment-owner-${assignment.assignmentId}-${user}`} value={user}>{user}</option>
-                                    ))}
-                                  </select>
-                                </label>
-                              </div>
-                              <label style={{ fontSize: 11, color: C.ts, display: "grid", gap: 4, marginTop: 10 }}>
-                                <span>Campaign notes</span>
-                                <textarea
-                                  defaultValue={assignment.notes || ""}
-                                  readOnly={isReadOnly}
-                                  onClick={e => e.stopPropagation()}
-                                  onBlur={e => { void updateTalentOverviewMarketingNotes(assignment, e.currentTarget.value.trim()); }}
-                                  placeholder="Add campaign notes here..."
-                                  style={{ ...iS, width: "100%", minHeight: 78, resize: "vertical", fontSize: 12, ...lockStyle(isReadOnly) }}
-                                />
-                              </label>
-                            </div>
-                            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
-                              {assignment.briefUrl && <a href={assignment.briefUrl} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Brief</a>}
-                              {assignment.contentUrl && <a href={assignment.contentUrl} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Content</a>}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )) : (
-                    <div style={{ fontSize: 12, color: C.tt }}>No marketing assignments linked yet.</div>
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
+        <WorkspaceOverlays />
       </div>
     </main>
   </div>
