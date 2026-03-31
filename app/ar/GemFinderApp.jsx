@@ -6418,6 +6418,50 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     flash(nextOwner ? `${record.artistName} assigned to ${nextOwner}` : `${record.artistName} unassigned`);
   };
 
+  const updateTalentOverviewKickoffNote = async (record, nextNote) => {
+    if (!requireEditor()) return;
+    if (!record?.projectId || !record?.artistName) return;
+    const targetProject = projects.find(project => project.id === record.projectId);
+    if (!targetProject) {
+      flash("Could not find that kickoff source record", "err");
+      return;
+    }
+    const currentNote = String(targetProject.notes?.[record.artistName] || "");
+    if (currentNote === String(nextNote || "")) return;
+    const nextNotes = { ...(targetProject.notes || {}) };
+    if (nextNote) nextNotes[record.artistName] = nextNote;
+    else delete nextNotes[record.artistName];
+    const nextProject = {
+      ...targetProject,
+      notes: nextNotes,
+      activityLog: logAction(targetProject, record.artistName, "Note updated"),
+    };
+    await saveProjectsList(projects.map(project => project.id === targetProject.id ? nextProject : project));
+    flash("Kickoff note saved");
+  };
+
+  const updateTalentOverviewKickoffFollowUp = async (record, nextFollowUp) => {
+    if (!requireEditor()) return;
+    if (!record?.projectId || !record?.artistName) return;
+    const targetProject = projects.find(project => project.id === record.projectId);
+    if (!targetProject) {
+      flash("Could not find that kickoff source record", "err");
+      return;
+    }
+    const currentFollowUp = String(targetProject.followUps?.[record.artistName] || "");
+    if (currentFollowUp === String(nextFollowUp || "")) return;
+    const nextFollowUps = { ...(targetProject.followUps || {}) };
+    if (nextFollowUp) nextFollowUps[record.artistName] = nextFollowUp;
+    else delete nextFollowUps[record.artistName];
+    const nextProject = {
+      ...targetProject,
+      followUps: nextFollowUps,
+      activityLog: logAction(targetProject, record.artistName, nextFollowUp ? `Follow-up: ${sD(nextFollowUp)}` : "Follow-up cleared"),
+    };
+    await saveProjectsList(projects.map(project => project.id === targetProject.id ? nextProject : project));
+    flash(nextFollowUp ? `Follow-up: ${sD(nextFollowUp)}` : "Follow-up cleared");
+  };
+
   const updateTalentOverviewMarketingStatus = async (assignment, nextStatus) => {
     if (!requireEditor()) return;
     if (!assignment?.projectId || !assignment?.assignmentId) return;
@@ -6478,6 +6522,37 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     };
     await saveProjectsList(projects.map(project => project.id === targetProject.id ? nextProject : project));
     flash(nextOwner ? `${assignment.talentName || "Assignment"} assigned to ${nextOwner}` : "Marketing owner cleared");
+  };
+
+  const updateTalentOverviewMarketingNotes = async (assignment, nextNotes) => {
+    if (!requireEditor()) return;
+    if (!assignment?.projectId || !assignment?.assignmentId) return;
+    const targetProject = projects.find(project => project.id === assignment.projectId);
+    if (!targetProject) {
+      flash("Could not find that live campaign source record", "err");
+      return;
+    }
+    const currentItem = (targetProject.marketingItems || []).find(item => String(item?.id || "") === String(assignment.assignmentId));
+    if (!currentItem) {
+      flash("Could not find that campaign assignment", "err");
+      return;
+    }
+    if (String(currentItem.notes || "") === String(nextNotes || "")) return;
+    const nextProject = {
+      ...targetProject,
+      marketingItems: (targetProject.marketingItems || []).map(item =>
+        String(item?.id || "") === String(assignment.assignmentId)
+          ? { ...item, notes: nextNotes || "", updatedAt: new Date().toISOString() }
+          : item
+      ),
+      activityLog: logAction(targetProject, assignment.talentName || "", "Marketing note updated", "note", {
+        assignmentId: assignment.assignmentId,
+        campaign: assignment.campaign || "",
+        note: nextNotes || "",
+      }),
+    };
+    await saveProjectsList(projects.map(project => project.id === targetProject.id ? nextProject : project));
+    flash("Campaign notes saved");
   };
 
   const runIntel = async a => {
@@ -13617,6 +13692,30 @@ Requirements:
                                   </select>
                                 </label>
                               </div>
+                              <div style={{ display: "grid", gap: 8, marginTop: 10 }}>
+                                <label style={{ fontSize: 11, color: C.ts, display: "grid", gap: 4 }}>
+                                  <span>Kickoff notes</span>
+                                  <textarea
+                                    defaultValue={record.note || ""}
+                                    readOnly={isReadOnly}
+                                    onClick={e => e.stopPropagation()}
+                                    onBlur={e => { void updateTalentOverviewKickoffNote(record, e.currentTarget.value.trim()); }}
+                                    placeholder="Add kickoff notes here..."
+                                    style={{ ...iS, width: "100%", minHeight: 72, resize: "vertical", fontSize: 12, ...lockStyle(isReadOnly) }}
+                                  />
+                                </label>
+                                <label style={{ fontSize: 11, color: C.ts, display: "grid", gap: 4 }}>
+                                  <span>Follow-up date</span>
+                                  <input
+                                    type="date"
+                                    defaultValue={record.followUp || ""}
+                                    disabled={isReadOnly}
+                                    onClick={e => e.stopPropagation()}
+                                    onChange={e => { void updateTalentOverviewKickoffFollowUp(record, e.target.value); }}
+                                    style={{ ...iS, width: "100%", fontSize: 12, ...lockStyle(isReadOnly) }}
+                                  />
+                                </label>
+                              </div>
                             </div>
                             <button onClick={() => openTalentArRecord(record)} style={actionBtn(false, "neutral")}>
                               Source detail
@@ -13686,6 +13785,17 @@ Requirements:
                                   </select>
                                 </label>
                               </div>
+                              <label style={{ fontSize: 11, color: C.ts, display: "grid", gap: 4, marginTop: 10 }}>
+                                <span>Campaign notes</span>
+                                <textarea
+                                  defaultValue={assignment.notes || ""}
+                                  readOnly={isReadOnly}
+                                  onClick={e => e.stopPropagation()}
+                                  onBlur={e => { void updateTalentOverviewMarketingNotes(assignment, e.currentTarget.value.trim()); }}
+                                  placeholder="Add campaign notes here..."
+                                  style={{ ...iS, width: "100%", minHeight: 78, resize: "vertical", fontSize: 12, ...lockStyle(isReadOnly) }}
+                                />
+                              </label>
                             </div>
                             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
                               {assignment.briefUrl && <a href={assignment.briefUrl} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Brief</a>}
