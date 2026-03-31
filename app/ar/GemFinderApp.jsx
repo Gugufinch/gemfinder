@@ -408,6 +408,27 @@ function projectTypeLabel(type) {
       return "A&R";
   }
 }
+function workspaceRecordLabel(projectType, hub = "generic") {
+  const normalized = normalizeProjectType(projectType);
+  if (hub === "kickoff") {
+    return normalized === "curator" ? "Curator intake" : "Artist intake";
+  }
+  if (hub === "live") {
+    return normalized === "marketing" ? "Live campaigns" : normalized === "curator" ? "Curator context" : "Artist history";
+  }
+  if (normalized === "marketing") return "Live campaigns";
+  if (normalized === "curator") return "Curator intake";
+  return "Artist intake";
+}
+function workspaceTimelineLabel(entry, hub = "generic") {
+  if (hub === "kickoff") return "Kickoff";
+  if (hub === "live") {
+    return entry?.kind === "marketing" || entry?.campaign ? "Live Roster" : "Kickoff";
+  }
+  if (entry?.kind === "marketing" || entry?.campaign) return "Live Roster";
+  if (entry?.kind === "ar" || entry?.kind === "note" || entry?.kind === "event") return "Kickoff";
+  return "";
+}
 function normalizeMarketingStatus(status) {
   const normalized = String(status || "").toLowerCase();
   return VALID_MARKETING_STATUS_IDS.has(normalized) ? normalized : "prospect";
@@ -8641,9 +8662,13 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                       {TALENT_SOURCE_LABELS[source] || source}
                     </span>
                   ))}
-                  <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{talentOverviewProjectSummaries.length} record{talentOverviewProjectSummaries.length === 1 ? "" : "s"}</span>
+                  <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>
+                    {talentOverviewProjectSummaries.length} {isKickoffTalentContext ? "kickoff" : isLiveTalentContext ? "live" : "workspace"} record{talentOverviewProjectSummaries.length === 1 ? "" : "s"}
+                  </span>
                   {!isKickoffTalentContext && <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{selectedTalentProfile.marketingAssignments.length} marketing assignment{selectedTalentProfile.marketingAssignments.length === 1 ? "" : "s"}</span>}
-                  <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{selectedTalentProfile.arRecords.length} A&R record{selectedTalentProfile.arRecords.length === 1 ? "" : "s"}</span>
+                  <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>
+                    {selectedTalentProfile.arRecords.length} {isKickoffTalentContext ? "kickoff" : "A&R"} record{selectedTalentProfile.arRecords.length === 1 ? "" : "s"}
+                  </span>
                 </div>
               </div>
               <button onClick={closeTalentProfileModal} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 20, color: C.ts }}>✕</button>
@@ -8747,7 +8772,13 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                     <div key={summary.projectId} style={{ padding: "12px 14px", borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sa }}>
                       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, marginBottom: 10 }}>
                         <div style={{ minWidth: 0 }}>
-                          <div style={{ fontSize: 13, fontWeight: 700, color: C.tx, marginBottom: 4 }}>{summary.projectName}</div>
+                          <div style={{ fontSize: 13, fontWeight: 700, color: C.tx, marginBottom: 4 }}>
+                            {isKickoffTalentContext
+                              ? workspaceRecordLabel(summary.projectType, "kickoff")
+                              : isLiveTalentContext
+                                ? workspaceRecordLabel(summary.projectType, "live")
+                                : summary.projectName}
+                          </div>
                           <div style={{ fontSize: 11, color: C.tt }}>
                             {isKickoffTalentContext
                               ? `${summary.projectType === "curator" ? "Curator" : "Kickoff"} record`
@@ -8781,7 +8812,9 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                       </div>
                     </div>
                   )) : (
-                    <div style={{ fontSize: 12, color: C.tt }}>No linked projects yet.</div>
+                    <div style={{ fontSize: 12, color: C.tt }}>
+                      {isKickoffTalentContext ? "No kickoff records yet." : isLiveTalentContext ? "No live records yet." : "No linked records yet."}
+                    </div>
                   )}
                 </div>
               </div>
@@ -8820,7 +8853,11 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                       </div>
                     </div>
                     <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                      {entry.projectName && <span style={{ ...mkP(true, C.ac, C.al), cursor: "default" }}>{entry.projectName}</span>}
+                      {workspaceTimelineLabel(entry, isKickoffTalentContext ? "kickoff" : isLiveTalentContext ? "live" : "generic") && (
+                        <span style={{ ...mkP(true, C.ac, C.al), cursor: "default" }}>
+                          {workspaceTimelineLabel(entry, isKickoffTalentContext ? "kickoff" : isLiveTalentContext ? "live" : "generic")}
+                        </span>
+                      )}
                       {!isKickoffTalentContext && entry.campaign && entry.campaign !== "No campaign" && <span style={{ ...mkP(true, C.bu, C.bb), cursor: "default" }}>{entry.campaign}</span>}
                       {entry.actor && <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{entry.actor}</span>}
                       {entry.kind && <span style={{ ...mkP(true, C.tt, C.sa), cursor: "default" }}>{titleCaseWords(entry.kind)}</span>}
@@ -8837,7 +8874,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
               <div style={{ display: "grid", gap: 10 }}>
                 {selectedTalentArProjectSummaries.length ? selectedTalentArProjectSummaries.map(summary => (
                   <div key={`ar:${summary.projectId}`} style={{ padding: "12px 14px", borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sa }}>
-                    <div style={{ fontSize: 12, color: C.tt, marginBottom: 10 }}>{summary.projectName}</div>
+                    <div style={{ fontSize: 12, color: C.tt, marginBottom: 10 }}>{workspaceRecordLabel(summary.projectType, "kickoff")}</div>
                     <div style={{ display: "grid", gap: 10 }}>
                       {summary.arRecords.map(record => (
                         <div key={`${record.projectId}:${record.artistName}`} style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", padding: "12px 14px", borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sf }}>
@@ -8972,7 +9009,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
               <div style={{ display: "grid", gap: 10 }}>
                 {selectedTalentMarketingProjectSummaries.length ? selectedTalentMarketingProjectSummaries.map(summary => (
                   <div key={`marketing:${summary.projectId}`} style={{ padding: "12px 14px", borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sa }}>
-                    <div style={{ fontSize: 12, color: C.tt, marginBottom: 10 }}>{summary.projectName}</div>
+                    <div style={{ fontSize: 12, color: C.tt, marginBottom: 10 }}>{workspaceRecordLabel(summary.projectType, "live")}</div>
                     <div style={{ display: "grid", gap: 10 }}>
                       {summary.marketingAssignments.map(assignment => (
                         <div key={assignment.assignmentId} style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", padding: "12px 14px", borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sf }}>
@@ -9201,9 +9238,9 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
               </div>
             </div>
             <div style={{ fontSize: 11, color: C.tt, textAlign: "right" }}>
-              {defaultKickoffArtistProject ? `Artists feed into ${defaultKickoffArtistProject.name}` : "No artist intake record yet"}
+              {defaultKickoffArtistProject ? "Artist intake ready" : "Artist intake not connected yet"}
               <br />
-              {defaultKickoffCuratorProject ? `Curators feed into ${defaultKickoffCuratorProject.name}` : "No curator intake record yet"}
+              {defaultKickoffCuratorProject ? "Curator intake ready" : "Curator intake not connected yet"}
             </div>
           </div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
@@ -9579,7 +9616,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                     <div key={`${profile.id}:project:${summary.projectId || summary.projectName}`} style={{ borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sa, padding: "12px 14px" }}>
                       <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 8 }}>
                         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-                          <span style={{ fontSize: 14, fontWeight: 700 }}>{summary.projectName}</span>
+                          <span style={{ fontSize: 14, fontWeight: 700 }}>{workspaceRecordLabel(summary.projectType, "kickoff")}</span>
                           <span style={{ ...mkP(true, summary.projectType === "curator" ? C.gn : C.ac, summary.projectType === "curator" ? C.gb : C.al), cursor: "default" }}>
                             {projectTypeLabel(summary.projectType)}
                           </span>
@@ -9924,7 +9961,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                     <div key={`${profile.id}:project:${summary.projectId || summary.projectName}`} style={{ borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sa, padding: "12px 14px" }}>
                       <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 8 }}>
                         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-                          <span style={{ fontSize: 14, fontWeight: 700 }}>{summary.projectName}</span>
+                          <span style={{ fontSize: 14, fontWeight: 700 }}>{workspaceRecordLabel(summary.projectType, "live")}</span>
                           <span style={{ ...mkP(true, summary.projectType === "marketing" ? C.pr : C.ac, summary.projectType === "marketing" ? C.pb : C.al), cursor: "default" }}>
                             {projectTypeLabel(summary.projectType)}
                           </span>
