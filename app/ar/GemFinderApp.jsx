@@ -3153,6 +3153,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [toast, setToast] = useState(null);
 
   const fr = useRef(null);
+  const workspaceCsvRef = useRef(null);
   const rosterRef = useRef(null);
   const workSurfaceRef = useRef(null);
   const handledArtistLinkRef = useRef("");
@@ -4527,7 +4528,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   }, [proj?.id, proj?.type, projectMode]);
 
   useEffect(() => {
-    if (!pendingWorkspaceAction || screen !== "project" || !proj?.id || proj.id !== pendingWorkspaceAction.projectId) return;
+    if (!pendingWorkspaceAction || !proj?.id || proj.id !== pendingWorkspaceAction.projectId) return;
     const nextAction = pendingWorkspaceAction.action;
     const profileId = String(pendingWorkspaceAction.profileId || "").trim();
     setPendingWorkspaceAction(null);
@@ -4548,9 +4549,12 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       return;
     }
     if (nextAction === "import-csv") {
-      window.requestAnimationFrame(() => fr.current?.click?.());
+      window.requestAnimationFrame(() => {
+        if (workspaceCsvRef.current?.click) workspaceCsvRef.current.click();
+        else if (fr.current?.click) fr.current.click();
+      });
     }
-  }, [pendingWorkspaceAction, screen, proj?.id, workspaceTalentProfileMap]);
+  }, [pendingWorkspaceAction, proj?.id, workspaceTalentProfileMap]);
 
   useEffect(() => {
     if (!showTalentProfileModal) return;
@@ -4820,11 +4824,29 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const launchWorkspaceProjectAction = async (projectId, action, missingMessage, payload = {}) => {
     if (!requireEditor()) return;
     if (!projectId) {
-      flash(missingMessage || "No underlying record is set up for that action yet", "err");
+      flash(missingMessage || "No synced workspace record is set up for that action yet", "err");
       return;
     }
+    const targetProject = projects.find(project => project.id === projectId);
+    if (!targetProject) {
+      flash("That workspace action no longer has a synced backup record", "err");
+      return;
+    }
+    const nextType = normalizeProjectType(targetProject.type);
+    setCurrentWorkspaceId(targetProject.workspaceId || DEFAULT_WORKSPACE.id);
+    setApId(projectId);
+    if (nextType !== "ar" && projectMode === "inbox") {
+      setProjectMode("work");
+    }
+    if (nextType === "marketing") {
+      setMarketingStatusFilter("all");
+      setMarketingCampaignFilter("all");
+      setMarketingTrafficFilter("all");
+      setMarketingGroupFilter("all");
+      setMarketingOwnerFilter("all");
+      changeWorkspaceUser(ALL_USER_VIEW);
+    }
     setPendingWorkspaceAction({ projectId, action, ...payload });
-    await openProjectWorkspace(projectId);
   };
 
   const toggleFocusMode = () => {
@@ -6329,44 +6351,6 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     primeArtistContext(a);
     setShowQuickDrawer(false);
     setScreen("detail");
-  };
-
-  const openTalentArRecord = record => {
-    const targetProject = projects.find(project => project.id === record.projectId);
-    if (!targetProject) {
-      flash("Could not find that project", "err");
-      return;
-    }
-    const targetArtist = (targetProject.artists || []).find(item => item.n === record.artistName);
-    if (!targetArtist) {
-      flash("Could not find that artist in the project", "err");
-      return;
-    }
-    closeTalentProfileModal();
-    setApId(targetProject.id);
-    setShowQuickDrawer(false);
-    primeArtistContext(targetArtist);
-    setScreen("detail");
-    setDetailTab("overview");
-  };
-
-  const openTalentMarketingAssignment = assignment => {
-    const targetProject = projects.find(project => project.id === assignment.projectId);
-    if (!targetProject) {
-      flash("Could not find that project", "err");
-      return;
-    }
-    const targetItem = (targetProject.marketingItems || []).find(item => String(item?.id || "") === String(assignment.assignmentId || ""));
-    if (!targetItem) {
-      flash("Could not find that assignment in the project", "err");
-      return;
-    }
-    closeTalentProfileModal();
-    setApId(targetProject.id);
-    setShowQuickDrawer(false);
-    setProjectMode("work");
-    openMarketingItemModal(targetItem);
-    setScreen("project");
   };
 
   const updateTalentOverviewKickoffStage = async (record, nextStage) => {
@@ -8567,7 +8551,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
             <div>
               <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>Kickoff Actions</div>
               <div style={{ fontSize: 12, color: C.ts, maxWidth: 620 }}>
-                Use these to add or bulk-load new artists and curators without having to think about the underlying record structure. We still save through the underlying intake records so the current data stays safe.
+                Use these to add or bulk-load new artists and curators directly from Kickoff. The workspace keeps the legacy intake records synced behind the scenes so we can transition safely without breaking current data.
               </div>
             </div>
             <div style={{ fontSize: 11, color: C.tt, textAlign: "right" }}>
@@ -8660,6 +8644,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
               </>
             )}
           </div>
+          <input type="file" accept=".csv" ref={workspaceCsvRef} onChange={importCSV} disabled={isReadOnly} style={{ display: "none" }} />
         </div>
 
         <div style={{ ...cS, padding: "18px 20px", marginBottom: 16 }}>
@@ -8948,16 +8933,9 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                             {projectTypeLabel(summary.projectType)}
                           </span>
                         </div>
-                        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                          {summary.projectId && (
-                            <button
-                              onClick={e => { e.stopPropagation(); void openProjectWorkspace(summary.projectId, { artistName: summary.leadArtistName }); }}
-                              style={actionBtn(false, "neutral")}
-                            >
-                              Source record
-                            </button>
-                          )}
-                        </div>
+                        <span style={{ ...mkP(true, C.tt, C.sf), cursor: "default" }}>
+                          Backed by synced intake record
+                        </span>
                       </div>
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                         {summary.owners.map(owner => (
@@ -9046,7 +9024,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
             <div>
               <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>Live Roster Actions</div>
               <div style={{ fontSize: 12, color: C.ts, maxWidth: 620 }}>
-                Use the live roster as the main campaign operating surface. These actions still write through the mapped live source record underneath, so we can keep replacing the old project views without putting any current data at risk.
+                Use the live roster as the main campaign operating surface. The workspace keeps the older mapped records synced behind the scenes while we move daily work fully into this view.
               </div>
             </div>
             <div style={{ fontSize: 11, color: C.tt, textAlign: "right" }}>
@@ -9081,6 +9059,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
               Export Current View CSV
             </button>
           </div>
+          <input type="file" accept=".csv" ref={workspaceCsvRef} onChange={importCSV} disabled={isReadOnly} style={{ display: "none" }} />
         </div>
 
         <div style={{ ...cS, padding: "18px 20px", marginBottom: 16 }}>
@@ -9292,14 +9271,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                         </div>
                         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                           {summary.lastTouched && <span style={{ fontSize: 11, color: C.tt }}>Updated {rD(summary.lastTouched)}</span>}
-                          {summary.projectId && (
-                            <button
-                              onClick={e => { e.stopPropagation(); void openProjectWorkspace(summary.projectId, { assignmentId: summary.leadAssignmentId }); }}
-                              style={actionBtn(false, "neutral")}
-                            >
-                              Source record
-                            </button>
-                          )}
+                          <span style={{ ...mkP(true, C.tt, C.sf), cursor: "default" }}>Synced backup record</span>
                         </div>
                       </div>
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -9436,7 +9408,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                   <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 3, textTransform: "uppercase", color: C.ac, marginBottom: 6 }}>Workspace</div>
                   <div style={{ fontSize: 24, fontWeight: 800, letterSpacing: "-0.03em", marginBottom: 6 }}>{workspace.name}</div>
                   <div style={{ fontSize: 12, color: C.ts, lineHeight: 1.5 }}>
-                    Kickoff and Live Roster both live here, while the underlying records stay intact underneath.
+                    Kickoff and Live Roster both live here, while the older backup records stay synced quietly underneath.
                   </div>
                 </div>
                 {workspace.id === currentWorkspaceId && (
@@ -9467,8 +9439,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
 
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
           <div>
-            <div style={{ fontSize: 15, fontWeight: 700 }}>Projects</div>
-            <div style={{ fontSize: 12, color: C.tt }}>Open an underlying project record directly or create a new child project.</div>
+            <div style={{ fontSize: 15, fontWeight: 700 }}>Legacy Project Records</div>
+            <div style={{ fontSize: 12, color: C.tt }}>These stay available as backup while the workspace surfaces become the primary place we work.</div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             <button onClick={() => setScreen("kickoff")} style={actionBtn(false, "neutral")}>
@@ -13433,17 +13405,9 @@ Requirements:
                               {summary.marketingAssignments.length ? `${summary.marketingAssignments.length} marketing assignment${summary.marketingAssignments.length === 1 ? "" : "s"}` : "No marketing assignments"}
                             </div>
                           </div>
-                          <button
-                            onClick={() => {
-                              closeTalentProfileModal();
-                              setApId(summary.projectId);
-                              setScreen("project");
-                              if (normalizeProjectType(summary.projectType) !== "ar") setProjectMode("work");
-                            }}
-                            style={actionBtn(false, "neutral")}
-                          >
-                            Source record
-                          </button>
+                          <span style={{ ...mkP(true, C.tt, C.sf), cursor: "default" }}>
+                            Synced backup record
+                          </span>
                         </div>
                         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                           {summary.owners.map(owner => (
@@ -13717,9 +13681,6 @@ Requirements:
                                 </label>
                               </div>
                             </div>
-                            <button onClick={() => openTalentArRecord(record)} style={actionBtn(false, "neutral")}>
-                              Source detail
-                            </button>
                           </div>
                         ))}
                       </div>
@@ -13800,7 +13761,6 @@ Requirements:
                             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
                               {assignment.briefUrl && <a href={assignment.briefUrl} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Brief</a>}
                               {assignment.contentUrl && <a href={assignment.contentUrl} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Content</a>}
-                              <button onClick={() => openTalentMarketingAssignment(assignment)} style={actionBtn(false, "neutral")}>Source detail</button>
                             </div>
                           </div>
                         ))}
