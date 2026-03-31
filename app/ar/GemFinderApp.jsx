@@ -3909,7 +3909,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       : talentProfileContext;
   const isKickoffTalentContext = effectiveTalentProfileContext === "kickoff";
   const isLiveTalentContext = effectiveTalentProfileContext === "live-crm";
-  const showTalentPlacementTools = talentProfileContext === "project";
+  const showTalentPlacementTools = effectiveTalentProfileContext === "project";
   const talentOverviewProjectSummaries = isKickoffTalentContext ? selectedTalentArProjectSummaries : selectedTalentProjectSummaries;
   const selectedTalentRecentActivity = useMemo(
     () => (selectedTalentProfile?.recentActivity || []).slice(0, 16),
