@@ -94,6 +94,9 @@ function emptyMarketingForm() {
     owner: "",
     dueDate: "",
     email: "",
+    contactName: "",
+    contactEmail: "",
+    contactType: "",
     instagramHandle: "",
     instagramUrl: "",
     instagramFollowers: "",
@@ -931,6 +934,9 @@ function normalizeMarketingItem(item, teamUsers = DEFAULT_TEAM_USERS) {
     owner: teamUsers.includes(String(item?.owner || "")) ? String(item.owner) : String(item?.owner || ""),
     dueDate: String(item?.dueDate || ""),
     email: String(item?.email || "").trim(),
+    contactName: String(item?.contactName || "").trim(),
+    contactEmail: canonicalEmail(item?.contactEmail || ""),
+    contactType: String(item?.contactType || "").trim(),
     instagramHandle: normalizeSocialHandle(item?.instagramHandle || item?.instagram || instagramUrl || ""),
     instagramUrl,
     instagramFollowers: normalizeFollowerCount(item?.instagramFollowers || item?.igFollowers || item?.instagram_followers || ""),
@@ -962,6 +968,9 @@ function marketingFormSnapshot(source) {
     owner: String(source?.owner || ""),
     dueDate: String(source?.dueDate || ""),
     email: String(source?.email || "").trim().toLowerCase(),
+    contactName: String(source?.contactName || "").trim(),
+    contactEmail: canonicalEmail(source?.contactEmail || ""),
+    contactType: String(source?.contactType || "").trim(),
     instagramHandle: normalizeSocialHandle(source?.instagramHandle || source?.instagramUrl || ""),
     instagramUrl: String(source?.instagramUrl || "").trim(),
     instagramFollowers: normalizeFollowerCount(source?.instagramFollowers || ""),
@@ -1779,6 +1788,9 @@ function createEmptyTalentProfile(id, identity = {}, seed = {}) {
     platformLifecycle: seed.platformLifecycle || "pre_live",
     sources: uniqStrings([seed.source].filter(Boolean)),
     primaryEmail: identity.email || canonicalEmail(seed.primaryEmail || seed.email || seed.e || ""),
+    contactName: String(seed.contactName || "").trim(),
+    contactEmail: canonicalEmail(seed.contactEmail || ""),
+    contactType: String(seed.contactType || "").trim(),
     emails: identity.email ? [identity.email] : [],
     instagramHandle: identity.instagram || "",
     instagramHandles: identity.instagram ? [identity.instagram] : [],
@@ -1846,6 +1858,9 @@ function upsertTalentProfile(store, identity, seed = {}) {
     platformLifecycle: mergePlatformLifecycle(existing.platformLifecycle, seed.platformLifecycle),
     sources: uniqStrings([...existing.sources, seed.source].filter(Boolean)),
     primaryEmail: existing.primaryEmail || identity.email || canonicalEmail(seed.primaryEmail || seed.email || seed.e || ""),
+    contactName: preferLongerString(existing.contactName, String(seed.contactName || "").trim()),
+    contactEmail: existing.contactEmail || canonicalEmail(seed.contactEmail || ""),
+    contactType: preferLongerString(existing.contactType, String(seed.contactType || "").trim()),
     emails: uniqStrings([...existing.emails, identity.email, canonicalEmail(seed.primaryEmail || seed.email || seed.e || "")].filter(Boolean)),
     instagramHandle: existing.instagramHandle || identity.instagram || "",
     instagramHandles: uniqStrings([...existing.instagramHandles, identity.instagram].filter(Boolean)),
@@ -1899,6 +1914,9 @@ function collectWorkspaceTalentProfiles(projects = []) {
       const profile = upsertTalentProfile(store, identity, {
         displayName: artist.n,
         email: artist.e,
+        contactName: artist.contactName || "",
+        contactEmail: artist.contactEmail || "",
+        contactType: artist.contactType || "",
         instagramUrl: /instagram\.com/i.test(String(artist.ig || "")) ? artist.ig : "",
         instagramHandle: artist.soc || artist.ig,
         instagramFollowers: artist.instagramFollowers || "",
@@ -1936,6 +1954,9 @@ function collectWorkspaceTalentProfiles(projects = []) {
         onPlatform: !!artist.onPlatform,
         social: artist.soc || "",
         email: artist.e || "",
+        contactName: artist.contactName || "",
+        contactEmail: artist.contactEmail || "",
+        contactType: artist.contactType || "",
         instagramFollowers: artist.instagramFollowers || "",
         tiktokUrl: artist.tiktokUrl || "",
         tiktokFollowers: artist.tiktokFollowers || "",
@@ -1978,6 +1999,9 @@ function collectWorkspaceTalentProfiles(projects = []) {
       const profile = upsertTalentProfile(store, identity, {
         displayName: item.talentName,
         email: item.email,
+        contactName: item.contactName || "",
+        contactEmail: item.contactEmail || "",
+        contactType: item.contactType || "",
         instagramUrl: item.instagramUrl,
         instagramHandle: item.instagramHandle,
         instagramFollowers: item.instagramFollowers,
@@ -2013,6 +2037,9 @@ function collectWorkspaceTalentProfiles(projects = []) {
         trafficType: item.trafficType || "",
         deliverableType: item.deliverableType || "",
         email: item.email || "",
+        contactName: item.contactName || "",
+        contactEmail: item.contactEmail || "",
+        contactType: item.contactType || "",
         dueDate: item.dueDate || "",
         briefUrl: item.briefUrl || "",
         contentUrl: item.contentUrl || "",
@@ -3292,6 +3319,9 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     social: "",
     instagramFollowers: "",
     email: "",
+    contactName: "",
+    contactEmail: "",
+    contactType: "",
     tiktokUrl: "",
     tiktokFollowers: "",
     spotifyUrl: "",
@@ -3310,6 +3340,9 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     social: "",
     instagramFollowers: "",
     email: "",
+    contactName: "",
+    contactEmail: "",
+    contactType: "",
     tiktokUrl: "",
     tiktokFollowers: "",
     spotifyUrl: "",
@@ -4192,6 +4225,24 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     || selectedTalentProfile?.primaryEmail
     || ""
   ).trim();
+  const selectedTalentContactName = String(
+    selectedTalentEditableKickoffRecord?.contactName
+    || selectedTalentPrimaryMarketingAssignment?.contactName
+    || selectedTalentProfile?.contactName
+    || ""
+  ).trim();
+  const selectedTalentContactEmail = String(
+    selectedTalentEditableKickoffRecord?.contactEmail
+    || selectedTalentPrimaryMarketingAssignment?.contactEmail
+    || selectedTalentProfile?.contactEmail
+    || ""
+  ).trim();
+  const selectedTalentContactType = String(
+    selectedTalentEditableKickoffRecord?.contactType
+    || selectedTalentPrimaryMarketingAssignment?.contactType
+    || selectedTalentProfile?.contactType
+    || ""
+  ).trim();
   const selectedTalentInstagramHandle = normalizeSocialHandle(
     selectedTalentEditableKickoffRecord?.social
     || selectedTalentProfile?.instagramHandle
@@ -4591,6 +4642,9 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     social: "",
     instagramFollowers: "",
     email: "",
+    contactName: "",
+    contactEmail: "",
+    contactType: "",
     tiktokUrl: "",
     tiktokFollowers: "",
     spotifyUrl: "",
@@ -4623,6 +4677,9 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         owner: item.owner || "",
         dueDate: item.dueDate || "",
         email: item.email || "",
+        contactName: item.contactName || "",
+        contactEmail: item.contactEmail || "",
+        contactType: item.contactType || "",
         instagramHandle: item.instagramHandle || "",
         instagramUrl: item.instagramUrl || "",
         instagramFollowers: item.instagramFollowers || "",
@@ -4653,6 +4710,9 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       deliverableType: leadMarketing?.deliverableType || "UGC",
       owner: leadMarketing?.owner || leadAr?.owner || "",
       email: profile?.primaryEmail || "",
+      contactName: leadMarketing?.contactName || leadAr?.contactName || profile?.contactName || "",
+      contactEmail: leadMarketing?.contactEmail || leadAr?.contactEmail || profile?.contactEmail || "",
+      contactType: leadMarketing?.contactType || leadAr?.contactType || profile?.contactType || "",
       instagramHandle: profile?.instagramHandle || "",
       instagramUrl: profile?.instagramUrl || "",
       instagramFollowers: profile?.instagramFollowers || "",
@@ -4721,6 +4781,9 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     social: artist?.soc ? `@${artist.soc}` : (artist?.ig || ""),
     instagramFollowers: artist?.instagramFollowers || "",
     email: artist?.e || "",
+    contactName: artist?.contactName || "",
+    contactEmail: artist?.contactEmail || "",
+    contactType: artist?.contactType || "",
     tiktokUrl: artist?.tiktokUrl || "",
     tiktokFollowers: artist?.tiktokFollowers || "",
     spotifyUrl: artist?.spotifyUrl || "",
@@ -4756,6 +4819,24 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       kickoffRecord?.email
       || marketingAssignment?.email
       || profile?.primaryEmail
+      || ""
+    ).trim(),
+    contactName: String(
+      kickoffRecord?.contactName
+      || marketingAssignment?.contactName
+      || profile?.contactName
+      || ""
+    ).trim(),
+    contactEmail: String(
+      kickoffRecord?.contactEmail
+      || marketingAssignment?.contactEmail
+      || profile?.contactEmail
+      || ""
+    ).trim(),
+    contactType: String(
+      kickoffRecord?.contactType
+      || marketingAssignment?.contactType
+      || profile?.contactType
       || ""
     ).trim(),
     tiktokUrl: String(
@@ -6201,6 +6282,9 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       soc: socialHandle,
       instagramFollowers: artistForm.instagramFollowers.trim(),
       e: artistForm.email.trim(),
+      contactName: String(artistForm.contactName || "").trim(),
+      contactEmail: canonicalEmail(artistForm.contactEmail || ""),
+      contactType: String(artistForm.contactType || "").trim(),
       tiktokUrl: artistForm.tiktokUrl.trim(),
       tiktokFollowers: artistForm.tiktokFollowers.trim(),
       spotifyUrl: artistForm.spotifyUrl.trim(),
@@ -6517,6 +6601,9 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       soc: socialHandle,
       instagramFollowers: artistEditForm.instagramFollowers.trim(),
       e: artistEditForm.email.trim(),
+      contactName: String(artistEditForm.contactName || "").trim(),
+      contactEmail: canonicalEmail(artistEditForm.contactEmail || ""),
+      contactType: String(artistEditForm.contactType || "").trim(),
       tiktokUrl: artistEditForm.tiktokUrl.trim(),
       tiktokFollowers: artistEditForm.tiktokFollowers.trim(),
       spotifyUrl: artistEditForm.spotifyUrl.trim(),
@@ -6977,6 +7064,9 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       soc: socialHandle,
       instagramFollowers: artistEditForm.instagramFollowers.trim(),
       e: artistEditForm.email.trim(),
+      contactName: String(artistEditForm.contactName || "").trim(),
+      contactEmail: canonicalEmail(artistEditForm.contactEmail || ""),
+      contactType: String(artistEditForm.contactType || "").trim(),
       tiktokUrl: artistEditForm.tiktokUrl.trim(),
       tiktokFollowers: artistEditForm.tiktokFollowers.trim(),
       spotifyUrl: artistEditForm.spotifyUrl.trim(),
@@ -7068,6 +7158,9 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
             ...rawItem,
             talentName: nextName,
             email: artistEditForm.email.trim(),
+            contactName: String(artistEditForm.contactName || "").trim(),
+            contactEmail: canonicalEmail(artistEditForm.contactEmail || ""),
+            contactType: String(artistEditForm.contactType || "").trim(),
             instagramHandle: socialHandle,
             instagramUrl: nextInstagramUrl,
             instagramFollowers: artistEditForm.instagramFollowers.trim(),
@@ -7829,6 +7922,9 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       status: "prospect",
       owner: marketingForm.owner || "",
       email: marketingForm.email || "",
+      contactName: marketingForm.contactName || "",
+      contactEmail: marketingForm.contactEmail || "",
+      contactType: marketingForm.contactType || "",
       instagramHandle: marketingForm.instagramHandle || normalizeSocialHandle(marketingForm.instagramUrl),
       instagramUrl: marketingForm.instagramUrl || "",
       instagramFollowers: marketingForm.instagramFollowers || "",
@@ -9165,6 +9261,9 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
               ) : (
                 <input value={artistForm.curatorPageUrl} onChange={e => setArtistForm(prev => ({ ...prev, curatorPageUrl: e.target.value }))} placeholder="Curator page link" style={{ ...iS, width: "100%" }} />
               )}
+              <input value={artistForm.contactName} onChange={e => setArtistForm(prev => ({ ...prev, contactName: e.target.value }))} placeholder="Primary contact name" style={{ ...iS, width: "100%" }} />
+              <input value={artistForm.contactEmail} onChange={e => setArtistForm(prev => ({ ...prev, contactEmail: e.target.value }))} placeholder="Primary contact email" style={{ ...iS, width: "100%" }} />
+              <input value={artistForm.contactType} onChange={e => setArtistForm(prev => ({ ...prev, contactType: e.target.value }))} placeholder="Contact type (Manager, Artist, Team...)" style={{ ...iS, width: "100%", gridColumn: "1 / span 2" }} />
               <input value={artistForm.location} onChange={e => setArtistForm(prev => ({ ...prev, location: e.target.value }))} placeholder="Location" style={{ ...iS, width: "100%", gridColumn: "1 / span 2" }} />
               {isCuratorProject && (
                 <div style={{ gridColumn: "1 / span 2" }}>
@@ -9666,11 +9765,14 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                 </select>
               </label>
               <input value={marketingForm.email} onChange={e => setMarketingForm({ ...marketingForm, email: e.target.value })} placeholder="Talent email" style={{ ...iS, width: "100%" }} />
+              <input value={marketingForm.contactName} onChange={e => setMarketingForm({ ...marketingForm, contactName: e.target.value })} placeholder="Primary contact name" style={{ ...iS, width: "100%" }} />
+              <input value={marketingForm.contactEmail} onChange={e => setMarketingForm({ ...marketingForm, contactEmail: e.target.value })} placeholder="Primary contact email" style={{ ...iS, width: "100%" }} />
 
               <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 4 }}>
                 <span>Due date</span>
                 <input type="date" value={marketingForm.dueDate} onChange={e => setMarketingForm({ ...marketingForm, dueDate: e.target.value })} style={{ ...iS, width: "100%" }} />
               </label>
+              <input value={marketingForm.contactType} onChange={e => setMarketingForm({ ...marketingForm, contactType: e.target.value })} placeholder="Contact type (Manager, Artist, Team...)" style={{ ...iS, width: "100%" }} />
               <input value={marketingForm.instagramUrl} onChange={e => setMarketingForm({ ...marketingForm, instagramUrl: e.target.value, instagramHandle: normalizeSocialHandle(e.target.value) })} placeholder="Instagram URL" style={{ ...iS, width: "100%" }} />
 
               <input value={marketingForm.instagramFollowers} onChange={e => setMarketingForm({ ...marketingForm, instagramFollowers: normalizeFollowerCount(e.target.value) })} placeholder="Instagram followers" style={{ ...iS, width: "100%" }} />
@@ -9865,6 +9967,9 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                       <input value={artistEditForm.tiktokFollowers} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, tiktokFollowers: normalizeFollowerCount(e.target.value) }))} placeholder="TikTok followers" style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
                       <input value={artistEditForm.spotifyUrl} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, spotifyUrl: e.target.value }))} placeholder="Spotify artist link" style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
                       <input value={artistEditForm.email} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, email: e.target.value }))} placeholder="Email" style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
+                      <input value={artistEditForm.contactName} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, contactName: e.target.value }))} placeholder="Primary contact name" style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
+                      <input value={artistEditForm.contactEmail} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, contactEmail: e.target.value }))} placeholder="Primary contact email" style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
+                      <input value={artistEditForm.contactType} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, contactType: e.target.value }))} placeholder="Contact type (Manager, Artist, Team...)" style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
                       <input value={artistEditForm.location} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, location: e.target.value }))} placeholder="Location" style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
                       {selectedTalentTypes.includes("Curator") && (
                         <input value={artistEditForm.curatorPageUrl} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, curatorPageUrl: e.target.value }))} placeholder="Curator page link" style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
@@ -9919,6 +10024,22 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                       <span className="gf-rail-kv-label">Primary email</span>
                       <span className="gf-rail-kv-value">{selectedTalentPrimaryEmail || "No email yet"}</span>
                     </div>
+                    {(selectedTalentContactName || selectedTalentContactEmail || selectedTalentContactType) && (
+                      <>
+                        <div className="gf-rail-kv">
+                          <span className="gf-rail-kv-label">Primary contact</span>
+                          <span className="gf-rail-kv-value">{selectedTalentContactName || "Not set yet"}</span>
+                        </div>
+                        <div className="gf-rail-kv">
+                          <span className="gf-rail-kv-label">Contact email</span>
+                          <span className="gf-rail-kv-value">{selectedTalentContactEmail || "Not set yet"}</span>
+                        </div>
+                        <div className="gf-rail-kv">
+                          <span className="gf-rail-kv-label">Contact type</span>
+                          <span className="gf-rail-kv-value">{selectedTalentContactType || "Not set yet"}</span>
+                        </div>
+                      </>
+                    )}
                     {(selectedTalentInstagramHandle || selectedTalentInstagramFollowers) && (
                       <div className="gf-rail-kv">
                         <span className="gf-rail-kv-label">Instagram</span>
@@ -9978,6 +10099,9 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                       )}
                       {selectedTalentPrimaryEmail && (
                         <a href={`mailto:${selectedTalentPrimaryEmail}`} style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Email</a>
+                      )}
+                      {selectedTalentContactEmail && selectedTalentContactEmail !== selectedTalentPrimaryEmail && (
+                        <a href={`mailto:${selectedTalentContactEmail}`} style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Email Contact</a>
                       )}
                       {selectedTalentInstagramHandle && (
                         <a href={selectedTalentInstagramUrl || `https://instagram.com/${selectedTalentInstagramHandle}`} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Instagram</a>
