@@ -3542,6 +3542,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [showArchivedCampaigns, setShowArchivedCampaigns] = useState(false);
   const [campaignHubCreateForm, setCampaignHubCreateForm] = useState(() => emptyCampaignDetailForm());
   const [campaignHubDrafts, setCampaignHubDrafts] = useState({});
+  const [talentOverviewMarketingDrafts, setTalentOverviewMarketingDrafts] = useState({});
+  const [talentOverviewMarketingSavingId, setTalentOverviewMarketingSavingId] = useState("");
   const [pendingWorkspaceAction, setPendingWorkspaceAction] = useState(null);
   const [liveCrmQuery, setLiveCrmQuery] = useState("");
   const [liveCrmTypeFilter, setLiveCrmTypeFilter] = useState("all");
@@ -5482,6 +5484,28 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     selectedTalentPrimaryArRecord,
     selectedTalentPrimaryMarketingAssignment,
   ]);
+  useEffect(() => {
+    if (!showTalentProfileModal || !selectedTalentProfile) {
+      setTalentOverviewMarketingDrafts({});
+      setTalentOverviewMarketingSavingId("");
+      return;
+    }
+    const nextDrafts = {};
+    selectedTalentMarketingProjectSummaries.forEach(summary => {
+      (summary.marketingAssignments || []).forEach(assignment => {
+        const assignmentId = String(assignment.assignmentId || "");
+        if (!assignmentId) return;
+        nextDrafts[assignmentId] = {
+          status: normalizeMarketingStatus(assignment.status || "prospect"),
+          owner: assignment.owner || "",
+          notes: assignment.notes || "",
+          contentUrl: assignment.contentUrl || "",
+        };
+      });
+    });
+    setTalentOverviewMarketingDrafts(nextDrafts);
+    setTalentOverviewMarketingSavingId("");
+  }, [showTalentProfileModal, selectedTalentProfile?.id, selectedTalentMarketingProjectSummaries]);
 
   const persist = useCallback(async (np, la, dk, vm, lb, wu, pm, cw, kvm, lvm) => {
     const nextProjects = np || projects;
@@ -7485,135 +7509,155 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     }
   };
 
-  const updateTalentOverviewMarketingStatus = async (assignment, nextStatus) => {
+  const patchTalentOverviewMarketingDraft = useCallback((assignmentId, patch) => {
+    const key = String(assignmentId || "");
+    if (!key) return;
+    setTalentOverviewMarketingDrafts(prev => ({
+      ...prev,
+      [key]: {
+        ...(prev[key] || {}),
+        ...patch,
+      },
+    }));
+  }, []);
+
+  const saveTalentOverviewMarketingDraft = async assignment => {
     if (!requireEditor()) return;
     if (!assignment?.projectId || !assignment?.assignmentId) return;
+    const assignmentId = String(assignment.assignmentId || "");
     const targetProject = projects.find(project => project.id === assignment.projectId);
     if (!targetProject) {
       flash("Could not find that live campaign source record", "err");
       return;
     }
-    const normalizedStatus = normalizeMarketingStatus(nextStatus);
-    const currentItem = (targetProject.marketingItems || []).find(item => String(item?.id || "") === String(assignment.assignmentId));
+    const currentItem = (targetProject.marketingItems || []).find(item => String(item?.id || "") === assignmentId);
     if (!currentItem) {
       flash("Could not find that campaign assignment", "err");
       return;
     }
+
+    const draft = talentOverviewMarketingDrafts[assignmentId] || {};
+    const nextStatus = normalizeMarketingStatus(draft.status || currentItem.status || "prospect");
+    const nextOwner = String(draft.owner ?? currentItem.owner ?? "");
+    const nextNotes = String(draft.notes ?? currentItem.notes ?? "").trim();
+    const nextContentUrl = String(draft.contentUrl ?? currentItem.contentUrl ?? "").trim();
+
     const currentStatus = normalizeMarketingStatus(currentItem.status || "prospect");
-    if (currentStatus === normalizedStatus) return;
-    const nextProject = {
-      ...targetProject,
-      marketingItems: (targetProject.marketingItems || []).map(item =>
-        String(item?.id || "") === String(assignment.assignmentId)
-          ? { ...item, status: normalizedStatus, updatedAt: new Date().toISOString() }
-          : item
-      ),
-      activityLog: logAction(targetProject, assignment.talentName || "", `Marketing status → ${MM[normalizedStatus]?.label || titleCaseWords(normalizedStatus)}`, "event", {
-        assignmentId: assignment.assignmentId,
-        campaign: assignment.campaign || "",
-      }),
-    };
-    await saveProjectsList(projects.map(project => project.id === targetProject.id ? nextProject : project));
-    flash(`${assignment.talentName || "Assignment"} → ${MM[normalizedStatus]?.label || titleCaseWords(normalizedStatus)}`);
-  };
+    const currentOwner = String(currentItem.owner || "");
+    const currentNotes = String(currentItem.notes || "").trim();
+    const currentContentUrl = String(currentItem.contentUrl || "").trim();
 
-  const updateTalentOverviewMarketingOwner = async (assignment, nextOwner) => {
-    if (!requireEditor()) return;
-    if (!assignment?.projectId || !assignment?.assignmentId) return;
-    const targetProject = projects.find(project => project.id === assignment.projectId);
-    if (!targetProject) {
-      flash("Could not find that live campaign source record", "err");
-      return;
-    }
-    const currentItem = (targetProject.marketingItems || []).find(item => String(item?.id || "") === String(assignment.assignmentId));
-    if (!currentItem) {
-      flash("Could not find that campaign assignment", "err");
-      return;
-    }
-    if (String(currentItem.owner || "") === String(nextOwner || "")) return;
-    const nextProject = {
-      ...targetProject,
-      marketingItems: (targetProject.marketingItems || []).map(item =>
-        String(item?.id || "") === String(assignment.assignmentId)
-          ? { ...item, owner: nextOwner || "", updatedAt: new Date().toISOString() }
-          : item
-      ),
-      activityLog: logAction(targetProject, assignment.talentName || "", nextOwner ? `Marketing owner → ${nextOwner}` : "Marketing owner cleared", "event", {
-        assignmentId: assignment.assignmentId,
-        campaign: assignment.campaign || "",
-      }),
-    };
-    await saveProjectsList(projects.map(project => project.id === targetProject.id ? nextProject : project));
-    flash(nextOwner ? `${assignment.talentName || "Assignment"} assigned to ${nextOwner}` : "Marketing owner cleared");
-  };
+    const statusChanged = currentStatus !== nextStatus;
+    const ownerChanged = currentOwner !== nextOwner;
+    const notesChanged = currentNotes !== nextNotes;
+    const contentChanged = currentContentUrl !== nextContentUrl;
 
-  const updateTalentOverviewMarketingNotes = async (assignment, nextNotes) => {
-    if (!requireEditor()) return;
-    if (!assignment?.projectId || !assignment?.assignmentId) return;
-    const targetProject = projects.find(project => project.id === assignment.projectId);
-    if (!targetProject) {
-      flash("Could not find that live campaign source record", "err");
+    if (!statusChanged && !ownerChanged && !notesChanged && !contentChanged) {
+      flash("No campaign changes to save");
       return;
     }
-    const currentItem = (targetProject.marketingItems || []).find(item => String(item?.id || "") === String(assignment.assignmentId));
-    if (!currentItem) {
-      flash("Could not find that campaign assignment", "err");
-      return;
-    }
-    if (String(currentItem.notes || "") === String(nextNotes || "")) return;
-    const nextProject = {
-      ...targetProject,
-      marketingItems: (targetProject.marketingItems || []).map(item =>
-        String(item?.id || "") === String(assignment.assignmentId)
-          ? { ...item, notes: nextNotes || "", updatedAt: new Date().toISOString() }
-          : item
-      ),
-      activityLog: logAction(targetProject, assignment.talentName || "", "Marketing note updated", "note", {
-        assignmentId: assignment.assignmentId,
-        campaign: assignment.campaign || "",
-        note: nextNotes || "",
-      }),
-    };
-    await saveProjectsList(projects.map(project => project.id === targetProject.id ? nextProject : project));
-    flash("Campaign notes saved");
-  };
 
-  const updateTalentOverviewMarketingContentUrl = async (assignment, nextContentUrl) => {
-    if (!requireEditor()) return;
-    if (!assignment?.projectId || !assignment?.assignmentId) return;
-    const targetProject = projects.find(project => project.id === assignment.projectId);
-    if (!targetProject) {
-      flash("Could not find that live campaign source record", "err");
-      return;
+    setTalentOverviewMarketingSavingId(assignmentId);
+    try {
+      let nextActivityCarrier = { ...targetProject, activityLog: targetProject.activityLog || [] };
+      if (statusChanged) {
+        nextActivityCarrier = {
+          ...nextActivityCarrier,
+          activityLog: logAction(
+            nextActivityCarrier,
+            assignment.talentName || "",
+            `Marketing status → ${MM[nextStatus]?.label || titleCaseWords(nextStatus)}`,
+            "event",
+            {
+              assignmentId,
+              campaign: assignment.campaign || "",
+            }
+          ),
+        };
+      }
+      if (ownerChanged) {
+        nextActivityCarrier = {
+          ...nextActivityCarrier,
+          activityLog: logAction(
+            nextActivityCarrier,
+            assignment.talentName || "",
+            nextOwner ? `Marketing owner → ${nextOwner}` : "Marketing owner cleared",
+            "event",
+            {
+              assignmentId,
+              campaign: assignment.campaign || "",
+            }
+          ),
+        };
+      }
+      if (notesChanged) {
+        nextActivityCarrier = {
+          ...nextActivityCarrier,
+          activityLog: logAction(
+            nextActivityCarrier,
+            assignment.talentName || "",
+            "Marketing note updated",
+            "note",
+            {
+              assignmentId,
+              campaign: assignment.campaign || "",
+              note: nextNotes,
+            }
+          ),
+        };
+      }
+      if (contentChanged) {
+        nextActivityCarrier = {
+          ...nextActivityCarrier,
+          activityLog: logAction(
+            nextActivityCarrier,
+            assignment.talentName || "",
+            nextContentUrl ? "Content link updated" : "Content link cleared",
+            "event",
+            {
+              assignmentId,
+              campaign: assignment.campaign || "",
+              note: nextContentUrl,
+            }
+          ),
+        };
+      }
+
+      const nextProject = {
+        ...targetProject,
+        marketingItems: (targetProject.marketingItems || []).map(item =>
+          String(item?.id || "") === assignmentId
+            ? {
+                ...item,
+                status: nextStatus,
+                owner: nextOwner,
+                notes: nextNotes,
+                contentUrl: nextContentUrl,
+                updatedAt: new Date().toISOString(),
+              }
+            : item
+        ),
+        activityLog: nextActivityCarrier.activityLog,
+      };
+
+      await saveProjectsList(projects.map(project => project.id === targetProject.id ? nextProject : project));
+      setTalentOverviewMarketingDrafts(prev => ({
+        ...prev,
+        [assignmentId]: {
+          status: nextStatus,
+          owner: nextOwner,
+          notes: nextNotes,
+          contentUrl: nextContentUrl,
+        },
+      }));
+      if (statusChanged) {
+        flash(`${assignment.talentName || "Assignment"} → ${MM[nextStatus]?.label || titleCaseWords(nextStatus)}`);
+      } else {
+        flash("Campaign changes saved");
+      }
+    } finally {
+      setTalentOverviewMarketingSavingId("");
     }
-    const currentItem = (targetProject.marketingItems || []).find(item => String(item?.id || "") === String(assignment.assignmentId));
-    if (!currentItem) {
-      flash("Could not find that campaign assignment", "err");
-      return;
-    }
-    const normalizedNextContentUrl = String(nextContentUrl || "").trim();
-    if (String(currentItem.contentUrl || "") === normalizedNextContentUrl) return;
-    const nextProject = {
-      ...targetProject,
-      marketingItems: (targetProject.marketingItems || []).map(item =>
-        String(item?.id || "") === String(assignment.assignmentId)
-          ? { ...item, contentUrl: normalizedNextContentUrl, updatedAt: new Date().toISOString() }
-          : item
-      ),
-      activityLog: logAction(
-        targetProject,
-        assignment.talentName || "",
-        normalizedNextContentUrl ? "Content link updated" : "Content link cleared",
-        "event",
-        {
-          assignmentId: assignment.assignmentId,
-          campaign: assignment.campaign || "",
-          note: normalizedNextContentUrl,
-        }
-      ),
-    };
-    await saveProjectsList(projects.map(project => project.id === targetProject.id ? nextProject : project));
-    flash(normalizedNextContentUrl ? "Content link saved" : "Content link cleared");
   };
 
   const runIntel = async a => {
@@ -10703,112 +10747,143 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                   <div key={`marketing:${summary.projectId}`} style={{ padding: "12px 14px", borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sa }}>
                     <div style={{ fontSize: 12, color: C.tt, marginBottom: 10 }}>{workspaceRecordLabel(summary.projectType, "live")}</div>
                     <div style={{ display: "grid", gap: 10 }}>
-                      {(summary.marketingAssignments || []).map(assignment => (
-                        <div key={assignment.assignmentId} style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", padding: "12px 14px", borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sf }}>
-                          <div style={{ minWidth: 0 }}>
-                            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 6 }}>
-                              <div style={{ fontSize: 14, fontWeight: 700, color: C.tx }}>{assignment.campaign || "Unassigned"}</div>
-                              <span style={{ ...mkP(true, marketingStatusTone(assignment.status, C).tone, marketingStatusTone(assignment.status, C).bg), cursor: "default" }}>{MM[assignment.status]?.label || "Prospect"}</span>
-                              {assignment.owner && <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{assignment.owner}</span>}
-                            </div>
-                            <div style={{ fontSize: 11, color: C.tt }}>
-                              {[assignment.title, assignment.trafficType, assignment.deliverableType, assignment.dueDate ? `Due ${sD(assignment.dueDate)}` : ""].filter(Boolean).join(" · ") || "Marketing assignment"}
-                            </div>
-                            {(assignment.notes || assignment.rejectedReason) && (
-                              <div style={{ display: "grid", gap: 4, marginTop: 8, fontSize: 11, color: C.ts, lineHeight: 1.5 }}>
-                                {assignment.notes && <div><strong style={{ color: C.tx }}>Notes:</strong> {assignment.notes}</div>}
-                                {assignment.rejectedReason && <div><strong style={{ color: C.tx }}>Rejected:</strong> {assignment.rejectedReason}</div>}
+                      {(summary.marketingAssignments || []).map(assignment => {
+                        const assignmentId = String(assignment.assignmentId || "");
+                        const assignmentDraft = talentOverviewMarketingDrafts[assignmentId] || {};
+                        const currentStatus = normalizeMarketingStatus(assignment.status || "prospect");
+                        const draftStatus = normalizeMarketingStatus(assignmentDraft.status || currentStatus);
+                        const draftOwner = String(assignmentDraft.owner ?? assignment.owner ?? "");
+                        const draftNotes = String(assignmentDraft.notes ?? assignment.notes ?? "");
+                        const draftContentUrl = String(assignmentDraft.contentUrl ?? assignment.contentUrl ?? "");
+                        const isDirty =
+                          draftStatus !== currentStatus ||
+                          draftOwner !== String(assignment.owner || "") ||
+                          draftNotes.trim() !== String(assignment.notes || "").trim() ||
+                          draftContentUrl.trim() !== String(assignment.contentUrl || "").trim();
+                        const isSaving = talentOverviewMarketingSavingId === assignmentId;
+                        const willNotifySlack = MARKETING_SLACK_NOTIFY_STATUS_IDS.has(draftStatus) && draftStatus !== currentStatus;
+                        return (
+                          <div key={assignment.assignmentId} style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", padding: "12px 14px", borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sf }}>
+                            <div style={{ minWidth: 0 }}>
+                              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 6 }}>
+                                <div style={{ fontSize: 14, fontWeight: 700, color: C.tx }}>{assignment.campaign || "Unassigned"}</div>
+                                <span style={{ ...mkP(true, marketingStatusTone(draftStatus, C).tone, marketingStatusTone(draftStatus, C).bg), cursor: "default" }}>{MM[draftStatus]?.label || "Prospect"}</span>
+                                {draftOwner && <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{draftOwner}</span>}
                               </div>
-                            )}
-                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 10 }}>
-                              <label style={{ fontSize: 11, color: C.ts, display: "grid", gap: 4 }}>
-                                <span>Campaign status</span>
-                                <select
-                                  value={normalizeMarketingStatus(assignment.status || "prospect")}
-                                  disabled={isReadOnly}
-                                  onChange={e => { void updateTalentOverviewMarketingStatus(assignment, e.target.value); }}
-                                  style={{ ...iS, width: "100%", fontSize: 12, ...lockStyle(isReadOnly) }}
-                                >
-                                  {MARKETING_STATUSES.map(status => (
-                                    <option key={`talent-assignment-status-${assignment.assignmentId}-${status.id}`} value={status.id}>
-                                      {status.label}
-                                    </option>
-                                  ))}
-                                </select>
-                              </label>
-                              <label style={{ fontSize: 11, color: C.ts, display: "grid", gap: 4 }}>
-                                <span>Owner</span>
-                                <select
-                                  value={assignment.owner || ""}
-                                  disabled={isReadOnly}
-                                  onChange={e => { void updateTalentOverviewMarketingOwner(assignment, e.target.value); }}
-                                  style={{ ...iS, width: "100%", fontSize: 12, ...lockStyle(isReadOnly) }}
-                                >
-                                  <option value="">Unassigned</option>
-                                  {(projects.find(project => project.id === assignment.projectId)?.teamUsers || DEFAULT_TEAM_USERS).map(user => (
-                                    <option key={`talent-assignment-owner-${assignment.assignmentId}-${user}`} value={user}>{user}</option>
-                                  ))}
-                                </select>
-                              </label>
-                            </div>
-                            <label style={{ fontSize: 11, color: C.ts, display: "grid", gap: 4, marginTop: 10 }}>
-                              <span>Campaign notes</span>
-                              <textarea
-                                defaultValue={assignment.notes || ""}
-                                readOnly={isReadOnly}
-                                onClick={e => e.stopPropagation()}
-                                onBlur={e => { void updateTalentOverviewMarketingNotes(assignment, e.currentTarget.value.trim()); }}
-                                placeholder="Add campaign notes here..."
-                                style={{ ...iS, width: "100%", minHeight: 78, resize: "vertical", fontSize: 12, ...lockStyle(isReadOnly) }}
-                              />
-                            </label>
-                            <label style={{ fontSize: 11, color: C.ts, display: "grid", gap: 4, marginTop: 10 }}>
-                              <span>{normalizeMarketingStatus(assignment.status || "") === "complete" ? "Final content link" : "Content link"}</span>
-                              <input
-                                type="url"
-                                defaultValue={assignment.contentUrl || ""}
-                                readOnly={isReadOnly}
-                                onClick={e => e.stopPropagation()}
-                                onBlur={e => { void updateTalentOverviewMarketingContentUrl(assignment, e.currentTarget.value); }}
-                                placeholder={normalizeMarketingStatus(assignment.status || "") === "complete" ? "Paste the completed content link for Slack..." : "Paste a content link..."}
-                                style={{ ...iS, width: "100%", fontSize: 12, ...lockStyle(isReadOnly) }}
-                              />
-                              {normalizeMarketingStatus(assignment.status || "") === "complete" && (
-                                <div style={{ fontSize: 10, color: C.tt, lineHeight: 1.5 }}>
-                                  Save the final link here and Slack will include it for completed assignments.
+                              <div style={{ fontSize: 11, color: C.tt }}>
+                                {[assignment.title, assignment.trafficType, assignment.deliverableType, assignment.dueDate ? `Due ${sD(assignment.dueDate)}` : ""].filter(Boolean).join(" · ") || "Marketing assignment"}
+                              </div>
+                              {(assignment.rejectedReason) && (
+                                <div style={{ display: "grid", gap: 4, marginTop: 8, fontSize: 11, color: C.ts, lineHeight: 1.5 }}>
+                                  <div><strong style={{ color: C.tx }}>Rejected:</strong> {assignment.rejectedReason}</div>
                                 </div>
                               )}
-                            </label>
+                              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 10 }}>
+                                <label style={{ fontSize: 11, color: C.ts, display: "grid", gap: 4 }}>
+                                  <span>Campaign status</span>
+                                  <select
+                                    value={draftStatus}
+                                    disabled={isReadOnly || isSaving}
+                                    onChange={e => patchTalentOverviewMarketingDraft(assignmentId, { status: e.target.value })}
+                                    style={{ ...iS, width: "100%", fontSize: 12, ...lockStyle(isReadOnly || isSaving) }}
+                                  >
+                                    {MARKETING_STATUSES.map(status => (
+                                      <option key={`talent-assignment-status-${assignment.assignmentId}-${status.id}`} value={status.id}>
+                                        {status.label}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </label>
+                                <label style={{ fontSize: 11, color: C.ts, display: "grid", gap: 4 }}>
+                                  <span>Owner</span>
+                                  <select
+                                    value={draftOwner}
+                                    disabled={isReadOnly || isSaving}
+                                    onChange={e => patchTalentOverviewMarketingDraft(assignmentId, { owner: e.target.value })}
+                                    style={{ ...iS, width: "100%", fontSize: 12, ...lockStyle(isReadOnly || isSaving) }}
+                                  >
+                                    <option value="">Unassigned</option>
+                                    {(projects.find(project => project.id === assignment.projectId)?.teamUsers || DEFAULT_TEAM_USERS).map(user => (
+                                      <option key={`talent-assignment-owner-${assignment.assignmentId}-${user}`} value={user}>{user}</option>
+                                    ))}
+                                  </select>
+                                </label>
+                              </div>
+                              <label style={{ fontSize: 11, color: C.ts, display: "grid", gap: 4, marginTop: 10 }}>
+                                <span>Campaign notes</span>
+                                <textarea
+                                  value={draftNotes}
+                                  readOnly={isReadOnly || isSaving}
+                                  onClick={e => e.stopPropagation()}
+                                  onChange={e => patchTalentOverviewMarketingDraft(assignmentId, { notes: e.currentTarget.value })}
+                                  placeholder="Add campaign notes here..."
+                                  style={{ ...iS, width: "100%", minHeight: 78, resize: "vertical", fontSize: 12, ...lockStyle(isReadOnly || isSaving) }}
+                                />
+                              </label>
+                              <label style={{ fontSize: 11, color: C.ts, display: "grid", gap: 4, marginTop: 10 }}>
+                                <span>{draftStatus === "complete" ? "Final content link" : "Content link"}</span>
+                                <input
+                                  type="url"
+                                  value={draftContentUrl}
+                                  readOnly={isReadOnly || isSaving}
+                                  onClick={e => e.stopPropagation()}
+                                  onChange={e => patchTalentOverviewMarketingDraft(assignmentId, { contentUrl: e.currentTarget.value })}
+                                  placeholder={draftStatus === "complete" ? "Paste the completed content link for Slack..." : "Paste a content link..."}
+                                  style={{ ...iS, width: "100%", fontSize: 12, ...lockStyle(isReadOnly || isSaving) }}
+                                />
+                                {draftStatus === "complete" && (
+                                  <div style={{ fontSize: 10, color: C.tt, lineHeight: 1.5 }}>
+                                    Save the final link here and Slack will include it for completed assignments.
+                                  </div>
+                                )}
+                              </label>
+                            </div>
+                            <div style={{ display: "grid", gap: 8, justifyItems: "end" }}>
+                              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                                <button
+                                  onClick={() => { void saveTalentOverviewMarketingDraft(assignment); }}
+                                  disabled={isReadOnly || !isDirty || isSaving}
+                                  style={{ ...actionBtn(false, "good"), ...lockStyle(isReadOnly || !isDirty || isSaving) }}
+                                >
+                                  {isSaving ? "Saving..." : "Save"}
+                                </button>
+                                <button
+                                  onClick={() => openMarketingItemModal(assignment)}
+                                  disabled={isReadOnly || isSaving}
+                                  style={{ ...actionBtn(false, "accent"), ...lockStyle(isReadOnly || isSaving) }}
+                                >
+                                  Edit Assignment
+                                </button>
+                                {assignment.briefUrl && <a href={assignment.briefUrl} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Brief</a>}
+                                {assignment.contentUrl && <a href={assignment.contentUrl} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Content</a>}
+                                {!isTerminalMarketingStatus(draftStatus) && (
+                                  <button
+                                    onClick={() => { void clearMarketingItemCampaign(assignment.assignmentId); }}
+                                    disabled={isReadOnly || isSaving}
+                                    style={{ ...actionBtn(false, "neutral"), ...lockStyle(isReadOnly || isSaving) }}
+                                  >
+                                    Remove from Campaign
+                                  </button>
+                                )}
+                                <button
+                                  onClick={() => { void deleteMarketingItem(assignment.assignmentId); }}
+                                  disabled={isReadOnly || isSaving}
+                                  style={{ ...actionBtn(false, "danger"), ...lockStyle(isReadOnly || isSaving) }}
+                                >
+                                  Delete Assignment
+                                </button>
+                              </div>
+                              <div style={{ fontSize: 11, color: willNotifySlack ? C.gn : C.tt, maxWidth: 240, textAlign: "right", lineHeight: 1.5 }}>
+                                {willNotifySlack
+                                  ? `Saving will post ${MM[currentStatus]?.label || titleCaseWords(currentStatus)} -> ${MM[draftStatus]?.label || titleCaseWords(draftStatus)} to #marketing-gems`
+                                  : isDirty
+                                    ? "Save to apply these campaign changes."
+                                    : "No unsaved changes."}
+                              </div>
+                            </div>
                           </div>
-                          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
-                            <button
-                              onClick={() => openMarketingItemModal(assignment)}
-                              disabled={isReadOnly}
-                              style={{ ...actionBtn(false, "accent"), ...lockStyle(isReadOnly) }}
-                            >
-                              Edit Assignment
-                            </button>
-                            {assignment.briefUrl && <a href={assignment.briefUrl} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Brief</a>}
-                            {assignment.contentUrl && <a href={assignment.contentUrl} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Content</a>}
-                            {!isTerminalMarketingStatus(assignment.status || "prospect") && (
-                              <button
-                                onClick={() => { void clearMarketingItemCampaign(assignment.assignmentId); }}
-                                disabled={isReadOnly}
-                                style={{ ...actionBtn(false, "neutral"), ...lockStyle(isReadOnly) }}
-                              >
-                                Remove from Campaign
-                              </button>
-                            )}
-                            <button
-                              onClick={() => { void deleteMarketingItem(assignment.assignmentId); }}
-                              disabled={isReadOnly}
-                              style={{ ...actionBtn(false, "danger"), ...lockStyle(isReadOnly) }}
-                            >
-                              Delete Assignment
-                            </button>
-                          </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
                 )) : (
