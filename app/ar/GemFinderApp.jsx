@@ -3604,6 +3604,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         const owners = uniqStrings(projectSummaries.flatMap(item => item.owners));
         const campaigns = uniqStrings(projectSummaries.flatMap(item => item.campaigns));
         const marketingStatuses = uniqStrings(projectSummaries.flatMap(item => item.marketingStatuses || []));
+        const primaryMarketingStatus = [...marketingStatuses]
+          .sort((a, b) => (MARKETING_STATUS_ORDER[a] ?? 999) - (MARKETING_STATUS_ORDER[b] ?? 999))[0] || "";
         const searchHaystack = [
           profile.displayName,
           profile.primaryEmail,
@@ -3628,6 +3630,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
           owners,
           campaigns,
           marketingStatuses,
+          primaryMarketingStatus,
           projectSummaries,
           searchHaystack,
           lastTouched,
@@ -3652,8 +3655,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
           return a.displayName.localeCompare(b.displayName);
         }
         if (liveCrmSortMode === "status") {
-          const aStatus = liveStatusSummaryParts(a)[0]?.id || "";
-          const bStatus = liveStatusSummaryParts(b)[0]?.id || "";
+          const aStatus = a.primaryMarketingStatus || "";
+          const bStatus = b.primaryMarketingStatus || "";
           const statusCompare = (MARKETING_STATUS_ORDER[aStatus] ?? 999) - (MARKETING_STATUS_ORDER[bStatus] ?? 999);
           if (statusCompare !== 0) return statusCompare;
         }
@@ -10604,7 +10607,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
               ))}
             </div>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1.1fr) repeat(6, minmax(138px, 0.8fr))", gap: 12, alignItems: "end" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 12, alignItems: "end" }}>
             <label style={{ display: "grid", gap: 6, fontSize: 12, color: C.ts }}>
               <span>Search live talent</span>
               <input
