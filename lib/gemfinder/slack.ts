@@ -93,6 +93,7 @@ type MarketingTransition = {
   projectUrl: string;
   briefUrl: string;
   contentUrl: string;
+  updateKind?: 'status_change' | 'content_added';
 };
 
 type MarketingSummaryPayloadInput = {
@@ -215,8 +216,12 @@ function extractMarketingTransitions(previousProjects: unknown[], nextProjects: 
       const previousItem = prevItems.get(itemKey);
       const nextStatus = String(nextItem?.status || 'prospect').toLowerCase();
       const previousStatus = String(previousItem?.status || '').toLowerCase() || 'prospect';
-      if (!previousStatus || previousStatus === nextStatus) return;
-      if (!MARKETING_NOTIFY_STATUS_IDS.has(nextStatus)) return;
+      const nextContentUrl = String(nextItem?.contentUrl || '').trim();
+      const previousContentUrl = String(previousItem?.contentUrl || '').trim();
+      const statusChanged = previousStatus !== nextStatus;
+      const contentAddedOnComplete = nextStatus === 'complete' && !!nextContentUrl && nextContentUrl !== previousContentUrl;
+      if (!statusChanged && !contentAddedOnComplete) return;
+      if (statusChanged && !MARKETING_NOTIFY_STATUS_IDS.has(nextStatus)) return;
 
       const campaigns = Array.isArray(nextItem?.campaigns) && nextItem.campaigns.length
         ? nextItem.campaigns
@@ -236,7 +241,8 @@ function extractMarketingTransitions(previousProjects: unknown[], nextProjects: 
         nextStatus,
         projectUrl: marketingProjectUrl(projectId, String(nextItem?.id || itemKey)),
         briefUrl: String(nextItem?.briefUrl || '').trim(),
-        contentUrl: String(nextItem?.contentUrl || '').trim(),
+        contentUrl: nextContentUrl,
+        updateKind: !statusChanged && contentAddedOnComplete ? 'content_added' : 'status_change',
       });
     });
   }
@@ -300,8 +306,13 @@ function buildMarketingSlackPayload(transition: MarketingTransition, actorEmail:
   const nextStatusLabel = marketingStatusLabel(transition.nextStatus);
   const previousStatusLabel = marketingStatusLabel(transition.previousStatus);
   const statusEmoji = marketingStatusEmoji(transition.nextStatus);
-  const text = `GEMFINDER MARKETING: ${transition.talentName} moved to ${nextStatusLabel} in ${transition.projectName}`;
-  const titleLine = `${statusEmoji} ${transition.talentName} -> ${nextStatusLabel}`;
+  const isContentAdded = transition.updateKind === 'content_added';
+  const text = isContentAdded
+    ? `GEMFINDER MARKETING: content link added for ${transition.talentName} in ${transition.projectName}`
+    : `GEMFINDER MARKETING: ${transition.talentName} moved to ${nextStatusLabel} in ${transition.projectName}`;
+  const titleLine = isContentAdded
+    ? `🔗 ${transition.talentName} complete link added`
+    : `${statusEmoji} ${transition.talentName} -> ${nextStatusLabel}`;
   const subtitleParts = [
     transition.campaignLabel || 'No campaign',
     transition.trafficType || 'Organic',
@@ -355,7 +366,12 @@ function buildMarketingSlackPayload(transition: MarketingTransition, actorEmail:
           { type: 'mrkdwn', text: `*Traffic / Deliverable*\n${transition.trafficType} · ${transition.deliverableType}` },
           { type: 'mrkdwn', text: `*Owner*\n${transition.owner}` },
           { type: 'mrkdwn', text: `*Changed by*\n${actorLabel}` },
-          { type: 'mrkdwn', text: `*Status change*\n${previousStatusLabel} -> ${nextStatusLabel}` },
+          {
+            type: 'mrkdwn',
+            text: isContentAdded
+              ? `*Update*\nContent link added to ${nextStatusLabel}`
+              : `*Status change*\n${previousStatusLabel} -> ${nextStatusLabel}`,
+          },
         ],
       },
       ...(accessoryButtons.length ? [{ type: 'actions', elements: accessoryButtons }] : []),

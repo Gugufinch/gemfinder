@@ -7189,6 +7189,44 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     flash("Campaign notes saved");
   };
 
+  const updateTalentOverviewMarketingContentUrl = async (assignment, nextContentUrl) => {
+    if (!requireEditor()) return;
+    if (!assignment?.projectId || !assignment?.assignmentId) return;
+    const targetProject = projects.find(project => project.id === assignment.projectId);
+    if (!targetProject) {
+      flash("Could not find that live campaign source record", "err");
+      return;
+    }
+    const currentItem = (targetProject.marketingItems || []).find(item => String(item?.id || "") === String(assignment.assignmentId));
+    if (!currentItem) {
+      flash("Could not find that campaign assignment", "err");
+      return;
+    }
+    const normalizedNextContentUrl = String(nextContentUrl || "").trim();
+    if (String(currentItem.contentUrl || "") === normalizedNextContentUrl) return;
+    const nextProject = {
+      ...targetProject,
+      marketingItems: (targetProject.marketingItems || []).map(item =>
+        String(item?.id || "") === String(assignment.assignmentId)
+          ? { ...item, contentUrl: normalizedNextContentUrl, updatedAt: new Date().toISOString() }
+          : item
+      ),
+      activityLog: logAction(
+        targetProject,
+        assignment.talentName || "",
+        normalizedNextContentUrl ? "Content link updated" : "Content link cleared",
+        "event",
+        {
+          assignmentId: assignment.assignmentId,
+          campaign: assignment.campaign || "",
+          note: normalizedNextContentUrl,
+        }
+      ),
+    };
+    await saveProjectsList(projects.map(project => project.id === targetProject.id ? nextProject : project));
+    flash(normalizedNextContentUrl ? "Content link saved" : "Content link cleared");
+  };
+
   const runIntel = async a => {
     if (!requireEditor()) return;
     setIntelLoading(true);
@@ -10167,6 +10205,23 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                                 placeholder="Add campaign notes here..."
                                 style={{ ...iS, width: "100%", minHeight: 78, resize: "vertical", fontSize: 12, ...lockStyle(isReadOnly) }}
                               />
+                            </label>
+                            <label style={{ fontSize: 11, color: C.ts, display: "grid", gap: 4, marginTop: 10 }}>
+                              <span>{normalizeMarketingStatus(assignment.status || "") === "complete" ? "Final content link" : "Content link"}</span>
+                              <input
+                                type="url"
+                                defaultValue={assignment.contentUrl || ""}
+                                readOnly={isReadOnly}
+                                onClick={e => e.stopPropagation()}
+                                onBlur={e => { void updateTalentOverviewMarketingContentUrl(assignment, e.currentTarget.value); }}
+                                placeholder={normalizeMarketingStatus(assignment.status || "") === "complete" ? "Paste the completed content link for Slack..." : "Paste a content link..."}
+                                style={{ ...iS, width: "100%", fontSize: 12, ...lockStyle(isReadOnly) }}
+                              />
+                              {normalizeMarketingStatus(assignment.status || "") === "complete" && (
+                                <div style={{ fontSize: 10, color: C.tt, lineHeight: 1.5 }}>
+                                  Save the final link here and Slack will include it for completed assignments.
+                                </div>
+                              )}
                             </label>
                           </div>
                           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
