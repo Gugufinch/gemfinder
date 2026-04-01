@@ -64,7 +64,125 @@ const CURATOR_DETAIL_TAB_IDS = new Set(["overview", "activity"]);
 const MARKETING_TRAFFIC_TYPES = ["Paid", "Organic"];
 const MARKETING_CHANNELS = ["Instagram", "TikTok", "YouTube", "Meta", "X", "Email", "Other"];
 const MARKETING_TALENT_TYPES = ["Internal Artist", "External Artist", "Content Creator", "AI UGC"];
-const EMPTY_CURATED_ARTIST_SLOTS = Array.from({ length: 10 }, () => "");
+const CONTACT_TYPE_OPTIONS = [
+  "Artist",
+  "Manager",
+  "Management Team",
+  "Label",
+  "Publicist",
+  "Agent",
+  "Assistant",
+  "Curator",
+  "Team",
+  "Other",
+];
+const GENRE_OPTIONS = [
+  "Alternative",
+  "Alternative R&B",
+  "Alternative Rock",
+  "Americana",
+  "Ambient",
+  "Afrobeats",
+  "Bedroom Pop",
+  "Blues",
+  "Christian",
+  "Classical",
+  "Content Creator",
+  "Country",
+  "Dance",
+  "Drill",
+  "EDM",
+  "Electronic",
+  "Experimental",
+  "Folk",
+  "Gospel",
+  "Hip-Hop",
+  "House",
+  "Hyperpop",
+  "Indie",
+  "Indie Folk",
+  "Indie Pop",
+  "Indie Rock",
+  "Instrumental",
+  "Jazz",
+  "K-Pop",
+  "Latin",
+  "Lo-fi",
+  "Metal",
+  "Neo-Soul",
+  "Pop",
+  "Pop / Singer-Songwriter",
+  "Punk",
+  "R&B",
+  "Rap",
+  "Reggaeton",
+  "Regional Mexican",
+  "Rock",
+  "Singer-Songwriter",
+  "Soul",
+  "Soundtrack",
+  "Trap",
+  "Other / Mixed",
+];
+const GENRE_SYNONYMS = {
+  "alt": "Alternative",
+  "alt country": "Americana",
+  "alt pop": "Indie Pop",
+  "alt r&b": "Alternative R&B",
+  "alt rock": "Alternative Rock",
+  "americana": "Americana",
+  "ambient": "Ambient",
+  "afrobeats": "Afrobeats",
+  "bedroom pop": "Bedroom Pop",
+  "bluegrass": "Americana",
+  "blues": "Blues",
+  "christian": "Christian",
+  "classical": "Classical",
+  "content creator": "Content Creator",
+  "country": "Country",
+  "dance": "Dance",
+  "drill": "Drill",
+  "edm": "EDM",
+  "electronic": "Electronic",
+  "emo": "Alternative Rock",
+  "experimental": "Experimental",
+  "folk": "Folk",
+  "gospel": "Gospel",
+  "hip hop": "Hip-Hop",
+  "hip-hop": "Hip-Hop",
+  "house": "House",
+  "hyperpop": "Hyperpop",
+  "indie": "Indie",
+  "indie folk": "Indie Folk",
+  "indie pop": "Indie Pop",
+  "indie rock": "Indie Rock",
+  "instrumental": "Instrumental",
+  "jazz": "Jazz",
+  "kpop": "K-Pop",
+  "k-pop": "K-Pop",
+  "latin": "Latin",
+  "lo fi": "Lo-fi",
+  "lo-fi": "Lo-fi",
+  "metal": "Metal",
+  "neo soul": "Neo-Soul",
+  "neo-soul": "Neo-Soul",
+  "pop": "Pop",
+  "pop singer songwriter": "Pop / Singer-Songwriter",
+  "pop/singer-songwriter": "Pop / Singer-Songwriter",
+  "pop singer-songwriter": "Pop / Singer-Songwriter",
+  "punk": "Punk",
+  "r and b": "R&B",
+  "r&b": "R&B",
+  "rap": "Rap",
+  "reggaeton": "Reggaeton",
+  "regional mexican": "Regional Mexican",
+  "rock": "Rock",
+  "singer songwriter": "Singer-Songwriter",
+  "singer-songwriter": "Singer-Songwriter",
+  "soul": "Soul",
+  "soundtrack": "Soundtrack",
+  "trap": "Trap",
+};
 const TALENT_SOURCE_LABELS = {
   legacy_roster: "Legacy roster",
   ar_pipeline: "A&R pipeline",
@@ -498,11 +616,48 @@ function splitMultiValueField(value) {
     .filter(Boolean);
 }
 function normalizeCuratedArtists(value) {
-  return splitMultiValueField(value).slice(0, 10);
+  return splitMultiValueField(value);
 }
 function curatedArtistSlots(value) {
   const normalized = normalizeCuratedArtists(value);
-  return EMPTY_CURATED_ARTIST_SLOTS.map((_, index) => normalized[index] || "");
+  return normalized.length ? normalized : [""];
+}
+function normalizedGenreKey(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+function normalizeGenreValue(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const direct = GENRE_OPTIONS.find(option => option.toLowerCase() === raw.toLowerCase());
+  if (direct) return direct;
+  const key = normalizedGenreKey(raw);
+  if (!key) return "";
+  if (GENRE_SYNONYMS[key]) return GENRE_SYNONYMS[key];
+  let best = "";
+  let bestScore = 0;
+  const valueTokens = new Set(key.split(/\s+/).filter(Boolean));
+  GENRE_OPTIONS.forEach(option => {
+    const optionKey = normalizedGenreKey(option);
+    const optionTokens = optionKey.split(/\s+/).filter(Boolean);
+    let score = 0;
+    optionTokens.forEach(token => {
+      if (valueTokens.has(token)) score += 1;
+    });
+    if (key.includes(optionKey)) score += 2;
+    if (score > bestScore) {
+      best = option;
+      bestScore = score;
+    }
+  });
+  if (bestScore > 0) return best;
+  return "Other / Mixed";
+}
+function emptyCuratedArtists() {
+  return [""];
 }
 function uniqStrings(values = []) {
   return Array.from(new Set(values.filter(Boolean)));
@@ -1044,8 +1199,12 @@ function matchesStageFilter(stage, filterId) {
 }
 function matchesMarketingStatusFilter(status, filterId) {
   if (filterId === "all") return true;
-  if (filterId === "active") return status !== "complete" && status !== "rejected";
+  if (filterId === "active") return !isTerminalMarketingStatus(status);
   return status === filterId;
+}
+function isTerminalMarketingStatus(status) {
+  const normalized = normalizeMarketingStatus(status);
+  return normalized === "complete" || normalized === "rejected";
 }
 function marketingStatusTone(status, C) {
   switch (status) {
@@ -1093,9 +1252,9 @@ function summarizeMarketingItems(items = [], today = todayISO()) {
   items.forEach(item => {
     const normalized = normalizeMarketingItem(item);
     summary[normalized.status] = (summary[normalized.status] || 0) + 1;
-    if (normalized.status !== "complete" && normalized.status !== "rejected") summary.active += 1;
+    if (!isTerminalMarketingStatus(normalized.status)) summary.active += 1;
     (normalized.campaigns || []).forEach(campaign => campaigns.add(campaign));
-    if (normalized.dueDate && normalized.status !== "complete" && normalized.status !== "rejected") {
+    if (normalized.dueDate && !isTerminalMarketingStatus(normalized.status)) {
       if (normalized.dueDate < today) summary.overdue += 1;
       if (normalized.dueDate >= today && normalized.dueDate <= addDaysISO(today, 7)) summary.dueSoon += 1;
     }
@@ -1878,7 +2037,7 @@ function upsertTalentProfile(store, identity, seed = {}) {
     curatedArtists: uniqStrings([
       ...normalizeCuratedArtists(existing.curatedArtists),
       ...normalizeCuratedArtists(seed.curatedArtists),
-    ]).slice(0, 10),
+    ]),
   };
   store.byId.set(profileId, nextProfile);
   registerTalentIdentity(store.index, nextProfile, identity);
@@ -1947,7 +2106,7 @@ function collectWorkspaceTalentProfiles(projects = []) {
         artistName: artist.n,
         stage: normalizeStageId(normalizedProject.pipeline?.[artist.n]?.stage),
         owner: normalizedProject.assignments?.[artist.n] || "",
-        genre: artist.g || "",
+        genre: normalizeGenreValue(artist.g || ""),
         monthlyListeners: artist.l || "",
         hitTrack: artist.h || "",
         location: artist.loc || "",
@@ -2093,7 +2252,7 @@ function collectWorkspaceTalentProfiles(projects = []) {
       marketingAssignments: [...profile.marketingAssignments].sort((a, b) => a.projectName.localeCompare(b.projectName) || a.talentName.localeCompare(b.talentName)),
       talentTypes: uniqStrings(profile.talentTypes),
       sources: uniqStrings(profile.sources),
-      curatedArtists: uniqStrings(normalizeCuratedArtists(profile.curatedArtists)).slice(0, 10),
+      curatedArtists: uniqStrings(normalizeCuratedArtists(profile.curatedArtists)),
       recentActivity: [...(profile.recentActivity || [])]
         .filter(entry => entry?.time || entry?.action || entry?.note)
         .sort((a, b) => String(b?.time || "").localeCompare(String(a?.time || "")))
@@ -3327,7 +3486,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     spotifyUrl: "",
     location: "",
     curatorPageUrl: "",
-    curatedArtists: [...EMPTY_CURATED_ARTIST_SLOTS],
+    curatedArtists: emptyCuratedArtists(),
     profileSummary: "",
     note: "",
   });
@@ -3348,7 +3507,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     spotifyUrl: "",
     location: "",
     curatorPageUrl: "",
-    curatedArtists: [...EMPTY_CURATED_ARTIST_SLOTS],
+    curatedArtists: emptyCuratedArtists(),
     profileSummary: "",
   });
   const [artistEditSaving, setArtistEditSaving] = useState(false);
@@ -3380,6 +3539,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [showFullTalentTimeline, setShowFullTalentTimeline] = useState(false);
   const [showCampaignHubModal, setShowCampaignHubModal] = useState(false);
   const [showCampaignHubCreate, setShowCampaignHubCreate] = useState(false);
+  const [showArchivedCampaigns, setShowArchivedCampaigns] = useState(false);
   const [campaignHubCreateForm, setCampaignHubCreateForm] = useState(() => emptyCampaignDetailForm());
   const [campaignHubDrafts, setCampaignHubDrafts] = useState({});
   const [pendingWorkspaceAction, setPendingWorkspaceAction] = useState(null);
@@ -4151,6 +4311,24 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     () => selectedTalentProjectSummaries.filter(summary => summary.marketingAssignments.length),
     [selectedTalentProjectSummaries]
   );
+  const selectedTalentActiveMarketingProjectSummaries = useMemo(
+    () => selectedTalentMarketingProjectSummaries
+      .map(summary => ({
+        ...summary,
+        marketingAssignments: (summary.marketingAssignments || []).filter(assignment => !isTerminalMarketingStatus(assignment?.status || "prospect")),
+      }))
+      .filter(summary => summary.marketingAssignments.length),
+    [selectedTalentMarketingProjectSummaries]
+  );
+  const selectedTalentCompletedMarketingProjectSummaries = useMemo(
+    () => selectedTalentMarketingProjectSummaries
+      .map(summary => ({
+        ...summary,
+        marketingAssignments: (summary.marketingAssignments || []).filter(assignment => isTerminalMarketingStatus(assignment?.status || "prospect")),
+      }))
+      .filter(summary => summary.marketingAssignments.length),
+    [selectedTalentMarketingProjectSummaries]
+  );
   const selectedTalentPrimaryKickoffRecord = useMemo(
     () => selectedTalentKickoffProjectSummaries.flatMap(summary => summary.arRecords)[0] || null,
     [selectedTalentKickoffProjectSummaries]
@@ -4178,6 +4356,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     || selectedTalentPrimaryArRecord?.genre
     || ""
   ).trim();
+  const selectedTalentNormalizedGenre = normalizeGenreValue(selectedTalentGenre);
   const selectedTalentHitTrack = String(
     selectedTalentEditableKickoffRecord?.hitTrack
     || selectedTalentPrimaryKickoffRecord?.hitTrack
@@ -4211,7 +4390,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const selectedTalentSources = selectedTalentProfile?.sources || [];
   const selectedTalentMarketingAssignments = selectedTalentProfile?.marketingAssignments || [];
   const selectedTalentProfileCardTitle = selectedTalentTypes.includes("Curator") ? "Curator Profile" : "Artist Profile";
-  const selectedTalentKickoffCardTitle = "Current Kickoff Status";
+  const selectedTalentKickoffCardTitle = "Kickoff Details";
   const selectedTalentProfileSummary = String(
     selectedTalentProfile?.profileSummary
     || selectedTalentEditableKickoffRecord?.profileSummary
@@ -4304,7 +4483,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       : selectedTalentProfile?.curatedArtists
   );
   const selectedTalentHeaderMeta = [
-    selectedTalentGenre || "",
+    selectedTalentNormalizedGenre || selectedTalentGenre || "",
     selectedTalentListeners ? `${selectedTalentListeners} listeners` : "",
     selectedTalentPrimaryEmail || "",
   ].filter(Boolean);
@@ -4313,9 +4492,55 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     : !!selectedTalentMarketingAssignments.length;
   const showSelectedTalentSpotifyRow = !!selectedTalentSpotifyUrl || !!selectedTalentListeners;
   const selectedTalentRealCampaigns = useMemo(
-    () => (selectedTalentProfile?.campaigns || []).filter(campaign => campaign && campaign !== "No campaign"),
-    [selectedTalentProfile]
+    () => uniqStrings(
+      selectedTalentActiveMarketingProjectSummaries.flatMap(summary =>
+        (summary.marketingAssignments || []).flatMap(assignment => marketingRealCampaigns(assignment))
+      )
+    ),
+    [selectedTalentActiveMarketingProjectSummaries]
   );
+  const selectedTalentCompletedCampaigns = useMemo(
+    () => uniqStrings(
+      selectedTalentCompletedMarketingProjectSummaries.flatMap(summary =>
+        (summary.marketingAssignments || []).flatMap(assignment => marketingRealCampaigns(assignment))
+      )
+    ),
+    [selectedTalentCompletedMarketingProjectSummaries]
+  );
+  const selectedTalentActiveStatusParts = useMemo(() => {
+    const counts = {};
+    selectedTalentActiveMarketingProjectSummaries.forEach(summary => {
+      (summary.marketingAssignments || []).forEach(assignment => {
+        const normalizedStatus = normalizeMarketingStatus(assignment?.status || "");
+        if (!normalizedStatus) return;
+        counts[normalizedStatus] = (counts[normalizedStatus] || 0) + 1;
+      });
+    });
+    return Object.entries(counts)
+      .sort((a, b) => (MARKETING_STATUS_ORDER[a[0]] ?? 999) - (MARKETING_STATUS_ORDER[b[0]] ?? 999) || b[1] - a[1])
+      .map(([status, count]) => ({
+        id: status,
+        count,
+        label: MM[status]?.label || titleCaseWords(status),
+      }));
+  }, [selectedTalentActiveMarketingProjectSummaries]);
+  const selectedTalentCompletedStatusParts = useMemo(() => {
+    const counts = {};
+    selectedTalentCompletedMarketingProjectSummaries.forEach(summary => {
+      (summary.marketingAssignments || []).forEach(assignment => {
+        const normalizedStatus = normalizeMarketingStatus(assignment?.status || "");
+        if (!normalizedStatus) return;
+        counts[normalizedStatus] = (counts[normalizedStatus] || 0) + 1;
+      });
+    });
+    return Object.entries(counts)
+      .sort((a, b) => (MARKETING_STATUS_ORDER[a[0]] ?? 999) - (MARKETING_STATUS_ORDER[b[0]] ?? 999) || b[1] - a[1])
+      .map(([status, count]) => ({
+        id: status,
+        count,
+        label: MM[status]?.label || titleCaseWords(status),
+      }));
+  }, [selectedTalentCompletedMarketingProjectSummaries]);
   const kickoffTalentRecordCount = useMemo(
     () => selectedTalentKickoffProjectSummaries.reduce((count, summary) => count + summary.arRecords.length, 0),
     [selectedTalentKickoffProjectSummaries]
@@ -4340,7 +4565,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       : talentOverviewRecentActivity.slice(0, talentTimelineDefaultCount),
     [showFullTalentTimeline, talentOverviewRecentActivity, talentTimelineDefaultCount]
   );
-  const liveCampaignHubRows = useMemo(() => {
+  const liveCampaignHubData = useMemo(() => {
     const byCampaign = new Map();
     const ensureCampaignSummary = (campaignName) => {
       const normalizedName = String(campaignName || "").trim();
@@ -4349,10 +4574,14 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         byCampaign.set(normalizedName, {
           name: normalizedName,
           assignments: 0,
+          activeAssignments: 0,
+          completedAssignments: 0,
           talentNames: new Set(),
           owners: new Set(),
           statuses: {},
+          completedStatuses: {},
           assignmentDueDates: [],
+          updatedAtValues: [],
           detailOwner: "",
           briefUrl: "",
           dueDate: "",
@@ -4381,21 +4610,34 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
           campaignNames.forEach(campaignName => {
             const summary = ensureCampaignSummary(campaignName);
             if (!summary) return;
+            const normalizedStatus = normalizeMarketingStatus(item.status || "prospect");
             summary.assignments += 1;
+            if (isTerminalMarketingStatus(normalizedStatus)) summary.completedAssignments += 1;
+            else summary.activeAssignments += 1;
             if (item.talentName) summary.talentNames.add(item.talentName);
             if (item.owner) summary.owners.add(item.owner);
-            summary.statuses[item.status] = (summary.statuses[item.status] || 0) + 1;
-            if (item.dueDate) summary.assignmentDueDates.push(item.dueDate);
+            summary.statuses[normalizedStatus] = (summary.statuses[normalizedStatus] || 0) + 1;
+            if (isTerminalMarketingStatus(normalizedStatus)) {
+              summary.completedStatuses[normalizedStatus] = (summary.completedStatuses[normalizedStatus] || 0) + 1;
+            }
+            if (item.dueDate && !isTerminalMarketingStatus(normalizedStatus)) summary.assignmentDueDates.push(item.dueDate);
+            if (item.updatedAt) summary.updatedAtValues.push(item.updatedAt);
           });
         });
     });
-    return [...byCampaign.values()]
-      .map(summary => ({
+    const rows = [...byCampaign.values()]
+      .map(summary => {
+        const archived = summary.assignments > 0 && summary.activeAssignments === 0;
+        const statusSource = archived ? summary.completedStatuses : summary.statuses;
+        return {
         name: summary.name,
         assignments: summary.assignments,
+        activeAssignments: summary.activeAssignments,
+        completedAssignments: summary.completedAssignments,
+        archived,
         talentCount: summary.talentNames.size,
         owners: uniqStrings([summary.detailOwner, ...summary.owners]),
-        statusParts: Object.entries(summary.statuses)
+        statusParts: Object.entries(statusSource)
           .sort((a, b) => (MARKETING_STATUS_ORDER[a[0]] ?? 999) - (MARKETING_STATUS_ORDER[b[0]] ?? 999) || b[1] - a[1])
           .map(([status, count]) => ({
             id: status,
@@ -4405,13 +4647,21 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         briefUrl: summary.briefUrl,
         dueDate: summary.dueDate || summary.assignmentDueDates.sort()[0] || "",
         notes: summary.notes,
-      }))
+        lastUpdated: summary.updatedAtValues.sort().slice(-1)[0] || "",
+      };
+      })
       .sort((a, b) => {
         const assignmentCompare = b.assignments - a.assignments;
         if (assignmentCompare !== 0) return assignmentCompare;
         return a.name.localeCompare(b.name);
       });
+    return {
+      activeRows: rows.filter(row => !row.archived),
+      archivedRows: rows.filter(row => row.archived),
+    };
   }, [liveMarketingProjects]);
+  const liveCampaignHubRows = liveCampaignHubData.activeRows;
+  const archivedLiveCampaignHubRows = liveCampaignHubData.archivedRows;
   const liveCampaignHubUnassigned = useMemo(() => {
     const talentNames = new Set();
     let assignments = 0;
@@ -4434,11 +4684,57 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     [liveCampaignHubRows]
   );
   const liveCampaignCount = liveCampaignHubRows.length;
+  const archivedLiveCampaignCount = archivedLiveCampaignHubRows.length;
+  const workspaceReportRows = useMemo(() => {
+    const ownerCounts = new Map();
+    const ensureOwner = (owner) => {
+      const normalized = String(owner || "").trim() || "Unassigned";
+      if (!ownerCounts.has(normalized)) {
+        ownerCounts.set(normalized, {
+          owner: normalized,
+          kickoff: 0,
+          liveAssignments: 0,
+          completedAssignments: 0,
+          campaigns: new Set(),
+        });
+      }
+      return ownerCounts.get(normalized);
+    };
+
+    kickoffProfiles.forEach(profile => {
+      const owners = profile.owners.length ? profile.owners : ["Unassigned"];
+      owners.forEach(owner => {
+        ensureOwner(owner).kickoff += 1;
+      });
+    });
+
+    liveCrmProfiles.forEach(profile => {
+      const assignments = Array.isArray(profile.marketingAssignments) ? profile.marketingAssignments : [];
+      if (!assignments.length) {
+        const owners = profile.owners.length ? profile.owners : ["Unassigned"];
+        owners.forEach(owner => ensureOwner(owner));
+        return;
+      }
+      assignments.forEach(assignment => {
+        const ownerRow = ensureOwner(assignment.owner || "Unassigned");
+        if (isTerminalMarketingStatus(assignment.status || "prospect")) ownerRow.completedAssignments += 1;
+        else ownerRow.liveAssignments += 1;
+        marketingRealCampaigns(assignment).forEach(campaign => ownerRow.campaigns.add(campaign));
+      });
+    });
+
+    return [...ownerCounts.values()]
+      .map(row => ({
+        ...row,
+        campaignCount: row.campaigns.size,
+      }))
+      .sort((a, b) => (b.kickoff + b.liveAssignments + b.completedAssignments) - (a.kickoff + a.liveAssignments + a.completedAssignments) || a.owner.localeCompare(b.owner));
+  }, [kickoffProfiles, liveCrmProfiles]);
   useEffect(() => {
     if (!showCampaignHubModal) return;
     setCampaignHubDrafts(prev => {
       const next = {};
-      liveCampaignHubRows.forEach(campaign => {
+      [...liveCampaignHubRows, ...archivedLiveCampaignHubRows].forEach(campaign => {
         next[campaign.name] = prev[campaign.name] || {
           ...emptyCampaignDetailForm(campaign.name),
           owner: campaign.owners[0] || "",
@@ -4449,7 +4745,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       });
       return next;
     });
-  }, [showCampaignHubModal, liveCampaignHubRows]);
+  }, [showCampaignHubModal, liveCampaignHubRows, archivedLiveCampaignHubRows]);
   const sessionUserName = useMemo(
     () => resolveSessionUserName(authEmail, authUserId, proj?.teamUsers || DEFAULT_TEAM_USERS),
     [authEmail, authUserId, proj?.teamUsers],
@@ -4650,7 +4946,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     spotifyUrl: "",
     location: "",
     curatorPageUrl: "",
-    curatedArtists: [...EMPTY_CURATED_ARTIST_SLOTS],
+    curatedArtists: emptyCuratedArtists(),
     profileSummary: "",
     note: "",
   });
@@ -4775,7 +5071,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   };
   const seedArtistEditForm = artist => setArtistEditForm({
     name: artist?.n || "",
-    genre: artist?.g || "",
+    genre: normalizeGenreValue(artist?.g || ""),
     listeners: artist?.l || "",
     hitTrack: artist?.h || "",
     social: artist?.soc ? `@${artist.soc}` : (artist?.ig || ""),
@@ -4794,7 +5090,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   });
   const seedArtistEditFormFromTalent = (profile, kickoffRecord = null, marketingAssignment = null) => setArtistEditForm({
     name: String(kickoffRecord?.artistName || marketingAssignment?.talentName || profile?.displayName || "").trim(),
-    genre: String(kickoffRecord?.genre || "").trim(),
+    genre: normalizeGenreValue(String(kickoffRecord?.genre || "").trim()),
     listeners: String(
       kickoffRecord?.monthlyListeners
       || marketingAssignment?.spotifyMonthlyListeners
@@ -5120,7 +5416,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       updateWorkspaceUrl(proj.id, "", "", isMarketingProject && showMarketingItemModal && marketingForm.id ? marketingForm.id : "");
       return;
     }
-    if (screen === "hub" || screen === "workspace" || screen === "kickoff" || screen === "live-crm") {
+    if (screen === "hub" || screen === "workspace" || screen === "kickoff" || screen === "live-crm" || screen === "workspace-report") {
       updateWorkspaceUrl("", "", "", "");
     }
   }, [loading, screen, proj?.id, selA?.n, detailTab, isMarketingProject, showMarketingItemModal, marketingForm.id]);
@@ -6275,7 +6571,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     const socialHandle = normalizeSocialHandle(artistForm.social);
     const nextArtist = {
       n: name,
-      g: artistForm.genre.trim(),
+      g: normalizeGenreValue(artistForm.genre),
       l: artistForm.listeners.trim(),
       h: artistForm.hitTrack.trim(),
       ig: socialHandle ? `@${socialHandle}` : "",
@@ -6594,7 +6890,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     const nextArtist = {
       ...artist,
       n: nextName,
-      g: artistEditForm.genre.trim(),
+      g: normalizeGenreValue(artistEditForm.genre),
       l: artistEditForm.listeners.trim(),
       h: artistEditForm.hitTrack.trim(),
       ig: socialHandle ? `@${socialHandle}` : "",
@@ -7057,7 +7353,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     const nextArtist = {
       ...targetArtist,
       n: nextName,
-      g: artistEditForm.genre.trim(),
+      g: normalizeGenreValue(artistEditForm.genre),
       l: artistEditForm.listeners.trim(),
       h: artistEditForm.hitTrack.trim(),
       ig: socialHandle ? `@${socialHandle}` : "",
@@ -9239,7 +9535,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     </button>
   );
 
-  const WorkspaceOverlays = () => (
+  const workspaceOverlays = (
     <>
       {showAddArtist && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 120 }} onClick={e => { if (e.target === e.currentTarget) { setShowAddArtist(false); resetArtistForm(); } }}>
@@ -9251,8 +9547,11 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                 : "Manual add for artists you want in the pipeline before a CSV import."}
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-              <input value={artistForm.name} onChange={e => setArtistForm(prev => ({ ...prev, name: e.target.value }))} placeholder={isCuratorProject ? "Curator name*" : "Artist name*"} autoFocus style={{ ...iS, width: "100%" }} />
-              <input value={artistForm.genre} onChange={e => setArtistForm(prev => ({ ...prev, genre: e.target.value }))} placeholder="Genre / vibe" autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} style={{ ...iS, width: "100%" }} />
+              <input value={artistForm.name} onChange={e => setArtistForm(prev => ({ ...prev, name: e.target.value }))} placeholder={isCuratorProject ? "Curator name*" : "Artist name*"} style={{ ...iS, width: "100%" }} />
+              <select value={artistForm.genre} onChange={e => setArtistForm(prev => ({ ...prev, genre: e.target.value }))} style={{ ...iS, width: "100%" }}>
+                <option value="">Genre / vibe</option>
+                {GENRE_OPTIONS.map(option => <option key={`artist-genre-${option}`} value={option}>{option}</option>)}
+              </select>
               <input value={artistForm.listeners} onChange={e => setArtistForm(prev => ({ ...prev, listeners: e.target.value }))} placeholder="Monthly listeners" style={{ ...iS, width: "100%" }} />
               <input value={artistForm.hitTrack} onChange={e => setArtistForm(prev => ({ ...prev, hitTrack: e.target.value }))} placeholder="Hit track" style={{ ...iS, width: "100%" }} />
               <input value={artistForm.social} onChange={e => setArtistForm(prev => ({ ...prev, social: e.target.value }))} placeholder="@handle or profile URL" style={{ ...iS, width: "100%" }} />
@@ -9263,25 +9562,48 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
               )}
               <input value={artistForm.contactName} onChange={e => setArtistForm(prev => ({ ...prev, contactName: e.target.value }))} placeholder="Primary contact name" style={{ ...iS, width: "100%" }} />
               <input value={artistForm.contactEmail} onChange={e => setArtistForm(prev => ({ ...prev, contactEmail: e.target.value }))} placeholder="Primary contact email" style={{ ...iS, width: "100%" }} />
-              <input value={artistForm.contactType} onChange={e => setArtistForm(prev => ({ ...prev, contactType: e.target.value }))} placeholder="Contact type (Manager, Artist, Team...)" style={{ ...iS, width: "100%", gridColumn: "1 / span 2" }} />
+              <select value={artistForm.contactType} onChange={e => setArtistForm(prev => ({ ...prev, contactType: e.target.value }))} style={{ ...iS, width: "100%", gridColumn: "1 / span 2" }}>
+                <option value="">Contact type</option>
+                {CONTACT_TYPE_OPTIONS.map(option => <option key={`artist-contact-type-${option}`} value={option}>{option}</option>)}
+              </select>
               <input value={artistForm.location} onChange={e => setArtistForm(prev => ({ ...prev, location: e.target.value }))} placeholder="Location" style={{ ...iS, width: "100%", gridColumn: "1 / span 2" }} />
               {isCuratorProject && (
                 <div style={{ gridColumn: "1 / span 2" }}>
                   <div style={{ fontSize: 11, color: C.tt, marginBottom: 8 }}>Curated artists they vouch for</div>
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10 }}>
+                  <div style={{ display: "grid", gap: 10 }}>
                     {artistForm.curatedArtists.map((value, index) => (
-                      <input
-                        key={`new-curated-${index}`}
-                        value={value}
-                        onChange={e => setArtistForm(prev => {
-                          const next = [...prev.curatedArtists];
-                          next[index] = e.target.value;
-                          return { ...prev, curatedArtists: next };
-                        })}
-                        placeholder={`Curated artist ${index + 1}`}
-                        style={{ ...iS, width: "100%" }}
-                      />
+                      <div key={`new-curated-${index}`} style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 8 }}>
+                        <input
+                          value={value}
+                          onChange={e => setArtistForm(prev => {
+                            const next = [...prev.curatedArtists];
+                            next[index] = e.target.value;
+                            return { ...prev, curatedArtists: next };
+                          })}
+                          placeholder={index === 0 ? "Add vouched-for artist" : `Vouched-for artist ${index + 1}`}
+                          style={{ ...iS, width: "100%" }}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setArtistForm(prev => {
+                            const next = prev.curatedArtists.filter((_, itemIndex) => itemIndex !== index);
+                            return { ...prev, curatedArtists: next.length ? next : [""] };
+                          })}
+                          style={compactActionBtn(false, "danger")}
+                        >
+                          Remove
+                        </button>
+                      </div>
                     ))}
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 10 }}>
+                    <button
+                      type="button"
+                      onClick={() => setArtistForm(prev => ({ ...prev, curatedArtists: [...prev.curatedArtists, ""] }))}
+                      style={compactActionBtn(false, "accent")}
+                    >
+                      + Vouched Artist
+                    </button>
                   </div>
                 </div>
               )}
@@ -9326,20 +9648,33 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
 
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                <span style={{ ...mkP(true, C.bu, C.bb), cursor: "default" }}>{liveCampaignHubRows.length} campaigns</span>
+                <span style={{ ...mkP(true, C.bu, C.bb), cursor: "default" }}>{liveCampaignHubRows.length} active campaigns</span>
+                {archivedLiveCampaignCount > 0 && (
+                  <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{archivedLiveCampaignCount} completed campaigns</span>
+                )}
                 <span style={{ ...mkP(true, C.pr, C.pb), cursor: "default" }}>{liveCrmOverview.assignments} assignments</span>
                 <span style={{ ...mkP(true, C.lv, C.lvb), cursor: "default" }}>{liveCrmOverview.liveTalents} live talent</span>
               </div>
-              <button
-                onClick={() => {
-                  setShowCampaignHubCreate(prev => !prev);
-                  if (showCampaignHubCreate) setCampaignHubCreateForm(emptyCampaignDetailForm());
-                }}
-                disabled={isReadOnly}
-                style={{ ...actionBtn(true, "accent"), ...lockStyle(isReadOnly) }}
-              >
-                {showCampaignHubCreate ? "Close New Campaign" : "+ New Campaign"}
-              </button>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                {archivedLiveCampaignCount > 0 && (
+                  <button
+                    onClick={() => setShowArchivedCampaigns(prev => !prev)}
+                    style={actionBtn(false, "neutral")}
+                  >
+                    {showArchivedCampaigns ? "Hide Completed" : "Show Completed"}
+                  </button>
+                )}
+                <button
+                  onClick={() => {
+                    setShowCampaignHubCreate(prev => !prev);
+                    if (showCampaignHubCreate) setCampaignHubCreateForm(emptyCampaignDetailForm());
+                  }}
+                  disabled={isReadOnly}
+                  style={{ ...actionBtn(true, "accent"), ...lockStyle(isReadOnly) }}
+                >
+                  {showCampaignHubCreate ? "Close New Campaign" : "+ New Campaign"}
+                </button>
+              </div>
             </div>
 
             {showCampaignHubCreate && (
@@ -9500,6 +9835,72 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                   {liveCampaignHubUnassigned.assignments > 0
                     ? <>There are {liveCampaignHubUnassigned.assignments} live assignments without a campaign yet. Start one from Live Roster with <strong style={{ color: C.tx }}>+ Campaign Assignment</strong>.</>
                     : <>No campaigns are moving yet. Start one from Live Roster with <strong style={{ color: C.tx }}>+ Campaign Assignment</strong>.</>}
+                </div>
+              )}
+              {showArchivedCampaigns && archivedLiveCampaignHubRows.length > 0 && (
+                <div style={{ display: "grid", gap: 10, marginTop: 6 }}>
+                  <div style={{ padding: "0 2px" }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: C.tx, marginBottom: 4 }}>Completed Campaigns</div>
+                    <div style={{ fontSize: 12, color: C.ts }}>
+                      These are archived campaign logs. They stay searchable here and in artist campaign history, but they stay out of the active campaign flow.
+                    </div>
+                  </div>
+                  {archivedLiveCampaignHubRows.map(campaign => (
+                    <div key={`campaign-hub-archived-${campaign.name}`} style={{ padding: "14px 16px", borderRadius: 16, border: `1px solid ${C.bd}`, background: C.sf }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, flexWrap: "wrap", marginBottom: 8 }}>
+                        <div>
+                          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 4 }}>
+                            <div style={{ fontSize: 16, fontWeight: 700, color: C.tx }}>{campaign.name}</div>
+                            <span style={{ ...mkP(true, C.gn, C.gb), cursor: "default" }}>Completed</span>
+                          </div>
+                          <div style={{ fontSize: 12, color: C.ts }}>
+                            {campaign.talentCount} talent · {campaign.completedAssignments || campaign.assignments} completed assignment{(campaign.completedAssignments || campaign.assignments) === 1 ? "" : "s"}
+                            {campaign.lastUpdated ? ` · Last updated ${rD(campaign.lastUpdated)}` : ""}
+                          </div>
+                        </div>
+                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                          <button
+                            onClick={() => {
+                              setLiveCrmCampaignFilter(campaign.name);
+                              setShowCampaignHubModal(false);
+                              flash(`Focused Live Roster on ${campaign.name}`);
+                            }}
+                            style={actionBtn(false, "accent")}
+                          >
+                            Focus Roster
+                          </button>
+                          <button
+                            onClick={() => { void deleteLiveCampaign(campaign.name); }}
+                            disabled={isReadOnly}
+                            style={{ ...actionBtn(false, "danger"), ...lockStyle(isReadOnly) }}
+                          >
+                            Delete Campaign
+                          </button>
+                        </div>
+                      </div>
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        {campaign.owners.length ? campaign.owners.map(owner => (
+                          <span key={`${campaign.name}:archived-owner:${owner}`} style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{owner}</span>
+                        )) : <span style={{ ...mkP(true, C.tt, C.sa), cursor: "default" }}>Unassigned</span>}
+                        {campaign.statusParts?.length ? campaign.statusParts.map(part => (
+                          <span key={`${campaign.name}:archived-status:${part.id}`} style={{ ...mkP(true, marketingStatusTone(part.id, C).tone, marketingStatusTone(part.id, C).bg), cursor: "default" }}>
+                            {part.label} {part.count}
+                          </span>
+                        )) : null}
+                      </div>
+                      {(campaign.notes || campaign.briefUrl || campaign.dueDate) && (
+                        <div style={{ display: "grid", gap: 4, marginTop: 10, fontSize: 12, color: C.ts }}>
+                          {campaign.dueDate && <div><strong style={{ color: C.tx }}>Campaign due:</strong> {sD(campaign.dueDate)}</div>}
+                          {campaign.notes && <div><strong style={{ color: C.tx }}>Campaign notes:</strong> {campaign.notes}</div>}
+                          {campaign.briefUrl && (
+                            <a href={campaign.briefUrl} target="_blank" rel="noopener" style={{ color: C.ac, textDecoration: "none", width: "fit-content" }}>
+                              Open Brief
+                            </a>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  ))}
                 </div>
               )}
               {liveCampaignHubUnassigned.assignments > 0 && (
@@ -9695,7 +10096,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
             )}
 
             <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr", gap: 10 }}>
-              <input value={marketingForm.talentName} onChange={e => setMarketingForm({ ...marketingForm, talentName: e.target.value })} placeholder="Talent name*" autoFocus style={{ ...iS, width: "100%" }} />
+              <input value={marketingForm.talentName} onChange={e => setMarketingForm({ ...marketingForm, talentName: e.target.value })} placeholder="Talent name*" style={{ ...iS, width: "100%" }} />
               <input value={marketingForm.title} onChange={e => setMarketingForm({ ...marketingForm, title: e.target.value })} placeholder="Title or deliverable headline" style={{ ...iS, width: "100%" }} />
 
               <label style={{ fontSize: 12, color: C.ts, display: "grid", gap: 4 }}>
@@ -9772,7 +10173,10 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                 <span>Due date</span>
                 <input type="date" value={marketingForm.dueDate} onChange={e => setMarketingForm({ ...marketingForm, dueDate: e.target.value })} style={{ ...iS, width: "100%" }} />
               </label>
-              <input value={marketingForm.contactType} onChange={e => setMarketingForm({ ...marketingForm, contactType: e.target.value })} placeholder="Contact type (Manager, Artist, Team...)" style={{ ...iS, width: "100%" }} />
+              <select value={marketingForm.contactType} onChange={e => setMarketingForm({ ...marketingForm, contactType: e.target.value })} style={{ ...iS, width: "100%" }}>
+                <option value="">Contact type</option>
+                {CONTACT_TYPE_OPTIONS.map(option => <option key={`marketing-contact-type-${option}`} value={option}>{option}</option>)}
+              </select>
               <input value={marketingForm.instagramUrl} onChange={e => setMarketingForm({ ...marketingForm, instagramUrl: e.target.value, instagramHandle: normalizeSocialHandle(e.target.value) })} placeholder="Instagram URL" style={{ ...iS, width: "100%" }} />
 
               <input value={marketingForm.instagramFollowers} onChange={e => setMarketingForm({ ...marketingForm, instagramFollowers: normalizeFollowerCount(e.target.value) })} placeholder="Instagram followers" style={{ ...iS, width: "100%" }} />
@@ -9958,7 +10362,10 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                     </div>
                     <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10 }}>
                       <input value={artistEditForm.name} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, name: e.target.value }))} placeholder={selectedTalentTypes.includes("Curator") ? "Curator name" : "Artist name"} style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
-                      <input value={artistEditForm.genre} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, genre: e.target.value }))} placeholder="Genre / vibe" autoCorrect="off" autoCapitalize="off" spellCheck={false} style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
+                      <select value={artistEditForm.genre} disabled={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, genre: e.target.value }))} style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }}>
+                        <option value="">Genre / vibe</option>
+                        {GENRE_OPTIONS.map(option => <option key={`edit-genre-${option}`} value={option}>{option}</option>)}
+                      </select>
                       <input value={artistEditForm.listeners} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, listeners: e.target.value }))} placeholder="Monthly listeners" style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
                       <input value={artistEditForm.hitTrack} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, hitTrack: e.target.value }))} placeholder="Hit track" style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
                       <input value={artistEditForm.social} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, social: e.target.value }))} placeholder="Instagram handle or URL" style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
@@ -9969,7 +10376,10 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                       <input value={artistEditForm.email} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, email: e.target.value }))} placeholder="Email" style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
                       <input value={artistEditForm.contactName} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, contactName: e.target.value }))} placeholder="Primary contact name" style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
                       <input value={artistEditForm.contactEmail} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, contactEmail: e.target.value }))} placeholder="Primary contact email" style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
-                      <input value={artistEditForm.contactType} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, contactType: e.target.value }))} placeholder="Contact type (Manager, Artist, Team...)" style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
+                      <select value={artistEditForm.contactType} disabled={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, contactType: e.target.value }))} style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }}>
+                        <option value="">Contact type</option>
+                        {CONTACT_TYPE_OPTIONS.map(option => <option key={`edit-contact-type-${option}`} value={option}>{option}</option>)}
+                      </select>
                       <input value={artistEditForm.location} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, location: e.target.value }))} placeholder="Location" style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
                       {selectedTalentTypes.includes("Curator") && (
                         <input value={artistEditForm.curatorPageUrl} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, curatorPageUrl: e.target.value }))} placeholder="Curator page link" style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
@@ -9978,21 +10388,43 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                     {selectedTalentTypes.includes("Curator") && (
                       <div>
                         <div style={{ fontSize: 11, color: C.tt, marginBottom: 8 }}>Curated artists they vouch for</div>
-                        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10 }}>
+                        <div style={{ display: "grid", gap: 10 }}>
                           {artistEditForm.curatedArtists.map((value, index) => (
-                            <input
-                              key={`talent-curated-${index}`}
-                              value={value}
-                              readOnly={isReadOnly}
-                              onChange={e => setArtistEditForm(prev => {
-                                const next = [...prev.curatedArtists];
-                                next[index] = e.target.value;
-                                return { ...prev, curatedArtists: next };
-                              })}
-                              placeholder={`Curated artist ${index + 1}`}
-                              style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }}
-                            />
+                            <div key={`talent-curated-${index}`} style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 8 }}>
+                              <input
+                                value={value}
+                                readOnly={isReadOnly}
+                                onChange={e => setArtistEditForm(prev => {
+                                  const next = [...prev.curatedArtists];
+                                  next[index] = e.target.value;
+                                  return { ...prev, curatedArtists: next };
+                                })}
+                                placeholder={index === 0 ? "Add vouched-for artist" : `Vouched-for artist ${index + 1}`}
+                                style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }}
+                              />
+                              <button
+                                type="button"
+                                onClick={() => setArtistEditForm(prev => {
+                                  const next = prev.curatedArtists.filter((_, itemIndex) => itemIndex !== index);
+                                  return { ...prev, curatedArtists: next.length ? next : [""] };
+                                })}
+                                disabled={isReadOnly}
+                                style={{ ...compactActionBtn(false, "danger"), ...lockStyle(isReadOnly) }}
+                              >
+                                Remove
+                              </button>
+                            </div>
                           ))}
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 10 }}>
+                          <button
+                            type="button"
+                            onClick={() => setArtistEditForm(prev => ({ ...prev, curatedArtists: [...prev.curatedArtists, ""] }))}
+                            disabled={isReadOnly}
+                            style={{ ...compactActionBtn(false, "accent"), ...lockStyle(isReadOnly) }}
+                          >
+                            + Vouched Artist
+                          </button>
                         </div>
                       </div>
                     )}
@@ -10002,7 +10434,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                   <div style={{ display: "grid", gap: 10, fontSize: 13 }}>
                     <div className="gf-rail-kv">
                       <span className="gf-rail-kv-label">Genre / vibe</span>
-                      <span className="gf-rail-kv-value">{selectedTalentGenre || "Not set yet"}</span>
+                      <span className="gf-rail-kv-value">{selectedTalentNormalizedGenre || selectedTalentGenre || "Not set yet"}</span>
                     </div>
                     <div className="gf-rail-kv">
                       <span className="gf-rail-kv-label">Monthly listeners</span>
@@ -10267,7 +10699,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                 </button>
               </div>
               <div style={{ display: "grid", gap: 10 }}>
-                {selectedTalentMarketingProjectSummaries.length ? selectedTalentMarketingProjectSummaries.map(summary => (
+                {selectedTalentActiveMarketingProjectSummaries.length ? selectedTalentActiveMarketingProjectSummaries.map(summary => (
                   <div key={`marketing:${summary.projectId}`} style={{ padding: "12px 14px", borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sa }}>
                     <div style={{ fontSize: 12, color: C.tt, marginBottom: 10 }}>{workspaceRecordLabel(summary.projectType, "live")}</div>
                     <div style={{ display: "grid", gap: 10 }}>
@@ -10358,13 +10790,15 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                             </button>
                             {assignment.briefUrl && <a href={assignment.briefUrl} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Brief</a>}
                             {assignment.contentUrl && <a href={assignment.contentUrl} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Content</a>}
-                            <button
-                              onClick={() => { void clearMarketingItemCampaign(assignment.assignmentId); }}
-                              disabled={isReadOnly}
-                              style={{ ...actionBtn(false, "neutral"), ...lockStyle(isReadOnly) }}
-                            >
-                              Remove from Campaign
-                            </button>
+                            {!isTerminalMarketingStatus(assignment.status || "prospect") && (
+                              <button
+                                onClick={() => { void clearMarketingItemCampaign(assignment.assignmentId); }}
+                                disabled={isReadOnly}
+                                style={{ ...actionBtn(false, "neutral"), ...lockStyle(isReadOnly) }}
+                              >
+                                Remove from Campaign
+                              </button>
+                            )}
                             <button
                               onClick={() => { void deleteMarketingItem(assignment.assignmentId); }}
                               disabled={isReadOnly}
@@ -10378,7 +10812,78 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                     </div>
                   </div>
                 )) : (
-                  <div style={{ fontSize: 12, color: C.tt }}>No marketing assignments linked yet.</div>
+                  <div style={{ fontSize: 12, color: C.tt }}>No active campaign assignments linked yet.</div>
+                )}
+                {selectedTalentCompletedMarketingProjectSummaries.length > 0 && (
+                  <div style={{ ...cS, padding: "16px 18px", background: C.sf }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
+                      <div>
+                        <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 4 }}>Completed Campaign History</div>
+                        <div style={{ fontSize: 12, color: C.ts }}>
+                          Finished campaign work stays here as a clean log so it no longer clutters active campaign operations.
+                        </div>
+                      </div>
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        {selectedTalentCompletedCampaigns.map(campaign => (
+                          <span key={`completed-campaign-chip:${campaign}`} style={{ ...mkP(true, C.gn, C.gb), cursor: "default" }}>{campaign}</span>
+                        ))}
+                        {selectedTalentCompletedStatusParts.map(part => (
+                          <span key={`completed-status-chip:${part.id}`} style={{ ...mkP(true, marketingStatusTone(part.id, C).tone, marketingStatusTone(part.id, C).bg), cursor: "default" }}>
+                            {part.label} {part.count}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                    <div style={{ display: "grid", gap: 10 }}>
+                      {selectedTalentCompletedMarketingProjectSummaries.map(summary => (
+                        <div key={`marketing-completed:${summary.projectId}`} style={{ padding: "12px 14px", borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sa }}>
+                          <div style={{ fontSize: 12, color: C.tt, marginBottom: 10 }}>{workspaceRecordLabel(summary.projectType, "live")} · Archived</div>
+                          <div style={{ display: "grid", gap: 10 }}>
+                            {(summary.marketingAssignments || []).map(assignment => (
+                              <div key={`completed-${assignment.assignmentId}`} style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", padding: "12px 14px", borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sf }}>
+                                <div style={{ minWidth: 0 }}>
+                                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 6 }}>
+                                    <div style={{ fontSize: 14, fontWeight: 700, color: C.tx }}>{assignment.campaign || "Archived"}</div>
+                                    <span style={{ ...mkP(true, marketingStatusTone(assignment.status, C).tone, marketingStatusTone(assignment.status, C).bg), cursor: "default" }}>
+                                      {MM[assignment.status]?.label || "Complete"}
+                                    </span>
+                                    {assignment.owner && <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{assignment.owner}</span>}
+                                  </div>
+                                  <div style={{ fontSize: 11, color: C.tt }}>
+                                    {[assignment.title, assignment.trafficType, assignment.deliverableType, assignment.contentUrl ? "Content delivered" : ""].filter(Boolean).join(" · ") || "Completed assignment"}
+                                  </div>
+                                  {(assignment.notes || assignment.contentUrl || assignment.briefUrl) && (
+                                    <div style={{ display: "grid", gap: 4, marginTop: 8, fontSize: 11, color: C.ts, lineHeight: 1.5 }}>
+                                      {assignment.notes && <div><strong style={{ color: C.tx }}>Notes:</strong> {assignment.notes}</div>}
+                                      {assignment.contentUrl && <div><strong style={{ color: C.tx }}>Final content:</strong> {assignment.contentUrl}</div>}
+                                    </div>
+                                  )}
+                                </div>
+                                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                                  <button
+                                    onClick={() => openMarketingItemModal(assignment)}
+                                    disabled={isReadOnly}
+                                    style={{ ...actionBtn(false, "accent"), ...lockStyle(isReadOnly) }}
+                                  >
+                                    Edit Assignment
+                                  </button>
+                                  {assignment.briefUrl && <a href={assignment.briefUrl} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Brief</a>}
+                                  {assignment.contentUrl && <a href={assignment.contentUrl} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Content</a>}
+                                  <button
+                                    onClick={() => { void deleteMarketingItem(assignment.assignmentId); }}
+                                    disabled={isReadOnly}
+                                    style={{ ...actionBtn(false, "danger"), ...lockStyle(isReadOnly) }}
+                                  >
+                                    Delete Assignment
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 )}
               </div>
             </div>}
@@ -10442,7 +10947,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
             </div>
           </div>
         </div>
-      )}
+        )}
     </>
   );
 
@@ -10523,11 +11028,141 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                   Shared live talent roster with campaign assignments, groups, and marketing operations.
                 </div>
               </button>
+              <button
+                onClick={() => setScreen("workspace-report")}
+                style={{
+                  borderRadius: 16,
+                  border: `1px solid ${C.pr}40`,
+                  background: C.pb,
+                  padding: "16px 18px",
+                  cursor: "pointer",
+                  display: "grid",
+                  gap: 6,
+                  textAlign: "left",
+                  fontFamily: ft,
+                }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
+                  <span style={{ fontSize: 16, fontWeight: 800, color: C.pr }}>Open Reports</span>
+                  <span style={{ ...mkP(true, C.pr, C.sf), cursor: "pointer" }}>{workspaceReportRows.length}</span>
+                </div>
+                <div style={{ fontSize: 12, color: C.ts, lineHeight: 1.5 }}>
+                  Staff-level reporting across kickoff ownership, live campaign load, and completed work.
+                </div>
+              </button>
             </div>
           </div>
         </div>
 
-        <WorkspaceOverlays />
+        {workspaceOverlays}
+      </div>
+    </div>
+  );
+
+  // ═══ WORKSPACE REPORTS ═══
+  if (screen === "workspace-report") return (
+    <div style={{ fontFamily: ft, background: C.bg, minHeight: "100vh", color: C.tx }}>
+      <Toast /><style>{css}</style>
+      <div style={{ borderBottom: `1px solid ${C.bd}`, background: C.sf }}>
+        <div style={{ maxWidth: 1180, margin: "0 auto", padding: "16px 24px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <button
+            onClick={() => { setScreen("workspace"); updateWorkspaceUrl("", "", "", ""); }}
+            style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, fontFamily: ft, color: C.ac, fontWeight: 600 }}
+          >
+            ← {selectedWorkspace.name}
+          </button>
+          <DkBtn />
+        </div>
+      </div>
+
+      <div style={{ maxWidth: 1180, margin: "0 auto", padding: "24px" }}>
+        <div style={{ ...cS, marginBottom: 18, padding: "22px 24px", background: dark ? "linear-gradient(135deg, #111a2b 0%, #162238 100%)" : "linear-gradient(135deg, #ffffff 0%, #eef4ff 100%)" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(320px, 1.3fr) minmax(280px, 1fr)", gap: 18, alignItems: "stretch" }}>
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 3, textTransform: "uppercase", color: C.pr, marginBottom: 8 }}>Reports</div>
+              <div style={{ fontSize: 30, fontWeight: 800, letterSpacing: "-0.04em", marginBottom: 8 }}>{selectedWorkspace.name} · Staff Reporting</div>
+              <div style={{ fontSize: 13, lineHeight: 1.6, color: C.ts, maxWidth: 560 }}>
+                This is the team view across kickoff ownership, live campaign load, and completed delivery. Export from here when you want a staff slice instead of a roster slice.
+              </div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 14 }}>
+                <span style={{ ...mkP(true, C.ac, C.al), cursor: "default" }}>{kickoffOverview.talents} kickoff talent</span>
+                <span style={{ ...mkP(true, C.lv, C.lvb), cursor: "default" }}>{liveCrmOverview.liveTalents} live talent</span>
+                <span style={{ ...mkP(true, C.pr, C.pb), cursor: "default" }}>{liveCrmOverview.assignments} total assignments</span>
+                <span style={{ ...mkP(true, C.gn, C.gb), cursor: "default" }}>
+                  {workspaceReportRows.reduce((sum, row) => sum + row.completedAssignments, 0)} completed assignments
+                </span>
+              </div>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(120px, 1fr))", gap: 10 }}>
+              {[
+                ["Staff", workspaceReportRows.length, C.pr, C.pb],
+                ["Campaigns", liveCampaignCount + archivedLiveCampaignCount, C.bu, C.bb],
+                ["Active Load", workspaceReportRows.reduce((sum, row) => sum + row.liveAssignments, 0), C.lv, C.lvb],
+                ["Completed", workspaceReportRows.reduce((sum, row) => sum + row.completedAssignments, 0), C.gn, C.gb],
+              ].map(([label, value, tone, bg]) => (
+                <div key={`workspace-report-card-${label}`} style={{ borderRadius: 14, border: `1px solid ${C.bd}`, background: bg, padding: "14px 16px" }}>
+                  <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 1.2, color: C.tt, marginBottom: 8 }}>{label}</div>
+                  <div style={{ fontSize: 26, fontWeight: 800, color: tone, lineHeight: 1 }}>{value}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div style={{ ...cS, padding: "18px 20px", marginBottom: 16 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>Export Tools</div>
+              <div style={{ fontSize: 12, color: C.ts }}>
+                Export the current kickoff or live roster slice directly from the workspace.
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button onClick={exportKickoffView} style={{ ...actionBtn(false, "neutral"), ...lockStyle(!kickoffProfiles.length) }}>Export Kickoff CSV</button>
+              <button onClick={exportLiveRosterView} style={{ ...actionBtn(false, "neutral"), ...lockStyle(!liveCrmProfiles.length) }}>Export Live Roster CSV</button>
+            </div>
+          </div>
+        </div>
+
+        <div style={{ ...cS, overflow: "hidden" }}>
+          <div style={{ padding: "18px 20px", borderBottom: `1px solid ${C.bd}` }}>
+            <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>Staff Breakdown</div>
+            <div style={{ fontSize: 12, color: C.ts }}>
+              Kickoff counts show how many pre-live talent each person currently owns. Live load and completed counts roll up assignment work from the live roster.
+            </div>
+          </div>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", minWidth: 720, borderCollapse: "collapse", fontSize: 12 }}>
+              <thead style={{ background: C.sa }}>
+                <tr>
+                  {["Owner", "Kickoff", "Live Load", "Completed", "Campaigns"].map(label => (
+                    <th key={`workspace-report-${label}`} style={{ textAlign: "left", padding: "10px 12px", color: C.ts, fontSize: 11, borderBottom: `1px solid ${C.bd}` }}>
+                      {label}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {workspaceReportRows.map(row => (
+                  <tr key={`workspace-report-row-${row.owner}`}>
+                    <td style={{ padding: "12px", borderBottom: `1px solid ${C.sa}`, fontWeight: 700 }}>{row.owner}</td>
+                    <td style={{ padding: "12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>{row.kickoff}</td>
+                    <td style={{ padding: "12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>{row.liveAssignments}</td>
+                    <td style={{ padding: "12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>{row.completedAssignments}</td>
+                    <td style={{ padding: "12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>{row.campaignCount}</td>
+                  </tr>
+                ))}
+                {!workspaceReportRows.length && (
+                  <tr>
+                    <td colSpan={5} style={{ padding: "18px 12px", color: C.tt }}>No staff data is ready in this workspace yet.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {workspaceOverlays}
       </div>
     </div>
   );
@@ -11004,7 +11639,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
             ))}
           </div>
         )}
-        <WorkspaceOverlays />
+        {workspaceOverlays}
       </div>
     </div>
   );
@@ -11440,7 +12075,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
             ))}
           </div>
         )}
-        <WorkspaceOverlays />
+        {workspaceOverlays}
       </div>
     </div>
   );
@@ -12039,7 +12674,10 @@ Requirements:
               </div>
               <div>
                 <div style={{ fontSize: 11, color: C.tt, marginBottom: 6 }}>Genre / vibe</div>
-                <input value={artistEditForm.genre} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, genre: e.target.value }))} style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
+                <select value={artistEditForm.genre} disabled={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, genre: e.target.value }))} style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }}>
+                  <option value="">Genre / vibe</option>
+                  {GENRE_OPTIONS.map(option => <option key={`project-edit-genre-${option}`} value={option}>{option}</option>)}
+                </select>
               </div>
               <div>
                 <div style={{ fontSize: 11, color: C.tt, marginBottom: 6 }}>Monthly listeners</div>
@@ -12053,12 +12691,41 @@ Requirements:
                 <div style={{ fontSize: 11, color: C.tt, marginBottom: 6 }}>Social handle</div>
                 <input value={artistEditForm.social} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, social: e.target.value }))} style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
               </div>
-              {!isCuratorProject && (
-                <div>
-                  <div style={{ fontSize: 11, color: C.tt, marginBottom: 6 }}>Email</div>
-                  <input value={artistEditForm.email} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, email: e.target.value }))} style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
-                </div>
-              )}
+              <div>
+                <div style={{ fontSize: 11, color: C.tt, marginBottom: 6 }}>Instagram followers</div>
+                <input value={artistEditForm.instagramFollowers} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, instagramFollowers: normalizeFollowerCount(e.target.value) }))} style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
+              </div>
+              <div>
+                <div style={{ fontSize: 11, color: C.tt, marginBottom: 6 }}>Email</div>
+                <input value={artistEditForm.email} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, email: e.target.value }))} style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
+              </div>
+              <div>
+                <div style={{ fontSize: 11, color: C.tt, marginBottom: 6 }}>Primary contact name</div>
+                <input value={artistEditForm.contactName} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, contactName: e.target.value }))} style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
+              </div>
+              <div>
+                <div style={{ fontSize: 11, color: C.tt, marginBottom: 6 }}>Primary contact email</div>
+                <input value={artistEditForm.contactEmail} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, contactEmail: e.target.value }))} style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
+              </div>
+              <div>
+                <div style={{ fontSize: 11, color: C.tt, marginBottom: 6 }}>Contact type</div>
+                <select value={artistEditForm.contactType} disabled={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, contactType: e.target.value }))} style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }}>
+                  <option value="">Contact type</option>
+                  {CONTACT_TYPE_OPTIONS.map(option => <option key={`project-edit-contact-${option}`} value={option}>{option}</option>)}
+                </select>
+              </div>
+              <div>
+                <div style={{ fontSize: 11, color: C.tt, marginBottom: 6 }}>TikTok handle or URL</div>
+                <input value={artistEditForm.tiktokUrl} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, tiktokUrl: e.target.value }))} style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
+              </div>
+              <div>
+                <div style={{ fontSize: 11, color: C.tt, marginBottom: 6 }}>TikTok followers</div>
+                <input value={artistEditForm.tiktokFollowers} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, tiktokFollowers: normalizeFollowerCount(e.target.value) }))} style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
+              </div>
+              <div>
+                <div style={{ fontSize: 11, color: C.tt, marginBottom: 6 }}>Spotify artist link</div>
+                <input value={artistEditForm.spotifyUrl} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, spotifyUrl: e.target.value }))} placeholder="https://..." style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
+              </div>
               {isCuratorProject && (
                 <div>
                   <div style={{ fontSize: 11, color: C.tt, marginBottom: 6 }}>Curator page link</div>
@@ -12072,24 +12739,50 @@ Requirements:
               {isCuratorProject && (
                 <div style={{ gridColumn: "1 / -1" }}>
                   <div style={{ fontSize: 11, color: C.tt, marginBottom: 8 }}>Curated artists they vouch for</div>
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10 }}>
+                  <div style={{ display: "grid", gap: 10 }}>
                     {artistEditForm.curatedArtists.map((value, index) => (
-                      <input
-                        key={`curated-${index}`}
-                        value={value}
-                        readOnly={isReadOnly}
-                        onChange={e => setArtistEditForm(prev => {
-                          const next = [...prev.curatedArtists];
-                          next[index] = e.target.value;
-                          return { ...prev, curatedArtists: next };
-                        })}
-                        placeholder={`Curated artist ${index + 1}`}
-                        style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }}
-                      />
+                      <div key={`curated-${index}`} style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 8 }}>
+                        <input
+                          value={value}
+                          readOnly={isReadOnly}
+                          onChange={e => setArtistEditForm(prev => {
+                            const next = [...prev.curatedArtists];
+                            next[index] = e.target.value;
+                            return { ...prev, curatedArtists: next };
+                          })}
+                          placeholder={index === 0 ? "Add vouched-for artist" : `Vouched-for artist ${index + 1}`}
+                          style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setArtistEditForm(prev => {
+                            const next = prev.curatedArtists.filter((_, itemIndex) => itemIndex !== index);
+                            return { ...prev, curatedArtists: next.length ? next : [""] };
+                          })}
+                          disabled={isReadOnly}
+                          style={{ ...compactActionBtn(false, "danger"), ...lockStyle(isReadOnly) }}
+                        >
+                          Remove
+                        </button>
+                      </div>
                     ))}
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 10 }}>
+                    <button
+                      type="button"
+                      onClick={() => setArtistEditForm(prev => ({ ...prev, curatedArtists: [...prev.curatedArtists, ""] }))}
+                      disabled={isReadOnly}
+                      style={{ ...compactActionBtn(false, "accent"), ...lockStyle(isReadOnly) }}
+                    >
+                      + Vouched Artist
+                    </button>
                   </div>
                 </div>
               )}
+              <div style={{ gridColumn: "1 / -1" }}>
+                <div style={{ fontSize: 11, color: C.tt, marginBottom: 6 }}>AI / profile notes</div>
+                <textarea value={artistEditForm.profileSummary} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, profileSummary: e.target.value }))} placeholder="AI / profile notes, positioning, fit, curator context..." style={{ ...iS, width: "100%", minHeight: 110, resize: "vertical", ...lockStyle(isReadOnly) }} />
+              </div>
             </div>
             {artistEditForm.name.trim() && proj?.artists?.some(item => item.n !== a.n && canonicalArtistName(item.n) === canonicalArtistName(artistEditForm.name)) && (
               <div style={{ marginTop: 10, fontSize: 12, color: C.rd }}>Another artist in this project already uses that name.</div>
@@ -15079,7 +15772,7 @@ Requirements:
         </div>
         )}
 
-        <WorkspaceOverlays />
+        {workspaceOverlays}
       </div>
     </main>
   </div>
