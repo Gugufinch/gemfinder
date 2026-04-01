@@ -3540,6 +3540,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [showCampaignHubModal, setShowCampaignHubModal] = useState(false);
   const [showCampaignHubCreate, setShowCampaignHubCreate] = useState(false);
   const [showArchivedCampaigns, setShowArchivedCampaigns] = useState(false);
+  const [expandedArchivedCampaigns, setExpandedArchivedCampaigns] = useState(new Set());
   const [campaignHubCreateForm, setCampaignHubCreateForm] = useState(() => emptyCampaignDetailForm());
   const [campaignHubDrafts, setCampaignHubDrafts] = useState({});
   const [talentOverviewMarketingDrafts, setTalentOverviewMarketingDrafts] = useState({});
@@ -3559,6 +3560,10 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [kickoffOwnerFilter, setKickoffOwnerFilter] = useState("all");
   const [kickoffStageFilter, setKickoffStageFilter] = useState("all");
   const [kickoffViewMode, setKickoffViewMode] = useState("table");
+  const [workspaceReportOwnerFilter, setWorkspaceReportOwnerFilter] = useState("all");
+  const [workspaceReportSortMode, setWorkspaceReportSortMode] = useState("load");
+  const [workspaceReportTimelineFilter, setWorkspaceReportTimelineFilter] = useState("all");
+  const [showFullWorkspaceTimeline, setShowFullWorkspaceTimeline] = useState(false);
 
   const [batch, setBatch] = useState(false);
   const [bSel, setBSel] = useState(new Set());
@@ -4582,6 +4587,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
           owners: new Set(),
           statuses: {},
           completedStatuses: {},
+          completedAssignmentRows: [],
           assignmentDueDates: [],
           updatedAtValues: [],
           detailOwner: "",
@@ -4621,6 +4627,20 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
             summary.statuses[normalizedStatus] = (summary.statuses[normalizedStatus] || 0) + 1;
             if (isTerminalMarketingStatus(normalizedStatus)) {
               summary.completedStatuses[normalizedStatus] = (summary.completedStatuses[normalizedStatus] || 0) + 1;
+              summary.completedAssignmentRows.push({
+                assignmentId: item.id,
+                talentName: item.talentName || "",
+                status: normalizedStatus,
+                owner: item.owner || "",
+                title: item.title || "",
+                trafficType: item.trafficType || "",
+                deliverableType: item.deliverableType || "",
+                dueDate: item.dueDate || "",
+                briefUrl: item.briefUrl || "",
+                contentUrl: item.contentUrl || "",
+                notes: item.notes || item.rejectedReason || "",
+                updatedAt: item.updatedAt || item.createdAt || "",
+              });
             }
             if (item.dueDate && !isTerminalMarketingStatus(normalizedStatus)) summary.assignmentDueDates.push(item.dueDate);
             if (item.updatedAt) summary.updatedAtValues.push(item.updatedAt);
@@ -4646,6 +4666,10 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
             count,
             label: MM[status]?.label || titleCaseWords(status),
           })),
+        completedAssignmentRows: [...summary.completedAssignmentRows].sort((a, b) =>
+          String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")) ||
+          String(a.talentName || "").localeCompare(String(b.talentName || ""))
+        ),
         briefUrl: summary.briefUrl,
         dueDate: summary.dueDate || summary.assignmentDueDates.sort()[0] || "",
         notes: summary.notes,
@@ -4687,7 +4711,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   );
   const liveCampaignCount = liveCampaignHubRows.length;
   const archivedLiveCampaignCount = archivedLiveCampaignHubRows.length;
-  const workspaceReportRows = useMemo(() => {
+  const workspaceReportBaseRows = useMemo(() => {
     const ownerCounts = new Map();
     const ensureOwner = (owner) => {
       const normalized = String(owner || "").trim() || "Unassigned";
@@ -4732,6 +4756,73 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       }))
       .sort((a, b) => (b.kickoff + b.liveAssignments + b.completedAssignments) - (a.kickoff + a.liveAssignments + a.completedAssignments) || a.owner.localeCompare(b.owner));
   }, [kickoffProfiles, liveCrmProfiles]);
+  const workspaceReportOwnerOptions = useMemo(
+    () => workspaceReportBaseRows.map(row => row.owner).sort((a, b) => a.localeCompare(b)),
+    [workspaceReportBaseRows]
+  );
+  const workspaceReportRows = useMemo(() => {
+    const filteredRows = workspaceReportOwnerFilter === "all"
+      ? workspaceReportBaseRows
+      : workspaceReportBaseRows.filter(row => row.owner === workspaceReportOwnerFilter);
+    const metricForSort = row => {
+      if (workspaceReportSortMode === "kickoff") return row.kickoff;
+      if (workspaceReportSortMode === "live") return row.liveAssignments;
+      if (workspaceReportSortMode === "completed") return row.completedAssignments;
+      if (workspaceReportSortMode === "campaigns") return row.campaignCount;
+      return row.kickoff + row.liveAssignments + row.completedAssignments;
+    };
+    return [...filteredRows].sort((a, b) => {
+      if (workspaceReportSortMode === "owner") return a.owner.localeCompare(b.owner);
+      const metricCompare = metricForSort(b) - metricForSort(a);
+      if (metricCompare !== 0) return metricCompare;
+      return a.owner.localeCompare(b.owner);
+    });
+  }, [workspaceReportBaseRows, workspaceReportOwnerFilter, workspaceReportSortMode]);
+  const workspaceReportTimelineRows = useMemo(() => {
+    return workspaceTalentProfiles
+      .flatMap(profile =>
+        (profile.recentActivity || [])
+          .filter(entry => workspaceProjectIds.has(entry?.projectId))
+          .map(entry => {
+            const mode = normalizeProjectType(entry?.projectType) === "marketing" ? "live" : "kickoff";
+            const actionText = String(entry?.action || "").trim();
+            const completedLike = mode === "live" && /(complete|completed|final content)/i.test(actionText);
+            return {
+              id: entry?.id || `${profile.id}:${actionText}:${entry?.time || ""}`,
+              time: String(entry?.time || ""),
+              action: actionText || "Activity",
+              note: String(entry?.note || "").trim(),
+              actor: String(entry?.actor || "").trim() || "System",
+              talentName: profile.displayName,
+              owners: uniqStrings(profile.owners || []),
+              mode,
+              campaign: String(entry?.campaign || "").trim(),
+              projectType: normalizeProjectType(entry?.projectType || ""),
+              completedLike,
+            };
+          })
+      )
+      .sort((a, b) => String(b.time || "").localeCompare(String(a.time || "")));
+  }, [workspaceTalentProfiles, workspaceProjectIds]);
+  const filteredWorkspaceReportTimelineRows = useMemo(() => {
+    return workspaceReportTimelineRows.filter(row => {
+      if (
+        workspaceReportOwnerFilter !== "all" &&
+        row.actor !== workspaceReportOwnerFilter &&
+        !(row.owners || []).includes(workspaceReportOwnerFilter)
+      ) return false;
+      if (workspaceReportTimelineFilter === "kickoff" && row.mode !== "kickoff") return false;
+      if (workspaceReportTimelineFilter === "live" && row.mode !== "live") return false;
+      if (workspaceReportTimelineFilter === "completed" && !row.completedLike) return false;
+      return true;
+    });
+  }, [workspaceReportOwnerFilter, workspaceReportTimelineFilter, workspaceReportTimelineRows]);
+  const visibleWorkspaceReportTimelineRows = useMemo(
+    () => showFullWorkspaceTimeline
+      ? filteredWorkspaceReportTimelineRows
+      : filteredWorkspaceReportTimelineRows.slice(0, 12),
+    [filteredWorkspaceReportTimelineRows, showFullWorkspaceTimeline]
+  );
   useEffect(() => {
     if (!showCampaignHubModal) return;
     setCampaignHubDrafts(prev => {
@@ -4748,6 +4839,14 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       return next;
     });
   }, [showCampaignHubModal, liveCampaignHubRows, archivedLiveCampaignHubRows]);
+  useEffect(() => {
+    const validNames = new Set(archivedLiveCampaignHubRows.map(campaign => campaign.name));
+    setExpandedArchivedCampaigns(prev => {
+      const next = new Set([...prev].filter(name => validNames.has(name)));
+      if (next.size === prev.size) return prev;
+      return next;
+    });
+  }, [archivedLiveCampaignHubRows]);
   const sessionUserName = useMemo(
     () => resolveSessionUserName(authEmail, authUserId, proj?.teamUsers || DEFAULT_TEAM_USERS),
     [authEmail, authUserId, proj?.teamUsers],
@@ -9914,6 +10013,19 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                             Focus Roster
                           </button>
                           <button
+                            onClick={() => {
+                              setExpandedArchivedCampaigns(prev => {
+                                const next = new Set(prev);
+                                if (next.has(campaign.name)) next.delete(campaign.name);
+                                else next.add(campaign.name);
+                                return next;
+                              });
+                            }}
+                            style={actionBtn(false, "neutral")}
+                          >
+                            {expandedArchivedCampaigns.has(campaign.name) ? "Hide Completed Work" : `View Completed Work (${campaign.completedAssignmentRows.length})`}
+                          </button>
+                          <button
                             onClick={() => { void deleteLiveCampaign(campaign.name); }}
                             disabled={isReadOnly}
                             style={{ ...actionBtn(false, "danger"), ...lockStyle(isReadOnly) }}
@@ -9940,6 +10052,52 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                             <a href={campaign.briefUrl} target="_blank" rel="noopener" style={{ color: C.ac, textDecoration: "none", width: "fit-content" }}>
                               Open Brief
                             </a>
+                          )}
+                        </div>
+                      )}
+                      {expandedArchivedCampaigns.has(campaign.name) && (
+                        <div style={{ display: "grid", gap: 10, marginTop: 12 }}>
+                          {campaign.completedAssignmentRows.length ? campaign.completedAssignmentRows.map(row => (
+                            <div key={`${campaign.name}:completed-row:${row.assignmentId}`} style={{ padding: "12px 14px", borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sa, display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
+                              <div style={{ minWidth: 0, flex: "1 1 320px" }}>
+                                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 6 }}>
+                                  <div style={{ fontSize: 14, fontWeight: 700, color: C.tx }}>{row.talentName || "Unknown talent"}</div>
+                                  <span style={{ ...mkP(true, marketingStatusTone(row.status, C).tone, marketingStatusTone(row.status, C).bg), cursor: "default" }}>
+                                    {MM[row.status]?.label || titleCaseWords(row.status || "complete")}
+                                  </span>
+                                  {row.owner && <span style={{ ...mkP(true, C.ts, C.sf), cursor: "default" }}>{row.owner}</span>}
+                                </div>
+                                <div style={{ fontSize: 11, color: C.tt, lineHeight: 1.5 }}>
+                                  {[row.title, row.trafficType, row.deliverableType, row.dueDate ? `Due ${sD(row.dueDate)}` : ""].filter(Boolean).join(" · ") || "Completed assignment"}
+                                </div>
+                                {(row.notes || row.briefUrl || row.contentUrl) && (
+                                  <div style={{ display: "grid", gap: 4, marginTop: 8, fontSize: 11, color: C.ts, lineHeight: 1.5 }}>
+                                    {row.notes && <div><strong style={{ color: C.tx }}>Notes:</strong> {row.notes}</div>}
+                                    {row.briefUrl && <div><strong style={{ color: C.tx }}>Brief:</strong> {row.briefUrl}</div>}
+                                    {row.contentUrl && <div><strong style={{ color: C.tx }}>Content:</strong> {row.contentUrl}</div>}
+                                  </div>
+                                )}
+                              </div>
+                              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                                <button
+                                  onClick={() => openTalentProfileById(workspaceTalentData.marketingTalentIds.get(String(row.assignmentId || "")) || "", "live-crm")}
+                                  style={actionBtn(false, "accent")}
+                                >
+                                  View Talent
+                                </button>
+                                <button
+                                  onClick={() => openMarketingItemModal(row)}
+                                  disabled={isReadOnly}
+                                  style={{ ...actionBtn(false, "neutral"), ...lockStyle(isReadOnly) }}
+                                >
+                                  Edit Assignment
+                                </button>
+                                {row.briefUrl && <a href={row.briefUrl} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Brief</a>}
+                                {row.contentUrl && <a href={row.contentUrl} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Content</a>}
+                              </div>
+                            </div>
+                          )) : (
+                            <div style={{ fontSize: 12, color: C.tt }}>No completed assignment rows were captured for this campaign yet.</div>
                           )}
                         </div>
                       )}
@@ -11199,6 +11357,52 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
           </div>
         </div>
 
+        <div style={{ ...cS, padding: "18px 20px", marginBottom: 16 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>Report Controls</div>
+              <div style={{ fontSize: 12, color: C.ts }}>
+                Filter staff load and timeline activity by owner, then sort the report based on the workload you want to review.
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{workspaceReportRows.length} staff row{workspaceReportRows.length === 1 ? "" : "s"}</span>
+              <span style={{ ...mkP(true, C.pr, C.pb), cursor: "default" }}>{filteredWorkspaceReportTimelineRows.length} timeline item{filteredWorkspaceReportTimelineRows.length === 1 ? "" : "s"}</span>
+            </div>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12, alignItems: "end" }}>
+            <label style={{ display: "grid", gap: 6, fontSize: 12, color: C.ts }}>
+              <span>Owner</span>
+              <select value={workspaceReportOwnerFilter} onChange={e => setWorkspaceReportOwnerFilter(e.target.value)} style={{ ...iS, width: "100%" }}>
+                <option value="all">All owners</option>
+                {workspaceReportOwnerOptions.map(owner => (
+                  <option key={`report-owner-${owner}`} value={owner}>{owner}</option>
+                ))}
+              </select>
+            </label>
+            <label style={{ display: "grid", gap: 6, fontSize: 12, color: C.ts }}>
+              <span>Sort by</span>
+              <select value={workspaceReportSortMode} onChange={e => setWorkspaceReportSortMode(e.target.value)} style={{ ...iS, width: "100%" }}>
+                <option value="load">Total load</option>
+                <option value="kickoff">Kickoff load</option>
+                <option value="live">Active live load</option>
+                <option value="completed">Completed work</option>
+                <option value="campaigns">Campaign count</option>
+                <option value="owner">Owner name</option>
+              </select>
+            </label>
+            <label style={{ display: "grid", gap: 6, fontSize: 12, color: C.ts }}>
+              <span>Timeline</span>
+              <select value={workspaceReportTimelineFilter} onChange={e => setWorkspaceReportTimelineFilter(e.target.value)} style={{ ...iS, width: "100%" }}>
+                <option value="all">All activity</option>
+                <option value="kickoff">Kickoff only</option>
+                <option value="live">Live roster only</option>
+                <option value="completed">Completed delivery</option>
+              </select>
+            </label>
+          </div>
+        </div>
+
         <div style={{ ...cS, overflow: "hidden" }}>
           <div style={{ padding: "18px 20px", borderBottom: `1px solid ${C.bd}` }}>
             <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>Staff Breakdown</div>
@@ -11210,7 +11414,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
             <table style={{ width: "100%", minWidth: 720, borderCollapse: "collapse", fontSize: 12 }}>
               <thead style={{ background: C.sa }}>
                 <tr>
-                  {["Owner", "Kickoff", "Live Load", "Completed", "Campaigns"].map(label => (
+                  {["Owner", "Total Load", "Kickoff", "Live Load", "Completed", "Campaigns"].map(label => (
                     <th key={`workspace-report-${label}`} style={{ textAlign: "left", padding: "10px 12px", color: C.ts, fontSize: 11, borderBottom: `1px solid ${C.bd}` }}>
                       {label}
                     </th>
@@ -11221,6 +11425,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                 {workspaceReportRows.map(row => (
                   <tr key={`workspace-report-row-${row.owner}`}>
                     <td style={{ padding: "12px", borderBottom: `1px solid ${C.sa}`, fontWeight: 700 }}>{row.owner}</td>
+                    <td style={{ padding: "12px", borderBottom: `1px solid ${C.sa}`, color: C.tx }}>{row.kickoff + row.liveAssignments + row.completedAssignments}</td>
                     <td style={{ padding: "12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>{row.kickoff}</td>
                     <td style={{ padding: "12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>{row.liveAssignments}</td>
                     <td style={{ padding: "12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>{row.completedAssignments}</td>
@@ -11229,11 +11434,62 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                 ))}
                 {!workspaceReportRows.length && (
                   <tr>
-                    <td colSpan={5} style={{ padding: "18px 12px", color: C.tt }}>No staff data is ready in this workspace yet.</td>
+                    <td colSpan={6} style={{ padding: "18px 12px", color: C.tt }}>No staff data is ready in this workspace yet.</td>
                   </tr>
                 )}
               </tbody>
             </table>
+          </div>
+        </div>
+
+        <div style={{ ...cS, overflow: "hidden", marginTop: 16 }}>
+          <div style={{ padding: "18px 20px", borderBottom: `1px solid ${C.bd}`, display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>Recent Timeline</div>
+              <div style={{ fontSize: 12, color: C.ts }}>
+                Track movement across kickoff and live roster without leaving the workspace.
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>
+                {filteredWorkspaceReportTimelineRows.length} item{filteredWorkspaceReportTimelineRows.length === 1 ? "" : "s"}
+              </span>
+              {filteredWorkspaceReportTimelineRows.length > 12 && (
+                <button onClick={() => setShowFullWorkspaceTimeline(prev => !prev)} style={actionBtn(false, "neutral")}>
+                  {showFullWorkspaceTimeline ? "Show Less" : "Show All"}
+                </button>
+              )}
+            </div>
+          </div>
+          <div style={{ display: "grid", gap: 10, padding: "18px 20px" }}>
+            {visibleWorkspaceReportTimelineRows.length ? visibleWorkspaceReportTimelineRows.map(row => (
+              <div key={`workspace-report-timeline-${row.id}`} style={{ padding: "14px 16px", borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sa }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", flexWrap: "wrap", marginBottom: 8 }}>
+                  <div>
+                    <div style={{ fontSize: 15, fontWeight: 700, color: C.tx, marginBottom: 4 }}>{row.action}</div>
+                    <div style={{ fontSize: 12, color: C.ts, lineHeight: 1.5 }}>
+                      {row.talentName}
+                      {row.campaign ? ` · ${row.campaign}` : ""}
+                      {row.note ? ` · ${row.note}` : ""}
+                    </div>
+                  </div>
+                  <div style={{ fontSize: 11, color: C.tt }}>
+                    {row.time ? fmtDateTime(row.time) : "No timestamp"}
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <span style={{ ...mkP(true, row.mode === "live" ? C.lv : C.ac, row.mode === "live" ? C.lvb : C.al), cursor: "default" }}>
+                    {row.mode === "live" ? "Live Roster" : "Kickoff"}
+                  </span>
+                  <span style={{ ...mkP(true, C.ts, C.sf), cursor: "default" }}>{row.actor}</span>
+                  {row.completedLike && (
+                    <span style={{ ...mkP(true, C.gn, C.gb), cursor: "default" }}>Completed delivery</span>
+                  )}
+                </div>
+              </div>
+            )) : (
+              <div style={{ fontSize: 12, color: C.tt }}>No timeline activity matches this report view yet.</div>
+            )}
           </div>
         </div>
 
