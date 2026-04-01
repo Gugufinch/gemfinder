@@ -23,6 +23,7 @@ const KICKOFF_STAGE_ACTIONS = [
   { id: "engaged", label: "Engaged" },
   { id: "won", label: "Onboarding" },
   { id: "live", label: "Live" },
+  { id: "dead", label: "Dead" },
 ];
 const PROJECT_TYPES = [
   { id: "ar", label: "A&R" },
@@ -3785,7 +3786,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   }, [kickoffProfiles]);
   const kickoffBoardColumns = useMemo(
     () => KICKOFF_STAGE_ACTIONS
-      .filter(stage => stage.id !== "live")
+      .filter(stage => stage.id !== "live" && stage.id !== "dead")
       .map(stage => ({
         ...stage,
         profiles: kickoffProfiles.filter(profile => kickoffStageBucket(profile.stages) === stage.id),
@@ -3857,6 +3858,12 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     }
     return parts;
   }, []);
+  const liveRosterTalentMetaLabel = useCallback(profile => {
+    const typeLabel = summarizeWorkspaceValues(profile?.talentTypes || [], 1);
+    const sourceLabel = summarizeWorkspaceValues(profile?.sources || [], 1, value => TALENT_SOURCE_LABELS[value] || value);
+    const ownerLabel = profile?.owners?.length ? `Owner ${summarizeWorkspaceValues(profile.owners, 2)}` : "Unassigned";
+    return [typeLabel, sourceLabel, ownerLabel].filter(Boolean).join(" · ");
+  }, [summarizeWorkspaceValues]);
   const exportKickoffView = () => {
     if (!kickoffProfiles.length) {
       flash("No kickoff talent in the current view yet", "err");
@@ -10629,10 +10636,10 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         ) : liveRosterViewMode === "table" ? (
           <div style={{ ...cS, overflow: "hidden" }}>
             <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", minWidth: 880, borderCollapse: "collapse", fontSize: 12, tableLayout: "fixed" }}>
+              <table style={{ width: "100%", minWidth: 980, borderCollapse: "collapse", fontSize: 12, tableLayout: "fixed" }}>
                 <thead style={{ background: C.sa }}>
                   <tr>
-                    {["Talent", "Reach", "Campaigns", "Status Mix", "Last Updated"].map(h => (
+                    {["Talent", "Reach", "Campaigns", "Status Mix", "Last Updated", "Actions"].map(h => (
                       <th key={`live-table-${h}`} style={{ textAlign: "left", padding: "10px 12px", color: C.ts, fontSize: 11, borderBottom: `1px solid ${C.bd}` }}>{h}</th>
                     ))}
                   </tr>
@@ -10653,7 +10660,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                         onClick={() => openTalentProfileFromWorkspaceProfile(profile)}
                         style={{ cursor: "pointer" }}
                       >
-                        <td style={{ width: "32%", minWidth: 260, padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, verticalAlign: "top" }}>
+                        <td style={{ width: "30%", minWidth: 260, padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, verticalAlign: "top" }}>
                           <button
                             onClick={e => {
                               e.stopPropagation();
@@ -10667,20 +10674,54 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                             {profile.primaryEmail || "No email yet"}
                             {profile.instagramHandle ? ` · @${normalizeSocialHandle(profile.instagramHandle)}` : ""}
                           </div>
-                          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
-                            {profile.talentTypes.slice(0, 2).map(type => (
-                              <span key={`${profile.id}:type-chip:${type}`} style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{type}</span>
-                            ))}
-                            {profile.sources.slice(0, 1).map(source => (
-                              <span key={`${profile.id}:source-chip:${source}`} style={{ ...mkP(true, C.pr, C.pb), cursor: "default" }}>
-                                {TALENT_SOURCE_LABELS[source] || source}
-                              </span>
-                            ))}
-                            {profile.owners.slice(0, 2).map(owner => (
-                              <span key={`${profile.id}:owner-chip:${owner}`} style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>Owner: {owner}</span>
-                            ))}
+                          <div style={{ fontSize: 11, color: C.ts, marginTop: 8, lineHeight: 1.5, overflowWrap: "anywhere" }}>
+                            {liveRosterTalentMetaLabel(profile)}
                           </div>
-                          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
+                        </td>
+                        <td style={{ width: "22%", minWidth: 210, padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts, verticalAlign: "top" }}>
+                          <div style={{ display: "grid", gap: 4 }}>
+                            {visibleReachParts.length ? visibleReachParts.map(part => (
+                              <div key={`${profile.id}:reach:${part}`} style={{ fontSize: 11, lineHeight: 1.4, overflowWrap: "anywhere" }}>{part}</div>
+                            )) : (
+                              <div style={{ fontSize: 11, color: C.tt }}>No social details yet</div>
+                            )}
+                            {hiddenReachCount > 0 && (
+                              <div style={{ fontSize: 11, color: C.tt }}>+{hiddenReachCount} more</div>
+                            )}
+                          </div>
+                        </td>
+                        <td style={{ width: "16%", minWidth: 160, padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts, verticalAlign: "top" }}>
+                          <div style={{ display: "grid", gap: 6 }}>
+                            {visibleCampaigns.length ? visibleCampaigns.map(campaign => (
+                              <span key={`${profile.id}:campaign:${campaign}`} style={{ ...mkP(true, C.bu, C.bb), cursor: "default", width: "fit-content" }}>{campaign}</span>
+                            )) : (
+                              <span style={{ ...mkP(true, C.tt, C.sa), cursor: "default", width: "fit-content" }}>Unassigned</span>
+                            )}
+                            {hiddenCampaignCount > 0 && (
+                              <div style={{ fontSize: 11, color: C.tt }}>+{hiddenCampaignCount} more campaign{hiddenCampaignCount === 1 ? "" : "s"}</div>
+                            )}
+                            <div style={{ fontSize: 11, color: C.tt }}>{(profile.marketingAssignments || []).length} assignment{(profile.marketingAssignments || []).length === 1 ? "" : "s"}</div>
+                          </div>
+                        </td>
+                        <td style={{ width: "14%", minWidth: 150, padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts, verticalAlign: "top" }}>
+                          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                            {visibleStatusParts.length ? visibleStatusParts.map(part => (
+                              <span key={`${profile.id}:status:${part.id}`} style={{ ...mkP(true, marketingStatusTone(part.id, C).tone, marketingStatusTone(part.id, C).bg), cursor: "default" }}>
+                                {part.label} {part.count}
+                              </span>
+                            )) : (
+                              <span style={{ ...mkP(true, C.tt, C.sa), cursor: "default" }}>No status</span>
+                            )}
+                            {hiddenStatusCount > 0 && (
+                              <span style={{ ...mkP(true, C.tt, C.sa), cursor: "default" }}>+{hiddenStatusCount} more</span>
+                            )}
+                          </div>
+                        </td>
+                        <td style={{ width: "8%", minWidth: 92, padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.tt, verticalAlign: "top" }}>
+                          {profile.lastTouched ? rD(profile.lastTouched) : "—"}
+                        </td>
+                        <td style={{ width: "10%", minWidth: 128, padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts, verticalAlign: "top" }}>
+                          <div style={{ display: "grid", gap: 8 }}>
                             <button
                               onClick={e => {
                                 e.stopPropagation();
@@ -10702,48 +10743,6 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                               </button>
                             )}
                           </div>
-                        </td>
-                        <td style={{ width: "24%", minWidth: 210, padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts, verticalAlign: "top" }}>
-                          <div style={{ display: "grid", gap: 4 }}>
-                            {visibleReachParts.length ? visibleReachParts.map(part => (
-                              <div key={`${profile.id}:reach:${part}`} style={{ fontSize: 11, lineHeight: 1.4, overflowWrap: "anywhere" }}>{part}</div>
-                            )) : (
-                              <div style={{ fontSize: 11, color: C.tt }}>No social details yet</div>
-                            )}
-                            {hiddenReachCount > 0 && (
-                              <div style={{ fontSize: 11, color: C.tt }}>+{hiddenReachCount} more</div>
-                            )}
-                          </div>
-                        </td>
-                        <td style={{ width: "18%", minWidth: 170, padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts, verticalAlign: "top" }}>
-                          <div style={{ display: "grid", gap: 6 }}>
-                            {visibleCampaigns.length ? visibleCampaigns.map(campaign => (
-                              <span key={`${profile.id}:campaign:${campaign}`} style={{ ...mkP(true, C.bu, C.bb), cursor: "default", width: "fit-content" }}>{campaign}</span>
-                            )) : (
-                              <span style={{ ...mkP(true, C.tt, C.sa), cursor: "default", width: "fit-content" }}>Unassigned</span>
-                            )}
-                            {hiddenCampaignCount > 0 && (
-                              <div style={{ fontSize: 11, color: C.tt }}>+{hiddenCampaignCount} more campaign{hiddenCampaignCount === 1 ? "" : "s"}</div>
-                            )}
-                            <div style={{ fontSize: 11, color: C.tt }}>{(profile.marketingAssignments || []).length} assignment{(profile.marketingAssignments || []).length === 1 ? "" : "s"}</div>
-                          </div>
-                        </td>
-                        <td style={{ width: "18%", minWidth: 170, padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts, verticalAlign: "top" }}>
-                          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                            {visibleStatusParts.length ? visibleStatusParts.map(part => (
-                              <span key={`${profile.id}:status:${part.id}`} style={{ ...mkP(true, marketingStatusTone(part.id, C).tone, marketingStatusTone(part.id, C).bg), cursor: "default" }}>
-                                {part.label} {part.count}
-                              </span>
-                            )) : (
-                              <span style={{ ...mkP(true, C.tt, C.sa), cursor: "default" }}>No status</span>
-                            )}
-                            {hiddenStatusCount > 0 && (
-                              <span style={{ ...mkP(true, C.tt, C.sa), cursor: "default" }}>+{hiddenStatusCount} more</span>
-                            )}
-                          </div>
-                        </td>
-                        <td style={{ width: "8%", minWidth: 92, padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.tt, verticalAlign: "top" }}>
-                          {profile.lastTouched ? rD(profile.lastTouched) : "—"}
                         </td>
                       </tr>
                     );
