@@ -588,7 +588,7 @@ function marketingChannelsLabel(item) {
 }
 function marketingCampaignsLabel(item) {
   const campaigns = Array.isArray(item?.campaigns) ? item.campaigns : [];
-  return campaigns.length ? campaigns.join(", ") : "No campaign";
+  return campaigns.length ? campaigns.join(", ") : "Unassigned";
 }
 function marketingRealCampaigns(item) {
   const campaigns = normalizeMarketingCampaigns(item?.campaigns?.length ? item.campaigns : item?.campaign || "");
@@ -893,6 +893,7 @@ function normalizeMarketingItem(item, teamUsers = DEFAULT_TEAM_USERS) {
     tiktokFollowers: normalizeFollowerCount(item?.tiktokFollowers || item?.tiktok_followers || ""),
     spotifyUrl: String(item?.spotifyUrl || "").trim(),
     spotifyMonthlyListeners: normalizeFollowerCount(item?.spotifyMonthlyListeners || item?.monthlyListeners || item?.spotify_monthly_listeners || ""),
+    profileSummary: String(item?.profileSummary || item?.profileNotes || item?.aiSummary || "").trim(),
     briefUrl: String(item?.briefUrl || "").trim(),
     contentUrl: String(item?.contentUrl || "").trim(),
     notes: String(item?.notes || "").trim(),
@@ -1742,6 +1743,7 @@ function createEmptyTalentProfile(id, identity = {}, seed = {}) {
     tiktokFollowers: toNumberString(seed.tiktokFollowers || ""),
     spotifyUrl: String(seed.spotifyUrl || "").trim(),
     spotifyMonthlyListeners: toNumberString(seed.spotifyMonthlyListeners || seed.listeners || seed.l || ""),
+    profileSummary: String(seed.profileSummary || "").trim(),
     talentTypes: uniqStrings([normalizeTalentTypeLabel(seed.talentType || seed.type || "Artist")].filter(Boolean)),
     curatorPageUrl: String(seed.curatorPageUrl || "").trim(),
     curatedArtists: normalizeCuratedArtists(seed.curatedArtists),
@@ -1808,6 +1810,7 @@ function upsertTalentProfile(store, identity, seed = {}) {
     tiktokFollowers: betterNumericString(existing.tiktokFollowers, seed.tiktokFollowers || ""),
     spotifyUrl: existing.spotifyUrl || String(seed.spotifyUrl || "").trim(),
     spotifyMonthlyListeners: betterNumericString(existing.spotifyMonthlyListeners, seed.spotifyMonthlyListeners || seed.listeners || seed.l || ""),
+    profileSummary: preferLongerString(existing.profileSummary, String(seed.profileSummary || "").trim()),
     talentTypes: uniqStrings([...existing.talentTypes, normalizeTalentTypeLabel(seed.talentType || seed.type || "")].filter(Boolean)),
     curatorPageUrl: existing.curatorPageUrl || String(seed.curatorPageUrl || "").trim(),
     curatedArtists: uniqStrings([
@@ -1842,6 +1845,8 @@ function collectWorkspaceTalentProfiles(projects = []) {
         name: artist.n,
         email: artist.e,
         instagramHandle: artist.soc || artist.ig,
+        tiktokUrl: artist.tiktokUrl,
+        spotifyUrl: artist.spotifyUrl,
         listeners: artist.l,
       });
       const profile = upsertTalentProfile(store, identity, {
@@ -1849,7 +1854,12 @@ function collectWorkspaceTalentProfiles(projects = []) {
         email: artist.e,
         instagramUrl: /instagram\.com/i.test(String(artist.ig || "")) ? artist.ig : "",
         instagramHandle: artist.soc || artist.ig,
+        instagramFollowers: artist.instagramFollowers || "",
+        tiktokUrl: artist.tiktokUrl || "",
+        tiktokFollowers: artist.tiktokFollowers || "",
+        spotifyUrl: artist.spotifyUrl || "",
         spotifyMonthlyListeners: artist.l,
+        profileSummary: artist.profileSummary || "",
         talentType: normalizedProject.type === "curator" ? "Curator" : "Internal Artist",
         platformLifecycle: artist.onPlatform || normalizeStageId(normalizedProject.pipeline?.[artist.n]?.stage) === "live" ? "live" : "pre_live",
         source: normalizedProject.type === "curator" ? "curator_pipeline" : "ar_pipeline",
@@ -1879,6 +1889,11 @@ function collectWorkspaceTalentProfiles(projects = []) {
         onPlatform: !!artist.onPlatform,
         social: artist.soc || "",
         email: artist.e || "",
+        instagramFollowers: artist.instagramFollowers || "",
+        tiktokUrl: artist.tiktokUrl || "",
+        tiktokFollowers: artist.tiktokFollowers || "",
+        spotifyUrl: artist.spotifyUrl || "",
+        profileSummary: artist.profileSummary || "",
         note: String(normalizedProject.notes?.[artist.n] || "").trim(),
         followUp: String(normalizedProject.followUps?.[artist.n] || "").trim(),
         curatorPageUrl: artist.curatorPageUrl || "",
@@ -1924,6 +1939,7 @@ function collectWorkspaceTalentProfiles(projects = []) {
         tiktokFollowers: item.tiktokFollowers,
         spotifyUrl: item.spotifyUrl,
         spotifyMonthlyListeners: item.spotifyMonthlyListeners,
+        profileSummary: item.profileSummary || "",
         talentType: item.talentType,
         platformLifecycle: "live",
         source: "legacy_roster",
@@ -3018,7 +3034,7 @@ function normalizeSocialHandle(value) {
     .replace(/^https?:\/\/(www\.)?tiktok\.com\//i, "")
     .replace(/^https?:\/\/(www\.)?x\.com\//i, "")
     .replace(/^https?:\/\/(www\.)?twitter\.com\//i, "");
-  return withoutUrl.replace(/^@/, "").replace(/\/.*$/, "").trim();
+  return withoutUrl.replace(/^@/, "").replace(/[?#].*$/, "").replace(/\/.*$/, "").trim();
 }
 
 function parseArtistNameCSV(text) {
@@ -3227,10 +3243,15 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     listeners: "",
     hitTrack: "",
     social: "",
+    instagramFollowers: "",
     email: "",
+    tiktokUrl: "",
+    tiktokFollowers: "",
+    spotifyUrl: "",
     location: "",
     curatorPageUrl: "",
     curatedArtists: [...EMPTY_CURATED_ARTIST_SLOTS],
+    profileSummary: "",
     note: "",
   });
   const [manualArtistSaving, setManualArtistSaving] = useState(false);
@@ -3240,10 +3261,15 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     listeners: "",
     hitTrack: "",
     social: "",
+    instagramFollowers: "",
     email: "",
+    tiktokUrl: "",
+    tiktokFollowers: "",
+    spotifyUrl: "",
     location: "",
     curatorPageUrl: "",
     curatedArtists: [...EMPTY_CURATED_ARTIST_SLOTS],
+    profileSummary: "",
   });
   const [artistEditSaving, setArtistEditSaving] = useState(false);
   const [showMarketingItemModal, setShowMarketingItemModal] = useState(false);
@@ -3270,6 +3296,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [selectedTalentProfileId, setSelectedTalentProfileId] = useState("");
   const [talentProfileContext, setTalentProfileContext] = useState("project");
   const [talentKickoffEditRecordKey, setTalentKickoffEditRecordKey] = useState("");
+  const [talentProfileEditMode, setTalentProfileEditMode] = useState(false);
   const [showFullTalentTimeline, setShowFullTalentTimeline] = useState(false);
   const [showCampaignHubModal, setShowCampaignHubModal] = useState(false);
   const [pendingWorkspaceAction, setPendingWorkspaceAction] = useState(null);
@@ -3277,6 +3304,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [liveCrmTypeFilter, setLiveCrmTypeFilter] = useState("all");
   const [liveCrmSourceFilter, setLiveCrmSourceFilter] = useState("all");
   const [liveCrmOwnerFilter, setLiveCrmOwnerFilter] = useState("all");
+  const [liveCrmCampaignFilter, setLiveCrmCampaignFilter] = useState("all");
   const [liveRosterViewMode, setLiveRosterViewMode] = useState("table");
   const [kickoffQuery, setKickoffQuery] = useState("");
   const [kickoffTypeFilter, setKickoffTypeFilter] = useState("all");
@@ -3479,7 +3507,11 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const workspaceTalentData = useMemo(() => collectWorkspaceTalentProfiles(projects), [projects]);
   const workspaceTalentProfiles = workspaceTalentData.profiles;
   const liveCrmBaseProfiles = useMemo(
-    () => workspaceTalentProfiles.filter(profile => profile.platformLifecycle === "live" && profile.projectMemberships.some(item => workspaceProjectIds.has(item.projectId))),
+    () => workspaceTalentProfiles.filter(
+      profile =>
+        profile.platformLifecycle === "live" &&
+        (profile.projectMemberships || []).some(item => workspaceProjectIds.has(item.projectId))
+    ),
     [workspaceTalentProfiles, workspaceProjectIds]
   );
   const liveCrmTypeOptions = useMemo(
@@ -3492,8 +3524,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   );
   const liveCrmOwnerOptions = useMemo(
     () => uniqStrings(liveCrmBaseProfiles.flatMap(profile => [
-      ...profile.marketingAssignments.map(item => item.owner),
-      ...profile.arRecords.map(item => item.owner),
+      ...(profile.marketingAssignments || []).map(item => item.owner),
+      ...(profile.arRecords || []).map(item => item.owner),
     ].filter(Boolean))).sort((a, b) => a.localeCompare(b)),
     [liveCrmBaseProfiles]
   );
@@ -3520,17 +3552,17 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
           return byProject.get(key);
         };
 
-        profile.projectMemberships.filter(item => workspaceProjectIds.has(item.projectId)).forEach(item => {
+        (profile.projectMemberships || []).filter(item => workspaceProjectIds.has(item.projectId)).forEach(item => {
           ensureProjectSummary(item.projectId, item.projectName, item.projectType);
         });
 
-        profile.arRecords.filter(record => workspaceProjectIds.has(record.projectId)).forEach(record => {
+        (profile.arRecords || []).filter(record => workspaceProjectIds.has(record.projectId)).forEach(record => {
           const summary = ensureProjectSummary(record.projectId, record.projectName, record.projectType || "ar");
           if (record.owner) summary.owners.push(record.owner);
           if (record.stage) summary.arStages.push(record.stage);
         });
 
-        profile.marketingAssignments.filter(item => workspaceProjectIds.has(item.projectId)).forEach(item => {
+        (profile.marketingAssignments || []).filter(item => workspaceProjectIds.has(item.projectId)).forEach(item => {
           const summary = ensureProjectSummary(item.projectId, item.projectName, "marketing");
           if (item.owner) summary.owners.push(item.owner);
           if (item.status) summary.marketingStatuses.push(item.status);
@@ -3573,8 +3605,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
 
         const lastTouched = [
           ...projectSummaries.map(item => String(item.lastTouched || "")),
-          ...profile.marketingAssignments.filter(item => workspaceProjectIds.has(item.projectId)).map(item => String(item.updatedAt || "")),
-          ...profile.arRecords.filter(item => workspaceProjectIds.has(item.projectId)).map(item => String(item.updatedAt || "")),
+          ...(profile.marketingAssignments || []).filter(item => workspaceProjectIds.has(item.projectId)).map(item => String(item.updatedAt || "")),
+          ...(profile.arRecords || []).filter(item => workspaceProjectIds.has(item.projectId)).map(item => String(item.updatedAt || "")),
         ].filter(Boolean).sort((a, b) => b.localeCompare(a))[0] || "";
 
         return {
@@ -3594,6 +3626,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         if (liveCrmSourceFilter !== "all" && !profile.sources.includes(liveCrmSourceFilter)) return false;
         if (liveCrmOwnerFilter === "__unassigned__" && profile.owners.length) return false;
         if (liveCrmOwnerFilter !== "all" && liveCrmOwnerFilter !== "__unassigned__" && !profile.owners.includes(liveCrmOwnerFilter)) return false;
+        if (liveCrmCampaignFilter === "none" && profile.campaigns.length) return false;
+        if (liveCrmCampaignFilter !== "all" && liveCrmCampaignFilter !== "none" && !profile.campaigns.includes(liveCrmCampaignFilter)) return false;
         return true;
       })
       .sort((a, b) => {
@@ -3601,7 +3635,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         if (timeCompare !== 0) return timeCompare;
         return a.displayName.localeCompare(b.displayName);
       });
-  }, [liveCrmBaseProfiles, liveCrmOwnerFilter, liveCrmQuery, liveCrmSourceFilter, liveCrmTypeFilter, workspaceProjectIds]);
+  }, [liveCrmBaseProfiles, liveCrmCampaignFilter, liveCrmOwnerFilter, liveCrmQuery, liveCrmSourceFilter, liveCrmTypeFilter, workspaceProjectIds]);
   const liveCrmOverview = useMemo(() => {
     const projectsSeen = new Set();
     const campaignsSeen = new Set();
@@ -3610,14 +3644,14 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     let curators = 0;
     let creators = 0;
     liveCrmProfiles.forEach(profile => {
-      profile.projectSummaries.forEach(summary => {
+      (profile.projectSummaries || []).forEach(summary => {
         projectsSeen.add(summary.projectId || summary.projectName);
-        summary.campaigns.forEach(campaign => campaignsSeen.add(campaign));
+        (summary.campaigns || []).forEach(campaign => campaignsSeen.add(campaign));
       });
-      marketingAssignments += profile.marketingAssignments.filter(item => workspaceProjectIds.has(item.projectId)).length;
-      if (profile.talentTypes.includes("Internal Artist")) internalArtists += 1;
-      if (profile.talentTypes.includes("Curator")) curators += 1;
-      if (profile.talentTypes.some(type => type === "Content Creator" || type === "AI UGC")) creators += 1;
+      marketingAssignments += (profile.marketingAssignments || []).filter(item => workspaceProjectIds.has(item.projectId)).length;
+      if ((profile.talentTypes || []).includes("Internal Artist")) internalArtists += 1;
+      if ((profile.talentTypes || []).includes("Curator")) curators += 1;
+      if ((profile.talentTypes || []).some(type => type === "Content Creator" || type === "AI UGC")) creators += 1;
     });
     return {
       liveTalents: liveCrmProfiles.length,
@@ -3731,13 +3765,13 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     let curators = 0;
     let artists = 0;
     kickoffProfiles.forEach(profile => {
-      if (profile.talentTypes.includes("Curator")) curators += 1;
+      if ((profile.talentTypes || []).includes("Curator")) curators += 1;
       else artists += 1;
-      const bucket = kickoffStageBucket(profile.stages);
+      const bucket = kickoffStageBucket(profile.stages || []);
       stages[bucket] = (stages[bucket] || 0) + 1;
-      profile.projectSummaries.forEach(summary => {
+      (profile.projectSummaries || []).forEach(summary => {
         projectsSeen.add(summary.projectId || summary.projectName);
-        summary.owners.forEach(owner => ownersSeen.add(owner));
+        (summary.owners || []).forEach(owner => ownersSeen.add(owner));
       });
     });
     return {
@@ -3804,18 +3838,20 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   }, [liveStatusSummaryParts]);
   const liveRosterReachParts = useCallback(profile => {
     const parts = [];
-    if (profile.instagramHandle) {
-      parts.push(profile.instagramFollowers ? `IG @${profile.instagramHandle} (${profile.instagramFollowers})` : `IG @${profile.instagramHandle}`);
+    const instagramHandle = normalizeSocialHandle(profile.instagramHandle || "");
+    const tiktokHandle = normalizeSocialHandle(profile.tiktokHandle || "");
+    if (instagramHandle) {
+      parts.push(profile.instagramFollowers ? `IG @${instagramHandle} · ${profile.instagramFollowers}` : `IG @${instagramHandle}`);
     } else if (profile.instagramFollowers) {
       parts.push(`Instagram ${profile.instagramFollowers}`);
     }
-    if (profile.tiktokHandle) {
-      parts.push(profile.tiktokFollowers ? `TikTok @${profile.tiktokHandle} (${profile.tiktokFollowers})` : `TikTok @${profile.tiktokHandle}`);
+    if (tiktokHandle) {
+      parts.push(profile.tiktokFollowers ? `TikTok @${tiktokHandle} · ${profile.tiktokFollowers}` : `TikTok @${tiktokHandle}`);
     } else if (profile.tiktokFollowers) {
       parts.push(`TikTok ${profile.tiktokFollowers}`);
     }
     if (profile.spotifyUrl) {
-      parts.push(profile.spotifyMonthlyListeners ? `Spotify linked (${profile.spotifyMonthlyListeners})` : "Spotify linked");
+      parts.push(profile.spotifyMonthlyListeners ? `Spotify linked · ${profile.spotifyMonthlyListeners}` : "Spotify linked");
     } else if (profile.spotifyMonthlyListeners) {
       parts.push(`${profile.spotifyMonthlyListeners} listeners`);
     }
@@ -3948,16 +3984,16 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       return summary;
     };
 
-    selectedTalentProfile.projectMemberships.forEach(item => {
+    (selectedTalentProfile.projectMemberships || []).forEach(item => {
       ensureProjectSummary(item.projectId, item.projectName, item.projectType, item.kind);
     });
 
-    selectedTalentProfile.arRecords.forEach(record => {
+    (selectedTalentProfile.arRecords || []).forEach(record => {
       const summary = ensureProjectSummary(record.projectId, record.projectName, record.projectType || "ar", "ar");
       summary.arRecords.push(record);
     });
 
-    selectedTalentProfile.marketingAssignments.forEach(assignment => {
+    (selectedTalentProfile.marketingAssignments || []).forEach(assignment => {
       const summary = ensureProjectSummary(assignment.projectId, assignment.projectName, "marketing", "marketing");
       summary.marketingAssignments.push(assignment);
     });
@@ -4039,11 +4075,6 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     || selectedTalentPrimaryMarketingAssignment?.spotifyMonthlyListeners
     || ""
   ).trim();
-  const selectedTalentSpotifyLabel = selectedTalentProfile?.spotifyUrl
-    ? `${selectedTalentListeners ? `${selectedTalentListeners} monthly listeners` : "Profile linked"}`
-    : selectedTalentListeners
-      ? `${selectedTalentListeners} monthly listeners on file`
-      : "Not linked yet";
   const selectedTalentHeadlineOwner = isKickoffTalentContext
     ? String(selectedTalentPrimaryKickoffRecord?.owner || "").trim()
     : String(selectedTalentPrimaryMarketingAssignment?.owner || "").trim();
@@ -4053,6 +4084,86 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const selectedTalentHeadlineMarketingStatus = isLiveTalentContext
     ? normalizeMarketingStatus(selectedTalentPrimaryMarketingAssignment?.status || "")
     : "";
+  const selectedTalentEditableKickoffRecord = selectedTalentPrimaryKickoffRecord || selectedTalentPrimaryArRecord || null;
+  const selectedTalentTypes = selectedTalentProfile?.talentTypes || [];
+  const selectedTalentSources = selectedTalentProfile?.sources || [];
+  const selectedTalentMarketingAssignments = selectedTalentProfile?.marketingAssignments || [];
+  const selectedTalentProfileCardTitle = selectedTalentTypes.includes("Curator") ? "Curator Profile" : "Artist Profile";
+  const selectedTalentKickoffCardTitle = "Kickoff Details";
+  const selectedTalentProfileSummary = String(
+    selectedTalentProfile?.profileSummary
+    || selectedTalentEditableKickoffRecord?.profileSummary
+    || selectedTalentPrimaryMarketingAssignment?.profileSummary
+    || ""
+  ).trim();
+  const selectedTalentPrimaryEmail = String(
+    selectedTalentEditableKickoffRecord?.email
+    || selectedTalentPrimaryMarketingAssignment?.email
+    || selectedTalentProfile?.primaryEmail
+    || ""
+  ).trim();
+  const selectedTalentInstagramHandle = normalizeSocialHandle(
+    selectedTalentEditableKickoffRecord?.social
+    || selectedTalentProfile?.instagramHandle
+    || selectedTalentPrimaryMarketingAssignment?.instagramHandle
+    || selectedTalentPrimaryMarketingAssignment?.instagramUrl
+    || ""
+  );
+  const selectedTalentInstagramUrl = String(
+    selectedTalentEditableKickoffRecord?.social
+      ? `https://instagram.com/${normalizeSocialHandle(selectedTalentEditableKickoffRecord.social)}`
+      : selectedTalentProfile?.instagramUrl
+        || selectedTalentPrimaryMarketingAssignment?.instagramUrl
+        || ""
+  ).trim();
+  const selectedTalentInstagramFollowers = String(
+    selectedTalentEditableKickoffRecord?.instagramFollowers
+    || selectedTalentPrimaryMarketingAssignment?.instagramFollowers
+    || selectedTalentProfile?.instagramFollowers
+    || ""
+  ).trim();
+  const selectedTalentTiktokHandle = normalizeSocialHandle(
+    selectedTalentEditableKickoffRecord?.tiktokUrl
+    || selectedTalentProfile?.tiktokHandle
+    || selectedTalentPrimaryMarketingAssignment?.tiktokHandle
+    || selectedTalentPrimaryMarketingAssignment?.tiktokUrl
+    || ""
+  );
+  const selectedTalentTiktokUrl = String(
+    selectedTalentEditableKickoffRecord?.tiktokUrl
+    || selectedTalentProfile?.tiktokUrl
+    || selectedTalentPrimaryMarketingAssignment?.tiktokUrl
+    || ""
+  ).trim();
+  const selectedTalentTiktokFollowers = String(
+    selectedTalentEditableKickoffRecord?.tiktokFollowers
+    || selectedTalentPrimaryMarketingAssignment?.tiktokFollowers
+    || selectedTalentProfile?.tiktokFollowers
+    || ""
+  ).trim();
+  const selectedTalentSpotifyUrl = String(
+    selectedTalentEditableKickoffRecord?.spotifyUrl
+    || selectedTalentPrimaryMarketingAssignment?.spotifyUrl
+    || selectedTalentProfile?.spotifyUrl
+    || ""
+  ).trim();
+  const selectedTalentSpotifyLabel = selectedTalentSpotifyUrl
+    ? (selectedTalentListeners ? `Linked · ${selectedTalentListeners} monthly listeners` : "Linked")
+    : "Not linked yet";
+  const selectedTalentCuratorPageUrl = String(
+    selectedTalentEditableKickoffRecord?.curatorPageUrl
+    || selectedTalentProfile?.curatorPageUrl
+    || ""
+  ).trim();
+  const selectedTalentCuratedArtists = normalizeCuratedArtists(
+    selectedTalentEditableKickoffRecord?.curatedArtists?.length
+      ? selectedTalentEditableKickoffRecord.curatedArtists
+      : selectedTalentProfile?.curatedArtists
+  );
+  const selectedTalentCanEditProfile = isKickoffTalentContext
+    ? !!selectedTalentEditableKickoffRecord
+    : !!selectedTalentMarketingAssignments.length;
+  const showSelectedTalentSpotifyRow = !!selectedTalentSpotifyUrl;
   const selectedTalentRealCampaigns = useMemo(
     () => (selectedTalentProfile?.campaigns || []).filter(campaign => campaign && campaign !== "No campaign"),
     [selectedTalentProfile]
@@ -4142,6 +4253,10 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       talentCount: talentNames.size,
     };
   }, [liveMarketingProjects]);
+  const liveCrmCampaignOptions = useMemo(
+    () => liveCampaignHubRows.map(row => row.name),
+    [liveCampaignHubRows]
+  );
   const sessionUserName = useMemo(
     () => resolveSessionUserName(authEmail, authUserId, proj?.teamUsers || DEFAULT_TEAM_USERS),
     [authEmail, authUserId, proj?.teamUsers],
@@ -4325,10 +4440,15 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     listeners: "",
     hitTrack: "",
     social: "",
+    instagramFollowers: "",
     email: "",
+    tiktokUrl: "",
+    tiktokFollowers: "",
+    spotifyUrl: "",
     location: "",
     curatorPageUrl: "",
     curatedArtists: [...EMPTY_CURATED_ARTIST_SLOTS],
+    profileSummary: "",
     note: "",
   });
   const resetMarketingForm = () => setMarketingForm(emptyMarketingForm());
@@ -4401,6 +4521,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     setSelectedTalentProfileId("");
     setTalentProfileContext("project");
     setTalentKickoffEditRecordKey("");
+    setTalentProfileEditMode(false);
   };
   const openTalentProfileById = (talentId, context = "project") => {
     if (!talentId) {
@@ -4410,6 +4531,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     setSelectedTalentProfileId(talentId);
     setTalentProfileContext(context);
     setTalentKickoffEditRecordKey("");
+    setTalentProfileEditMode(false);
     setShowTalentProfileModal(true);
   };
   const openTalentProfileFromArtist = artist => {
@@ -4448,10 +4570,72 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     listeners: artist?.l || "",
     hitTrack: artist?.h || "",
     social: artist?.soc ? `@${artist.soc}` : (artist?.ig || ""),
+    instagramFollowers: artist?.instagramFollowers || "",
     email: artist?.e || "",
+    tiktokUrl: artist?.tiktokUrl || "",
+    tiktokFollowers: artist?.tiktokFollowers || "",
+    spotifyUrl: artist?.spotifyUrl || "",
     location: artist?.loc || "",
     curatorPageUrl: artist?.curatorPageUrl || "",
     curatedArtists: curatedArtistSlots(artist?.curatedArtists),
+    profileSummary: artist?.profileSummary || "",
+  });
+  const seedArtistEditFormFromTalent = (profile, kickoffRecord = null, marketingAssignment = null) => setArtistEditForm({
+    name: String(kickoffRecord?.artistName || marketingAssignment?.talentName || profile?.displayName || "").trim(),
+    genre: String(kickoffRecord?.genre || "").trim(),
+    listeners: String(
+      kickoffRecord?.monthlyListeners
+      || marketingAssignment?.spotifyMonthlyListeners
+      || profile?.spotifyMonthlyListeners
+      || ""
+    ).trim(),
+    hitTrack: String(kickoffRecord?.hitTrack || "").trim(),
+    social: String(
+      kickoffRecord?.social
+        ? `@${kickoffRecord.social}`
+        : kickoffRecord?.instagramUrl
+          || profile?.instagramUrl
+          || (profile?.instagramHandle ? `@${profile.instagramHandle}` : "")
+    ).trim(),
+    instagramFollowers: String(
+      kickoffRecord?.instagramFollowers
+      || marketingAssignment?.instagramFollowers
+      || profile?.instagramFollowers
+      || ""
+    ).trim(),
+    email: String(
+      kickoffRecord?.email
+      || marketingAssignment?.email
+      || profile?.primaryEmail
+      || ""
+    ).trim(),
+    tiktokUrl: String(
+      kickoffRecord?.tiktokUrl
+      || marketingAssignment?.tiktokUrl
+      || profile?.tiktokUrl
+      || (profile?.tiktokHandle ? `@${profile.tiktokHandle}` : "")
+    ).trim(),
+    tiktokFollowers: String(
+      kickoffRecord?.tiktokFollowers
+      || marketingAssignment?.tiktokFollowers
+      || profile?.tiktokFollowers
+      || ""
+    ).trim(),
+    spotifyUrl: String(
+      kickoffRecord?.spotifyUrl
+      || marketingAssignment?.spotifyUrl
+      || profile?.spotifyUrl
+      || ""
+    ).trim(),
+    location: String(kickoffRecord?.location || "").trim(),
+    curatorPageUrl: String(kickoffRecord?.curatorPageUrl || profile?.curatorPageUrl || "").trim(),
+    curatedArtists: curatedArtistSlots(kickoffRecord?.curatedArtists || profile?.curatedArtists),
+    profileSummary: String(
+      kickoffRecord?.profileSummary
+      || marketingAssignment?.profileSummary
+      || profile?.profileSummary
+      || ""
+    ).trim(),
   });
 
   useEffect(() => {
@@ -4756,6 +4940,22 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   useEffect(() => {
     setShowFullTalentTimeline(false);
   }, [selectedTalentProfileId, screen, talentProfileContext]);
+  useEffect(() => {
+    if (!showTalentProfileModal || !selectedTalentProfile) return;
+    seedArtistEditFormFromTalent(
+      selectedTalentProfile,
+      selectedTalentPrimaryKickoffRecord || selectedTalentPrimaryArRecord || null,
+      selectedTalentPrimaryMarketingAssignment || null
+    );
+    setTalentProfileEditMode(false);
+  }, [
+    showTalentProfileModal,
+    selectedTalentProfileId,
+    selectedTalentProfile,
+    selectedTalentPrimaryKickoffRecord,
+    selectedTalentPrimaryArRecord,
+    selectedTalentPrimaryMarketingAssignment,
+  ]);
 
   const persist = useCallback(async (np, la, dk, vm, lb, wu, pm, cw, kvm, lvm) => {
     const nextProjects = np || projects;
@@ -5849,10 +6049,15 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       h: artistForm.hitTrack.trim(),
       ig: socialHandle ? `@${socialHandle}` : "",
       soc: socialHandle,
+      instagramFollowers: artistForm.instagramFollowers.trim(),
       e: artistForm.email.trim(),
+      tiktokUrl: artistForm.tiktokUrl.trim(),
+      tiktokFollowers: artistForm.tiktokFollowers.trim(),
+      spotifyUrl: artistForm.spotifyUrl.trim(),
       loc: artistForm.location.trim(),
       curatorPageUrl: String(artistForm.curatorPageUrl || "").trim(),
       curatedArtists: normalizeCuratedArtists(artistForm.curatedArtists),
+      profileSummary: String(artistForm.profileSummary || "").trim(),
       s: false,
       o: "Manual Add",
     };
@@ -5921,7 +6126,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       marketingItemSubmitRef.current = false;
       setMarketingItemSaving(false);
       openMarketingItemModal(duplicateItem);
-      flash(`${talentName} already has an assignment for ${normalizedCampaigns[0] || "No campaign"}`, "err");
+      flash(`${talentName} already has an assignment for ${normalizedCampaigns[0] || "Unassigned"}`, "err");
       return;
     }
     const itemId = marketingForm.id || `mkt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -5944,7 +6149,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     const previousStatus = exists
       ? normalizeMarketingStatus((proj.marketingItems || []).find(item => item.id === itemId)?.status)
       : "prospect";
-    const campaignLabel = normalizedCampaigns[0] || "No campaign";
+    const campaignLabel = normalizedCampaigns[0] || "Unassigned";
     let nextActivityLog = proj.activityLog || {};
     if (!exists) {
       nextActivityLog = logAction({ ...proj, activityLog: nextActivityLog }, talentName, `Campaign assignment created · ${campaignLabel}`, "event", {
@@ -6152,10 +6357,15 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       h: artistEditForm.hitTrack.trim(),
       ig: socialHandle ? `@${socialHandle}` : "",
       soc: socialHandle,
+      instagramFollowers: artistEditForm.instagramFollowers.trim(),
       e: artistEditForm.email.trim(),
+      tiktokUrl: artistEditForm.tiktokUrl.trim(),
+      tiktokFollowers: artistEditForm.tiktokFollowers.trim(),
+      spotifyUrl: artistEditForm.spotifyUrl.trim(),
       loc: artistEditForm.location.trim(),
       curatorPageUrl: String(artistEditForm.curatorPageUrl || "").trim(),
       curatedArtists: normalizeCuratedArtists(artistEditForm.curatedArtists),
+      profileSummary: String(artistEditForm.profileSummary || "").trim(),
     };
 
     setArtistEditSaving(true);
@@ -6607,10 +6817,15 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       h: artistEditForm.hitTrack.trim(),
       ig: socialHandle ? `@${socialHandle}` : "",
       soc: socialHandle,
+      instagramFollowers: artistEditForm.instagramFollowers.trim(),
       e: artistEditForm.email.trim(),
+      tiktokUrl: artistEditForm.tiktokUrl.trim(),
+      tiktokFollowers: artistEditForm.tiktokFollowers.trim(),
+      spotifyUrl: artistEditForm.spotifyUrl.trim(),
       loc: artistEditForm.location.trim(),
       curatorPageUrl: String(artistEditForm.curatorPageUrl || "").trim(),
       curatedArtists: normalizeCuratedArtists(artistEditForm.curatedArtists),
+      profileSummary: String(artistEditForm.profileSummary || "").trim(),
     };
     const nextTalentId = preferredTalentProfileId(buildTalentIdentity(nextArtist));
 
@@ -6657,6 +6872,67 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       setTalentKickoffEditRecordKey(`${record.projectId}::${nextName}`);
       if (nextTalentId) setSelectedTalentProfileId(nextTalentId);
       flash(renamed ? `Updated ${previousName} → ${nextName}` : `Updated ${nextName}`);
+    } finally {
+      setArtistEditSaving(false);
+    }
+  };
+
+  const saveTalentOverviewLiveProfile = async () => {
+    if (!requireEditor()) return;
+    if (!selectedTalentProfile) return;
+    const nextName = artistEditForm.name.trim();
+    if (!nextName) {
+      flash("Artist name is required", "err");
+      return;
+    }
+    const socialHandle = normalizeSocialHandle(artistEditForm.social);
+    const nextInstagramUrl = String(artistEditForm.social || "").trim();
+    const nextTiktokUrl = String(artistEditForm.tiktokUrl || "").trim();
+    const nextSpotifyUrl = String(artistEditForm.spotifyUrl || "").trim();
+    const targetAssignmentKeys = new Set(
+      (selectedTalentProfile.marketingAssignments || []).map(assignment => `${assignment.projectId}::${assignment.assignmentId}`)
+    );
+    if (!targetAssignmentKeys.size) {
+      flash("No live assignments are linked yet", "err");
+      return;
+    }
+
+    setArtistEditSaving(true);
+    try {
+      const nextProjects = projects.map(project => {
+        const normalizedProject = normalizeProject(project);
+        let touched = false;
+        const nextItems = (normalizedProject.marketingItems || []).map(rawItem => {
+          const item = normalizeMarketingItem(rawItem, normalizedProject.teamUsers || DEFAULT_TEAM_USERS);
+          if (!targetAssignmentKeys.has(`${normalizedProject.id}::${item.id}`)) return rawItem;
+          touched = true;
+          return {
+            ...rawItem,
+            talentName: nextName,
+            email: artistEditForm.email.trim(),
+            instagramHandle: socialHandle,
+            instagramUrl: nextInstagramUrl,
+            instagramFollowers: artistEditForm.instagramFollowers.trim(),
+            tiktokHandle: normalizeSocialHandle(nextTiktokUrl),
+            tiktokUrl: nextTiktokUrl,
+            tiktokFollowers: artistEditForm.tiktokFollowers.trim(),
+            spotifyUrl: nextSpotifyUrl,
+            spotifyMonthlyListeners: artistEditForm.listeners.trim(),
+            profileSummary: String(artistEditForm.profileSummary || "").trim(),
+            updatedAt: new Date().toISOString(),
+          };
+        });
+        if (!touched) return project;
+        return {
+          ...project,
+          marketingItems: nextItems,
+          activityLog: logAction(project, nextName, "Live profile updated", "event"),
+        };
+      });
+
+      await saveProjectsList(nextProjects);
+      flash(`Updated ${nextName}`);
+      setTalentProfileEditMode(false);
     } finally {
       setArtistEditSaving(false);
     }
@@ -7442,7 +7718,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
           action: "update",
           source: "assignment",
           targetId: exactMatch.id,
-          previewLabel: `${marketingItemPrimaryLabel(exactMatch)} · ${row.campaign || "No campaign"}`,
+          previewLabel: `${marketingItemPrimaryLabel(exactMatch)} · ${row.campaign || "Unassigned"}`,
         };
       }
 
@@ -7453,7 +7729,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
           action: "create",
           source: "existing_talent",
           baseItem: sameTalent[0],
-          previewLabel: `${row.talentName} · ${row.campaign || "No campaign"}`,
+          previewLabel: `${row.talentName} · ${row.campaign || "Unassigned"}`,
         };
       }
 
@@ -7464,7 +7740,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
           action: "create",
           source: "artist_roster",
           baseArtist: rosterArtist,
-          previewLabel: `${row.talentName} · ${row.campaign || "No campaign"}`,
+          previewLabel: `${row.talentName} · ${row.campaign || "Unassigned"}`,
         };
       }
 
@@ -8650,11 +8926,6 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
               <span style={{ ...mkP(true, C.bu, C.bb), cursor: "default" }}>{liveCampaignHubRows.length} campaigns</span>
               <span style={{ ...mkP(true, C.pr, C.pb), cursor: "default" }}>{liveCrmOverview.assignments} assignments</span>
               <span style={{ ...mkP(true, C.lv, C.lvb), cursor: "default" }}>{liveCrmOverview.liveTalents} live talent</span>
-              {liveCampaignHubUnassigned.assignments > 0 && (
-                <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>
-                  {liveCampaignHubUnassigned.assignments} unassigned
-                </span>
-              )}
             </div>
 
             <div style={{ display: "grid", gap: 10 }}>
@@ -8713,6 +8984,31 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                   {liveCampaignHubUnassigned.assignments > 0
                     ? <>There are {liveCampaignHubUnassigned.assignments} live assignments without a campaign yet. Start one from Live Roster with <strong style={{ color: C.tx }}>+ Campaign Assignment</strong>.</>
                     : <>No campaigns are moving yet. Start one from Live Roster with <strong style={{ color: C.tx }}>+ Campaign Assignment</strong>.</>}
+                </div>
+              )}
+              {liveCampaignHubUnassigned.assignments > 0 && (
+                <div style={{ padding: "14px 16px", borderRadius: 16, border: `1px solid ${C.bd}`, background: C.sf }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, flexWrap: "wrap", marginBottom: 8 }}>
+                    <div>
+                      <div style={{ fontSize: 16, fontWeight: 700, color: C.tx, marginBottom: 4 }}>Unassigned live talent</div>
+                      <div style={{ fontSize: 12, color: C.ts }}>
+                        {liveCampaignHubUnassigned.talentCount} talent · {liveCampaignHubUnassigned.assignments} assignment{liveCampaignHubUnassigned.assignments === 1 ? "" : "s"} are still sitting outside a campaign.
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => {
+                        setShowCampaignHubModal(false);
+                        setLiveCrmCampaignFilter("none");
+                        flash("Focused Live Roster on assignments without a campaign");
+                      }}
+                      style={actionBtn(false, "accent")}
+                    >
+                      Focus Unassigned
+                    </button>
+                  </div>
+                  <div style={{ fontSize: 12, color: C.tt }}>
+                    This is not a campaign. It is just a bucket for live assignments that still need campaign placement.
+                  </div>
                 </div>
               )}
             </div>
@@ -8798,7 +9094,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                         <div style={{ fontWeight: 600, color: C.tx }}>{entry.talentName}</div>
                         <div style={{ fontSize: 11, color: C.tt }}>Line {entry.lineNumber}</div>
                       </div>
-                      <div style={{ color: C.ts }}>{entry.campaign || "No campaign"}</div>
+                      <div style={{ color: C.ts }}>{entry.campaign || "Unassigned"}</div>
                       <div style={{ color: C.ts }}>{MM[entry.status]?.label || titleCaseWords(entry.status)}</div>
                       <div style={{ color: C.ts, lineHeight: 1.45 }}>
                         {entry.action === "update" && `Existing assignment match${entry.owner ? ` · Owner → ${entry.owner}` : ""}`}
@@ -8861,7 +9157,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                         <option value="">New campaign draft</option>
                       )}
                       {relatedMarketingAssignments.map(item => {
-                        const campaignLabel = item.campaigns?.length ? item.campaigns.join(", ") : "No campaign";
+                        const campaignLabel = item.campaigns?.length ? item.campaigns.join(", ") : "Unassigned";
                         const statusLabel = MM[item.status]?.label || "Prospect";
                         return (
                           <option key={item.id} value={item.id}>
@@ -9047,13 +9343,13 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                 <div style={{ fontSize: 11, letterSpacing: 2, textTransform: "uppercase", color: C.ac, fontWeight: 700, marginBottom: 8 }}>Talent Overview</div>
                 <div style={{ fontSize: 28, fontWeight: 800, letterSpacing: "-0.04em", color: C.tx, marginBottom: 8 }}>{selectedTalentProfile.displayName}</div>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                  {selectedTalentProfile.talentTypes.map(type => (
+                  {selectedTalentTypes.map(type => (
                     <span key={type} style={{ ...mkP(true, C.ac, C.al), cursor: "default" }}>{type}</span>
                   ))}
                   <span style={{ ...mkP(true, talentLifecycleTone(selectedTalentProfile.platformLifecycle, C).tone, talentLifecycleTone(selectedTalentProfile.platformLifecycle, C).bg), cursor: "default" }}>
                     {TALENT_LIFECYCLE_LABELS[selectedTalentProfile.platformLifecycle] || "Pre-Live"}
                   </span>
-                  {selectedTalentProfile.sources.map(source => (
+                  {selectedTalentSources.map(source => (
                     <span key={source} style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>
                       {TALENT_SOURCE_LABELS[source] || source}
                     </span>
@@ -9093,319 +9389,331 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
               <button onClick={closeTalentProfileModal} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 20, color: C.ts }}>✕</button>
             </div>
 
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 18 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 14, marginBottom: 18 }}>
               <div style={{ ...cS, padding: "18px 20px" }}>
-                <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>
-                  {selectedTalentProfile.talentTypes.includes("Curator") ? "Curator Profile" : "Artist Profile"}
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: 12 }}>
+                  <div style={{ fontSize: 14, fontWeight: 700 }}>{selectedTalentProfileCardTitle}</div>
+                  {selectedTalentCanEditProfile && (
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      {talentProfileEditMode ? (
+                        <>
+                          <button
+                            onClick={() => {
+                              seedArtistEditFormFromTalent(
+                                selectedTalentProfile,
+                                selectedTalentEditableKickoffRecord,
+                                selectedTalentPrimaryMarketingAssignment
+                              );
+                              setTalentProfileEditMode(false);
+                            }}
+                            disabled={artistEditSaving}
+                            style={{ ...actionBtn(false, "neutral"), ...lockStyle(artistEditSaving) }}
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            onClick={() => {
+                              if (isKickoffTalentContext && selectedTalentEditableKickoffRecord) {
+                                void saveTalentOverviewKickoffProfile(selectedTalentEditableKickoffRecord).then(() => setTalentProfileEditMode(false));
+                              } else {
+                                void saveTalentOverviewLiveProfile();
+                              }
+                            }}
+                            disabled={artistEditSaving || isReadOnly}
+                            style={{ ...actionBtn(false, "accent"), ...lockStyle(artistEditSaving || isReadOnly) }}
+                          >
+                            {artistEditSaving ? "Saving..." : "Save Profile"}
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          onClick={() => setTalentProfileEditMode(true)}
+                          disabled={isReadOnly}
+                          style={{ ...actionBtn(false, "neutral"), ...lockStyle(isReadOnly) }}
+                        >
+                          {selectedTalentTypes.includes("Curator") ? "Edit Curator Info" : "Edit Artist Info"}
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
-                <div style={{ display: "grid", gap: 10, fontSize: 13 }}>
-                  <div className="gf-rail-kv">
-                    <span className="gf-rail-kv-label">Genre / vibe</span>
-                    <span className="gf-rail-kv-value">{selectedTalentGenre || "Not set yet"}</span>
-                  </div>
-                  <div className="gf-rail-kv">
-                    <span className="gf-rail-kv-label">Monthly listeners</span>
-                    <span className="gf-rail-kv-value">{selectedTalentListeners || "No listener count yet"}</span>
-                  </div>
-                  {selectedTalentHitTrack && (
-                    <div className="gf-rail-kv">
-                      <span className="gf-rail-kv-label">Hit track</span>
-                      <span className="gf-rail-kv-value">{selectedTalentHitTrack}</span>
+                {talentProfileEditMode ? (
+                  <div style={{ display: "grid", gap: 10, fontSize: 13 }}>
+                    <div style={{ fontSize: 11, color: C.tt }}>
+                      Clear any field you no longer want and save to remove it from the profile.
                     </div>
-                  )}
-                  {selectedTalentLocation && (
-                    <div className="gf-rail-kv">
-                      <span className="gf-rail-kv-label">Location</span>
-                      <span className="gf-rail-kv-value">{selectedTalentLocation}</span>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10 }}>
+                      <input value={artistEditForm.name} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, name: e.target.value }))} placeholder={selectedTalentTypes.includes("Curator") ? "Curator name" : "Artist name"} style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
+                      <input value={artistEditForm.genre} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, genre: e.target.value }))} placeholder="Genre / vibe" autoCorrect="off" autoCapitalize="off" spellCheck={false} style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
+                      <input value={artistEditForm.listeners} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, listeners: e.target.value }))} placeholder="Monthly listeners" style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
+                      <input value={artistEditForm.hitTrack} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, hitTrack: e.target.value }))} placeholder="Hit track" style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
+                      <input value={artistEditForm.social} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, social: e.target.value }))} placeholder="Instagram handle or URL" style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
+                      <input value={artistEditForm.instagramFollowers} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, instagramFollowers: normalizeFollowerCount(e.target.value) }))} placeholder="Instagram followers" style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
+                      <input value={artistEditForm.tiktokUrl} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, tiktokUrl: e.target.value }))} placeholder="TikTok handle or URL" style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
+                      <input value={artistEditForm.tiktokFollowers} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, tiktokFollowers: normalizeFollowerCount(e.target.value) }))} placeholder="TikTok followers" style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
+                      <input value={artistEditForm.spotifyUrl} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, spotifyUrl: e.target.value }))} placeholder="Spotify artist link" style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
+                      <input value={artistEditForm.email} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, email: e.target.value }))} placeholder="Email" style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
+                      <input value={artistEditForm.location} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, location: e.target.value }))} placeholder="Location" style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
+                      {selectedTalentTypes.includes("Curator") && (
+                        <input value={artistEditForm.curatorPageUrl} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, curatorPageUrl: e.target.value }))} placeholder="Curator page link" style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
+                      )}
                     </div>
-                  )}
-                  <div className="gf-rail-kv">
-                    <span className="gf-rail-kv-label">Primary email</span>
-                    <span className="gf-rail-kv-value">{selectedTalentProfile.primaryEmail || "No email yet"}</span>
+                    {selectedTalentTypes.includes("Curator") && (
+                      <div>
+                        <div style={{ fontSize: 11, color: C.tt, marginBottom: 8 }}>Curated artists they vouch for</div>
+                        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10 }}>
+                          {artistEditForm.curatedArtists.map((value, index) => (
+                            <input
+                              key={`talent-curated-${index}`}
+                              value={value}
+                              readOnly={isReadOnly}
+                              onChange={e => setArtistEditForm(prev => {
+                                const next = [...prev.curatedArtists];
+                                next[index] = e.target.value;
+                                return { ...prev, curatedArtists: next };
+                              })}
+                              placeholder={`Curated artist ${index + 1}`}
+                              style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }}
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    <textarea value={artistEditForm.profileSummary} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, profileSummary: e.target.value }))} placeholder="AI / profile notes, positioning, fit, curator context..." style={{ ...iS, width: "100%", minHeight: 110, resize: "vertical", ...lockStyle(isReadOnly) }} />
                   </div>
-                  <div className="gf-rail-kv">
-                    <span className="gf-rail-kv-label">Instagram</span>
-                    <span className="gf-rail-kv-value">
-                      {selectedTalentProfile.instagramHandle
-                        ? `@${selectedTalentProfile.instagramHandle}${selectedTalentProfile.instagramFollowers ? ` · ${selectedTalentProfile.instagramFollowers}` : ""}`
-                        : "Not linked yet"}
-                    </span>
-                  </div>
-                  <div className="gf-rail-kv">
-                    <span className="gf-rail-kv-label">TikTok</span>
-                    <span className="gf-rail-kv-value">
-                      {selectedTalentProfile.tiktokHandle
-                        ? `@${selectedTalentProfile.tiktokHandle}${selectedTalentProfile.tiktokFollowers ? ` · ${selectedTalentProfile.tiktokFollowers}` : ""}`
-                        : "Not linked yet"}
-                    </span>
-                  </div>
-                  <div className="gf-rail-kv">
-                    <span className="gf-rail-kv-label">Spotify</span>
-                    <span className="gf-rail-kv-value">{selectedTalentSpotifyLabel}</span>
-                  </div>
-                  {selectedTalentProfile.curatorPageUrl && (
+                ) : (
+                  <div style={{ display: "grid", gap: 10, fontSize: 13 }}>
                     <div className="gf-rail-kv">
-                      <span className="gf-rail-kv-label">Curator page</span>
-                      <span className="gf-rail-kv-value">Linked</span>
+                      <span className="gf-rail-kv-label">Genre / vibe</span>
+                      <span className="gf-rail-kv-value">{selectedTalentGenre || "Not set yet"}</span>
                     </div>
-                  )}
-                  {selectedTalentProfile.curatedArtists.length > 0 && (
                     <div className="gf-rail-kv">
-                      <span className="gf-rail-kv-label">Curated artists</span>
-                      <span className="gf-rail-kv-value">{selectedTalentProfile.curatedArtists.length}</span>
+                      <span className="gf-rail-kv-label">Monthly listeners</span>
+                      <span className="gf-rail-kv-value">{selectedTalentListeners || "No listener count yet"}</span>
                     </div>
-                  )}
-                  {selectedTalentProfile.aliases.length > 0 && (
+                    {selectedTalentHitTrack && (
+                      <div className="gf-rail-kv">
+                        <span className="gf-rail-kv-label">Hit track</span>
+                        <span className="gf-rail-kv-value">{selectedTalentHitTrack}</span>
+                      </div>
+                    )}
+                    {selectedTalentLocation && (
+                      <div className="gf-rail-kv">
+                        <span className="gf-rail-kv-label">Location</span>
+                        <span className="gf-rail-kv-value">{selectedTalentLocation}</span>
+                      </div>
+                    )}
                     <div className="gf-rail-kv">
-                      <span className="gf-rail-kv-label">Aliases</span>
-                      <span className="gf-rail-kv-value">{selectedTalentProfile.aliases.join(" · ")}</span>
+                      <span className="gf-rail-kv-label">Primary email</span>
+                      <span className="gf-rail-kv-value">{selectedTalentPrimaryEmail || "No email yet"}</span>
                     </div>
-                  )}
-                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 4 }}>
-                    {!isKickoffTalentContext && (
-                      <button
-                        onClick={() => {
-                          closeTalentProfileModal();
-                          if (isLiveTalentContext) launchLiveCampaignAction(selectedTalentProfile);
-                          else openMarketingItemModalFromTalentProfile(selectedTalentProfile);
-                        }}
-                        disabled={isReadOnly}
-                        style={{ ...actionBtn(false, "good"), ...lockStyle(isReadOnly) }}
-                      >
-                        + Campaign
-                      </button>
+                    <div className="gf-rail-kv">
+                      <span className="gf-rail-kv-label">Instagram</span>
+                      <span className="gf-rail-kv-value">
+                        {selectedTalentInstagramHandle
+                          ? `@${selectedTalentInstagramHandle}${selectedTalentInstagramFollowers ? ` · ${selectedTalentInstagramFollowers}` : ""}`
+                          : "Not linked yet"}
+                      </span>
+                    </div>
+                    <div className="gf-rail-kv">
+                      <span className="gf-rail-kv-label">TikTok</span>
+                      <span className="gf-rail-kv-value">
+                        {selectedTalentTiktokHandle
+                          ? `@${selectedTalentTiktokHandle}${selectedTalentTiktokFollowers ? ` · ${selectedTalentTiktokFollowers}` : ""}`
+                          : "Not linked yet"}
+                      </span>
+                    </div>
+                    {showSelectedTalentSpotifyRow && (
+                      <div className="gf-rail-kv">
+                        <span className="gf-rail-kv-label">Spotify profile</span>
+                        <span className="gf-rail-kv-value">{selectedTalentSpotifyLabel}</span>
+                      </div>
                     )}
-                    {selectedTalentProfile.primaryEmail && (
-                      <a href={`mailto:${selectedTalentProfile.primaryEmail}`} style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Email</a>
+                    <div className="gf-rail-kv">
+                      <span className="gf-rail-kv-label">AI / strategy notes</span>
+                      <span className="gf-rail-kv-value" style={{ whiteSpace: "pre-wrap", lineHeight: 1.6 }}>
+                        {selectedTalentProfileSummary || "No AI or profile notes yet"}
+                      </span>
+                    </div>
+                    {selectedTalentCuratorPageUrl && (
+                      <div className="gf-rail-kv">
+                        <span className="gf-rail-kv-label">Curator page</span>
+                        <span className="gf-rail-kv-value">Linked</span>
+                      </div>
                     )}
-                    {selectedTalentProfile.instagramHandle && (
-                      <a href={selectedTalentProfile.instagramUrl || `https://instagram.com/${selectedTalentProfile.instagramHandle}`} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Instagram</a>
+                    {selectedTalentCuratedArtists.length > 0 && (
+                      <div style={{ display: "grid", gap: 6 }}>
+                        <span className="gf-rail-kv-label">Curated artists</span>
+                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                          {selectedTalentCuratedArtists.map(name => (
+                            <span key={`curated-${name}`} style={{ ...mkP(true, C.ac, C.al), cursor: "default" }}>{name}</span>
+                          ))}
+                        </div>
+                      </div>
                     )}
-                    {selectedTalentProfile.tiktokHandle && (
-                      <a href={selectedTalentProfile.tiktokUrl || `https://www.tiktok.com/@${selectedTalentProfile.tiktokHandle}`} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>TikTok</a>
-                    )}
-                    {selectedTalentProfile.spotifyUrl && (
-                      <a href={selectedTalentProfile.spotifyUrl} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Spotify</a>
-                    )}
-                    {selectedTalentProfile.curatorPageUrl && (
-                      <a href={selectedTalentProfile.curatorPageUrl} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Curator Page</a>
-                    )}
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 4 }}>
+                      {!isKickoffTalentContext && (
+                        <button
+                          onClick={() => {
+                            if (isLiveTalentContext) launchLiveCampaignAction(selectedTalentProfile);
+                            else openMarketingItemModalFromTalentProfile(selectedTalentProfile);
+                          }}
+                          disabled={isReadOnly}
+                          style={{ ...actionBtn(false, "good"), ...lockStyle(isReadOnly) }}
+                        >
+                          + Campaign
+                        </button>
+                      )}
+                      {selectedTalentPrimaryEmail && (
+                        <a href={`mailto:${selectedTalentPrimaryEmail}`} style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Email</a>
+                      )}
+                      {selectedTalentInstagramHandle && (
+                        <a href={selectedTalentInstagramUrl || `https://instagram.com/${selectedTalentInstagramHandle}`} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Instagram</a>
+                      )}
+                      {selectedTalentTiktokHandle && (
+                        <a href={selectedTalentTiktokUrl || `https://www.tiktok.com/@${selectedTalentTiktokHandle}`} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>TikTok</a>
+                      )}
+                      {selectedTalentSpotifyUrl && (
+                        <a href={selectedTalentSpotifyUrl} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Spotify</a>
+                      )}
+                      {selectedTalentCuratorPageUrl && (
+                        <a href={selectedTalentCuratorPageUrl} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Curator Page</a>
+                      )}
+                    </div>
                   </div>
-                </div>
+                )}
               </div>
 
               <div style={{ ...cS, padding: "18px 20px" }}>
-                <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>
-                  {isKickoffTalentContext ? "Kickoff Snapshot" : isLiveTalentContext ? "Live Snapshot" : "Workspace Snapshot"}
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
+                  <div style={{ fontSize: 14, fontWeight: 700 }}>
+                    {isKickoffTalentContext ? selectedTalentKickoffCardTitle : "Campaign Snapshot"}
+                  </div>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    {isKickoffTalentContext && selectedTalentHeadlineKickoffStage && (
+                      <span style={{ ...mkP(true, sc(selectedTalentHeadlineKickoffStage, C), sb(selectedTalentHeadlineKickoffStage, C)), cursor: "default" }}>
+                        {SM[selectedTalentHeadlineKickoffStage]?.label || titleCaseWords(selectedTalentHeadlineKickoffStage)}
+                      </span>
+                    )}
+                    {isLiveTalentContext && selectedTalentHeadlineMarketingStatus && (
+                      <span style={{ ...mkP(true, marketingStatusTone(selectedTalentHeadlineMarketingStatus, C).tone, marketingStatusTone(selectedTalentHeadlineMarketingStatus, C).bg), cursor: "default" }}>
+                        {MM[selectedTalentHeadlineMarketingStatus]?.label || titleCaseWords(selectedTalentHeadlineMarketingStatus)}
+                      </span>
+                    )}
+                    {selectedTalentHeadlineOwner && (
+                      <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>Owner: {selectedTalentHeadlineOwner}</span>
+                    )}
+                    {isKickoffTalentContext && selectedTalentEditableKickoffRecord?.followUp && (
+                      <span style={{ ...mkP(true, C.ac, C.al), cursor: "default" }}>
+                        Follow-up {selectedTalentEditableKickoffRecord.followUp}
+                      </span>
+                    )}
+                  </div>
                 </div>
+
                 {isKickoffTalentContext ? (
-                  selectedTalentPrimaryKickoffRecord ? (
-                    <div style={{ display: "grid", gap: 10 }}>
-                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                        <span style={{ ...mkP(true, sc(selectedTalentPrimaryKickoffRecord.stage, C), sb(selectedTalentPrimaryKickoffRecord.stage, C)), cursor: "default" }}>
-                          {SM[selectedTalentPrimaryKickoffRecord.stage]?.label || "Prospect"}
-                        </span>
-                        <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>
-                          Owner: {selectedTalentPrimaryKickoffRecord.owner || "Unassigned"}
-                        </span>
-                        {selectedTalentPrimaryKickoffRecord.followUp && (
-                          <span style={{ ...mkP(true, C.ac, C.al), cursor: "default" }}>
-                            Follow-up {selectedTalentPrimaryKickoffRecord.followUp}
-                          </span>
-                        )}
-                      </div>
-                      {selectedTalentPrimaryKickoffRecord.note && (
-                        <div style={{ fontSize: 12, color: C.ts, lineHeight: 1.7 }}>
-                          {selectedTalentPrimaryKickoffRecord.note}
+                  selectedTalentEditableKickoffRecord ? (
+                    <div style={{ display: "grid", gap: 12 }}>
+                      {selectedTalentEditableKickoffRecord.note && (
+                        <div style={{ fontSize: 12, color: C.ts, lineHeight: 1.6 }}>
+                          {selectedTalentEditableKickoffRecord.note}
                         </div>
                       )}
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                        <label style={{ fontSize: 11, color: C.ts, display: "grid", gap: 4 }}>
+                          <span>Kickoff stage</span>
+                          <select
+                            value={normalizeStageId(selectedTalentEditableKickoffRecord.stage || "prospect")}
+                            disabled={isReadOnly}
+                            onChange={e => { void updateTalentOverviewKickoffStage(selectedTalentEditableKickoffRecord, e.target.value); }}
+                            style={{ ...iS, width: "100%", fontSize: 12, ...lockStyle(isReadOnly) }}
+                          >
+                            {KICKOFF_STAGE_ACTIONS.map(stage => (
+                              <option key={`kickoff-detail-stage-${selectedTalentEditableKickoffRecord.projectId}-${selectedTalentEditableKickoffRecord.artistName}-${stage.id}`} value={stage.id}>
+                                {stage.label}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label style={{ fontSize: 11, color: C.ts, display: "grid", gap: 4 }}>
+                          <span>Owner</span>
+                          <select
+                            value={selectedTalentEditableKickoffRecord.owner || ""}
+                            disabled={isReadOnly}
+                            onChange={e => { void updateTalentOverviewKickoffOwner(selectedTalentEditableKickoffRecord, e.target.value); }}
+                            style={{ ...iS, width: "100%", fontSize: 12, ...lockStyle(isReadOnly) }}
+                          >
+                            <option value="">Unassigned</option>
+                            {(projects.find(project => project.id === selectedTalentEditableKickoffRecord.projectId)?.teamUsers || DEFAULT_TEAM_USERS).map(user => (
+                              <option key={`kickoff-detail-owner-${selectedTalentEditableKickoffRecord.projectId}-${selectedTalentEditableKickoffRecord.artistName}-${user}`} value={user}>{user}</option>
+                            ))}
+                          </select>
+                        </label>
+                      </div>
+                      <label style={{ fontSize: 11, color: C.ts, display: "grid", gap: 4 }}>
+                        <span>Kickoff notes</span>
+                        <textarea
+                          defaultValue={selectedTalentEditableKickoffRecord.note || ""}
+                          readOnly={isReadOnly}
+                          onClick={e => e.stopPropagation()}
+                          onBlur={e => { void updateTalentOverviewKickoffNote(selectedTalentEditableKickoffRecord, e.currentTarget.value.trim()); }}
+                          placeholder="Add kickoff notes here..."
+                          style={{ ...iS, width: "100%", minHeight: 96, resize: "vertical", fontSize: 12, ...lockStyle(isReadOnly) }}
+                        />
+                      </label>
+                      <label style={{ fontSize: 11, color: C.ts, display: "grid", gap: 4 }}>
+                        <span>Follow-up date</span>
+                        <input
+                          type="date"
+                          defaultValue={selectedTalentEditableKickoffRecord.followUp || ""}
+                          disabled={isReadOnly}
+                          onClick={e => e.stopPropagation()}
+                          onChange={e => { void updateTalentOverviewKickoffFollowUp(selectedTalentEditableKickoffRecord, e.target.value); }}
+                          style={{ ...iS, width: "100%", fontSize: 12, ...lockStyle(isReadOnly) }}
+                        />
+                      </label>
                     </div>
                   ) : (
                     <div style={{ fontSize: 12, color: C.tt }}>No active kickoff record is linked yet.</div>
                   )
-                ) : isLiveTalentContext ? (
-                  <div style={{ display: "grid", gap: 10 }}>
+                ) : (
+                  <div style={{ display: "grid", gap: 12 }}>
                     <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                       <span style={{ ...mkP(true, C.lv, C.lvb), cursor: "default" }}>
                         {selectedTalentRealCampaigns.length} campaign{selectedTalentRealCampaigns.length === 1 ? "" : "s"}
                       </span>
                       <span style={{ ...mkP(true, C.pr, C.pb), cursor: "default" }}>
-                        {selectedTalentProfile.marketingAssignments.length} assignment{selectedTalentProfile.marketingAssignments.length === 1 ? "" : "s"}
+                        {selectedTalentMarketingAssignments.length} assignment{selectedTalentMarketingAssignments.length === 1 ? "" : "s"}
                       </span>
-                      {selectedTalentHeadlineOwner && (
-                        <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>
-                          Owner: {selectedTalentHeadlineOwner}
-                        </span>
-                      )}
                     </div>
                     <div style={{ display: "grid", gap: 8, fontSize: 12, color: C.ts }}>
-                      <div>
-                        <strong style={{ color: C.tx }}>Campaigns:</strong> {selectedTalentRealCampaigns.length ? selectedTalentRealCampaigns.join(" · ") : "No campaigns yet"}
+                      <div><strong style={{ color: C.tx }}>Campaigns in motion</strong></div>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        {selectedTalentRealCampaigns.length ? selectedTalentRealCampaigns.map(campaign => (
+                          <span key={`talent-campaign-chip:${campaign}`} style={{ ...mkP(true, C.bu, C.bb), cursor: "default" }}>{campaign}</span>
+                        )) : <span style={{ ...mkP(true, C.tt, C.sa), cursor: "default" }}>No campaigns yet</span>}
                       </div>
-                      <div style={{ display: "grid", gap: 6 }}>
-                        <strong style={{ color: C.tx }}>Status mix</strong>
-                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                          {liveStatusSummaryParts(selectedTalentProfile).length ? liveStatusSummaryParts(selectedTalentProfile).map(part => (
-                            <span key={`talent-status-${part.id}`} style={{ ...mkP(true, marketingStatusTone(part.id, C).tone, marketingStatusTone(part.id, C).bg), cursor: "default" }}>
-                              {part.label} {part.count}
-                            </span>
-                          )) : (
-                            <span style={{ ...mkP(true, C.tt, C.sa), cursor: "default" }}>No campaign status</span>
-                          )}
-                        </div>
+                      <div><strong style={{ color: C.tx }}>Status mix</strong></div>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        {liveStatusSummaryParts(selectedTalentProfile).length ? liveStatusSummaryParts(selectedTalentProfile).map(part => (
+                          <span key={`talent-status-${part.id}`} style={{ ...mkP(true, marketingStatusTone(part.id, C).tone, marketingStatusTone(part.id, C).bg), cursor: "default" }}>
+                            {part.label} {part.count}
+                          </span>
+                        )) : (
+                          <span style={{ ...mkP(true, C.tt, C.sa), cursor: "default" }}>No active statuses yet</span>
+                        )}
                       </div>
                     </div>
-                  </div>
-                ) : (
-                  <div style={{ display: "grid", gap: 8, fontSize: 12, color: C.ts }}>
-                    <div><strong style={{ color: C.tx }}>Records:</strong> {talentOverviewProjectSummaries.length}</div>
-                    <div><strong style={{ color: C.tx }}>Campaigns:</strong> {selectedTalentProfile.campaigns.length || 0}</div>
                   </div>
                 )}
               </div>
             </div>
-
-            {!isLiveTalentContext && <div style={{ ...cS, padding: "18px 20px", marginBottom: 16 }}>
-              <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>Kickoff Details</div>
-              <div style={{ display: "grid", gap: 10 }}>
-                {selectedTalentKickoffProjectSummaries.length ? selectedTalentKickoffProjectSummaries.map(summary => (
-                  <div key={`ar:${summary.projectId}`} style={{ padding: "12px 14px", borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sa }}>
-                    <div style={{ fontSize: 12, color: C.tt, marginBottom: 10 }}>{workspaceRecordLabel(summary.projectType, "kickoff")}</div>
-                    <div style={{ display: "grid", gap: 10 }}>
-                      {summary.arRecords.map(record => (
-                        <div key={`${record.projectId}:${record.artistName}`} style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", padding: "12px 14px", borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sf }}>
-                          <div style={{ minWidth: 0 }}>
-                            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 6 }}>
-                              <div style={{ fontSize: 14, fontWeight: 700, color: C.tx }}>{record.artistName}</div>
-                              <span style={{ ...mkP(true, record.projectType === "curator" ? C.ac : C.ts, record.projectType === "curator" ? C.al : C.sa), cursor: "default" }}>
-                                {record.projectType === "curator" ? "Curator" : "A&R"}
-                              </span>
-                              <span style={{ ...mkP(true, sc(record.stage, C), sb(record.stage, C)), cursor: "default" }}>{SM[record.stage]?.label || "Prospect"}</span>
-                              {record.owner && <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{record.owner}</span>}
-                            </div>
-                            <div style={{ fontSize: 11, color: C.tt }}>
-                              {[record.genre, record.monthlyListeners ? `${record.monthlyListeners} listeners` : "", record.location].filter(Boolean).join(" · ") || (record.projectType === "curator" ? "Working curator record" : "Working A&R record")}
-                            </div>
-                            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
-                              {talentKickoffEditRecordKey === `${record.projectId}::${record.artistName}` ? (
-                                <>
-                                  <button
-                                    onClick={() => { setTalentKickoffEditRecordKey(""); }}
-                                    disabled={artistEditSaving}
-                                    style={{ ...actionBtn(false, "neutral"), ...lockStyle(artistEditSaving) }}
-                                  >
-                                    Cancel Edit
-                                  </button>
-                                  <button
-                                    onClick={() => { void saveTalentOverviewKickoffProfile(record); }}
-                                    disabled={artistEditSaving || isReadOnly}
-                                    style={{ ...actionBtn(false, "accent"), ...lockStyle(artistEditSaving || isReadOnly) }}
-                                  >
-                                    {artistEditSaving ? "Saving..." : "Save Profile"}
-                                  </button>
-                                </>
-                              ) : (
-                                <button
-                                  onClick={() => openTalentOverviewKickoffEditor(record)}
-                                  disabled={isReadOnly}
-                                  style={{ ...actionBtn(false, "neutral"), ...lockStyle(isReadOnly) }}
-                                >
-                                  Edit {record.projectType === "curator" ? "Curator" : "Artist"} Info
-                                </button>
-                              )}
-                            </div>
-                            {talentKickoffEditRecordKey === `${record.projectId}::${record.artistName}` && (
-                              <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10, marginTop: 12 }}>
-                                <input value={artistEditForm.name} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, name: e.target.value }))} placeholder={record.projectType === "curator" ? "Curator name" : "Artist name"} style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
-                                <input value={artistEditForm.genre} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, genre: e.target.value }))} placeholder="Genre / vibe" autoCorrect="off" autoCapitalize="off" spellCheck={false} style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
-                                <input value={artistEditForm.listeners} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, listeners: e.target.value }))} placeholder="Monthly listeners" style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
-                                <input value={artistEditForm.hitTrack} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, hitTrack: e.target.value }))} placeholder="Hit track" style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
-                                <input value={artistEditForm.social} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, social: e.target.value }))} placeholder="@handle or URL" style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
-                                <input value={artistEditForm.email} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, email: e.target.value }))} placeholder="Email" style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
-                                <input value={artistEditForm.location} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, location: e.target.value }))} placeholder="Location" style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
-                                {record.projectType === "curator" && (
-                                  <input value={artistEditForm.curatorPageUrl} readOnly={isReadOnly} onChange={e => setArtistEditForm(prev => ({ ...prev, curatorPageUrl: e.target.value }))} placeholder="Curator page link" style={{ ...iS, width: "100%", ...lockStyle(isReadOnly) }} />
-                                )}
-                              </div>
-                            )}
-                            {(record.note || record.followUp) && (
-                              <div style={{ display: "grid", gap: 4, marginTop: 8, fontSize: 11, color: C.ts, lineHeight: 1.5 }}>
-                                {record.note && <div><strong style={{ color: C.tx }}>Notes:</strong> {record.note}</div>}
-                                {record.followUp && <div><strong style={{ color: C.tx }}>Follow-up:</strong> {record.followUp}</div>}
-                              </div>
-                            )}
-                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 10 }}>
-                              <label style={{ fontSize: 11, color: C.ts, display: "grid", gap: 4 }}>
-                                <span>Kickoff stage</span>
-                                <select
-                                  value={normalizeStageId(record.stage || "prospect")}
-                                  disabled={isReadOnly}
-                                  onChange={e => { void updateTalentOverviewKickoffStage(record, e.target.value); }}
-                                  style={{ ...iS, width: "100%", fontSize: 12, ...lockStyle(isReadOnly) }}
-                                >
-                                  {KICKOFF_STAGE_ACTIONS.map(stage => (
-                                    <option key={`talent-stage-${record.projectId}-${record.artistName}-${stage.id}`} value={stage.id}>
-                                      {stage.label}
-                                    </option>
-                                  ))}
-                                </select>
-                              </label>
-                              <label style={{ fontSize: 11, color: C.ts, display: "grid", gap: 4 }}>
-                                <span>Owner</span>
-                                <select
-                                  value={record.owner || ""}
-                                  disabled={isReadOnly}
-                                  onChange={e => { void updateTalentOverviewKickoffOwner(record, e.target.value); }}
-                                  style={{ ...iS, width: "100%", fontSize: 12, ...lockStyle(isReadOnly) }}
-                                >
-                                  <option value="">Unassigned</option>
-                                  {(projects.find(project => project.id === record.projectId)?.teamUsers || DEFAULT_TEAM_USERS).map(user => (
-                                    <option key={`talent-owner-${record.projectId}-${record.artistName}-${user}`} value={user}>{user}</option>
-                                  ))}
-                                </select>
-                              </label>
-                            </div>
-                            <div style={{ display: "grid", gap: 8, marginTop: 10 }}>
-                              <label style={{ fontSize: 11, color: C.ts, display: "grid", gap: 4 }}>
-                                <span>Kickoff notes</span>
-                                <textarea
-                                  defaultValue={record.note || ""}
-                                  readOnly={isReadOnly}
-                                  onClick={e => e.stopPropagation()}
-                                  onBlur={e => { void updateTalentOverviewKickoffNote(record, e.currentTarget.value.trim()); }}
-                                  placeholder="Add kickoff notes here..."
-                                  style={{ ...iS, width: "100%", minHeight: 72, resize: "vertical", fontSize: 12, ...lockStyle(isReadOnly) }}
-                                />
-                              </label>
-                              <label style={{ fontSize: 11, color: C.ts, display: "grid", gap: 4 }}>
-                                <span>Follow-up date</span>
-                                <input
-                                  type="date"
-                                  defaultValue={record.followUp || ""}
-                                  disabled={isReadOnly}
-                                  onClick={e => e.stopPropagation()}
-                                  onChange={e => { void updateTalentOverviewKickoffFollowUp(record, e.target.value); }}
-                                  style={{ ...iS, width: "100%", fontSize: 12, ...lockStyle(isReadOnly) }}
-                                />
-                              </label>
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )) : (
-                  <div style={{ fontSize: 12, color: C.tt }}>No active kickoff records linked yet.</div>
-                )}
-              </div>
-            </div>}
 
             {!isKickoffTalentContext && <div style={{ ...cS, padding: "18px 20px", marginBottom: 16 }}>
               <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
                 <div style={{ fontSize: 14, fontWeight: 700 }}>Live Roster Campaigns</div>
                 <button
                   onClick={() => {
-                    closeTalentProfileModal();
                     launchLiveCampaignAction(selectedTalentProfile);
                   }}
                   disabled={isReadOnly}
@@ -9419,11 +9727,11 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                   <div key={`marketing:${summary.projectId}`} style={{ padding: "12px 14px", borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sa }}>
                     <div style={{ fontSize: 12, color: C.tt, marginBottom: 10 }}>{workspaceRecordLabel(summary.projectType, "live")}</div>
                     <div style={{ display: "grid", gap: 10 }}>
-                      {summary.marketingAssignments.map(assignment => (
+                      {(summary.marketingAssignments || []).map(assignment => (
                         <div key={assignment.assignmentId} style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", padding: "12px 14px", borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sf }}>
                           <div style={{ minWidth: 0 }}>
                             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 6 }}>
-                              <div style={{ fontSize: 14, fontWeight: 700, color: C.tx }}>{assignment.campaign || "No campaign"}</div>
+                              <div style={{ fontSize: 14, fontWeight: 700, color: C.tx }}>{assignment.campaign || "Unassigned"}</div>
                               <span style={{ ...mkP(true, marketingStatusTone(assignment.status, C).tone, marketingStatusTone(assignment.status, C).bg), cursor: "default" }}>{MM[assignment.status]?.label || "Prospect"}</span>
                               {assignment.owner && <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{assignment.owner}</span>}
                             </div>
@@ -9494,7 +9802,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                               disabled={isReadOnly}
                               style={{ ...actionBtn(false, "neutral"), ...lockStyle(isReadOnly) }}
                             >
-                              Clear Campaign
+                              Remove from Campaign
                             </button>
                             <button
                               onClick={() => { void deleteMarketingItem(assignment.assignmentId); }}
@@ -10051,9 +10359,9 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                     </div>
                     <div style={{ fontSize: 12, color: C.ts, display: "flex", gap: 10, flexWrap: "wrap" }}>
                       <span>{profile.primaryEmail || "No email yet"}</span>
-                      {profile.instagramHandle && <span>Instagram @{profile.instagramHandle}</span>}
+                      {profile.instagramHandle && <span>Instagram @{normalizeSocialHandle(profile.instagramHandle)}</span>}
                       {profile.instagramFollowers && <span>{profile.instagramFollowers} IG</span>}
-                      {profile.tiktokHandle && <span>TikTok @{profile.tiktokHandle}</span>}
+                      {profile.tiktokHandle && <span>TikTok @{normalizeSocialHandle(profile.tiktokHandle)}</span>}
                       {profile.tiktokFollowers && <span>{profile.tiktokFollowers} TikTok</span>}
                       {profile.spotifyMonthlyListeners && <span>{profile.spotifyMonthlyListeners} listeners</span>}
                       {!profile.spotifyMonthlyListeners && profile.spotifyUrl && <span>Spotify linked</span>}
@@ -10099,7 +10407,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                 </div>
 
                 <div style={{ display: "grid", gap: 10 }}>
-                  {profile.projectSummaries.map(summary => (
+                  {(profile.projectSummaries || []).map(summary => (
                     <div key={`${profile.id}:project:${summary.projectId || summary.projectName}`} style={{ borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sa, padding: "12px 14px" }}>
                       <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 8 }}>
                         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
@@ -10110,18 +10418,18 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                         </div>
                       </div>
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                        {summary.owners.map(owner => (
+                        {(summary.owners || []).map(owner => (
                           <span key={`${summary.projectId}:owner:${owner}`} style={{ ...mkP(true, C.ts, C.sf), cursor: "default" }}>{owner}</span>
                         ))}
-                        {summary.stages.map(stage => (
+                        {(summary.stages || []).map(stage => (
                           <span key={`${summary.projectId}:stage:${stage}`} style={{ ...mkP(true, sc(stage, C), sb(stage, C)), cursor: "default" }}>
                             {SM[stage]?.label || "Prospect"}
                           </span>
                         ))}
-                        {summary.genres.map(genre => (
+                        {(summary.genres || []).map(genre => (
                           <span key={`${summary.projectId}:genre:${genre}`} style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{genre}</span>
                         ))}
-                        {summary.locations.map(location => (
+                        {(summary.locations || []).map(location => (
                           <span key={`${summary.projectId}:location:${location}`} style={{ ...mkP(true, C.tt, C.sa), cursor: "default" }}>{location}</span>
                         ))}
                         {!summary.owners.length && !summary.stages.length && !summary.genres.length && !summary.locations.length && (
@@ -10260,7 +10568,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
               ))}
             </div>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "minmax(260px, 1.2fr) repeat(3, minmax(170px, 0.8fr))", gap: 12, alignItems: "end" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(240px, 1.2fr) repeat(4, minmax(150px, 0.8fr))", gap: 12, alignItems: "end" }}>
             <label style={{ display: "grid", gap: 6, fontSize: 12, color: C.ts }}>
               <span>Search live talent</span>
               <input
@@ -10298,6 +10606,16 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                 ))}
               </select>
             </label>
+            <label style={{ display: "grid", gap: 6, fontSize: 12, color: C.ts }}>
+              <span>Campaign</span>
+              <select value={liveCrmCampaignFilter} onChange={e => setLiveCrmCampaignFilter(e.target.value)} style={{ ...iS, width: "100%" }}>
+                <option value="all">All campaigns</option>
+                <option value="none">Unassigned</option>
+                {liveCrmCampaignOptions.map(campaign => (
+                  <option key={campaign} value={campaign}>{campaign}</option>
+                ))}
+              </select>
+            </label>
           </div>
         </div>
 
@@ -10311,81 +10629,125 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         ) : liveRosterViewMode === "table" ? (
           <div style={{ ...cS, overflow: "hidden" }}>
             <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, tableLayout: "fixed" }}>
+              <table style={{ width: "100%", minWidth: 880, borderCollapse: "collapse", fontSize: 12, tableLayout: "fixed" }}>
                 <thead style={{ background: C.sa }}>
                   <tr>
-                    {["Talent", "Type", "Owner", "Reach", "Campaigns", "Status Mix", "Last Updated"].map(h => (
+                    {["Talent", "Reach", "Campaigns", "Status Mix", "Last Updated"].map(h => (
                       <th key={`live-table-${h}`} style={{ textAlign: "left", padding: "10px 12px", color: C.ts, fontSize: 11, borderBottom: `1px solid ${C.bd}` }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {liveCrmProfiles.map(profile => (
-                    <tr key={`live-row-${profile.id}`}>
-                      <td style={{ width: "26%", padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, verticalAlign: "top" }}>
-                        <div style={{ fontWeight: 700 }}>{profile.displayName}</div>
-                        <div style={{ fontSize: 11, color: C.tt, marginTop: 4 }}>
-                          {profile.primaryEmail || "No email yet"}
-                          {profile.instagramHandle ? ` · @${profile.instagramHandle}` : ""}
-                        </div>
-                        <div style={{ fontSize: 11, color: C.tt, marginTop: 4 }}>
-                          {summarizeWorkspaceValues(profile.sources, 2, source => TALENT_SOURCE_LABELS[source] || source)}
-                        </div>
-                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
-                          <button onClick={() => openTalentProfileFromWorkspaceProfile(profile)} style={actionBtn(false, "accent")}>
-                            View Talent
+                  {liveCrmProfiles.map(profile => {
+                    const reachParts = liveRosterReachParts(profile);
+                    const visibleReachParts = reachParts.slice(0, 2);
+                    const hiddenReachCount = Math.max(0, reachParts.length - visibleReachParts.length);
+                    const visibleCampaigns = (profile.campaigns || []).filter(campaign => campaign && campaign !== "No campaign").slice(0, 2);
+                    const hiddenCampaignCount = Math.max(0, (profile.campaigns || []).filter(campaign => campaign && campaign !== "No campaign").length - visibleCampaigns.length);
+                    const statusParts = liveStatusSummaryParts(profile);
+                    const visibleStatusParts = statusParts.slice(0, 2);
+                    const hiddenStatusCount = Math.max(0, statusParts.length - visibleStatusParts.length);
+                    return (
+                      <tr
+                        key={`live-row-${profile.id}`}
+                        onClick={() => openTalentProfileFromWorkspaceProfile(profile)}
+                        style={{ cursor: "pointer" }}
+                      >
+                        <td style={{ width: "32%", minWidth: 260, padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, verticalAlign: "top" }}>
+                          <button
+                            onClick={e => {
+                              e.stopPropagation();
+                              openTalentProfileFromWorkspaceProfile(profile);
+                            }}
+                            style={{ background: "none", border: "none", padding: 0, margin: 0, cursor: "pointer", font: "inherit", color: C.tx, fontWeight: 700, textAlign: "left" }}
+                          >
+                            {profile.displayName}
                           </button>
-                          {defaultLiveMarketingProject && (
+                          <div style={{ fontSize: 11, color: C.tt, marginTop: 4, overflowWrap: "anywhere", lineHeight: 1.45 }}>
+                            {profile.primaryEmail || "No email yet"}
+                            {profile.instagramHandle ? ` · @${normalizeSocialHandle(profile.instagramHandle)}` : ""}
+                          </div>
+                          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
+                            {profile.talentTypes.slice(0, 2).map(type => (
+                              <span key={`${profile.id}:type-chip:${type}`} style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{type}</span>
+                            ))}
+                            {profile.sources.slice(0, 1).map(source => (
+                              <span key={`${profile.id}:source-chip:${source}`} style={{ ...mkP(true, C.pr, C.pb), cursor: "default" }}>
+                                {TALENT_SOURCE_LABELS[source] || source}
+                              </span>
+                            ))}
+                            {profile.owners.slice(0, 2).map(owner => (
+                              <span key={`${profile.id}:owner-chip:${owner}`} style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>Owner: {owner}</span>
+                            ))}
+                          </div>
+                          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
                             <button
-                              onClick={() => { launchLiveCampaignAction(profile); }}
-                              style={{ ...actionBtn(true, "good"), ...lockStyle(isReadOnly) }}
+                              onClick={e => {
+                                e.stopPropagation();
+                                openTalentProfileFromWorkspaceProfile(profile);
+                              }}
+                              style={actionBtn(false, "accent")}
                             >
-                              + Campaign
+                              View Talent
                             </button>
-                          )}
-                        </div>
-                      </td>
-                      <td style={{ width: "11%", padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts, verticalAlign: "top" }}>
-                        {summarizeWorkspaceValues(profile.talentTypes, 2)}
-                      </td>
-                      <td style={{ width: "10%", padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts, verticalAlign: "top" }}>
-                        {summarizeWorkspaceValues(profile.owners, 2)}
-                      </td>
-                      <td style={{ width: "21%", padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts, verticalAlign: "top" }}>
-                        <div style={{ display: "grid", gap: 4 }}>
-                          {liveRosterReachParts(profile).length ? liveRosterReachParts(profile).slice(0, 3).map(part => (
-                            <div key={`${profile.id}:reach:${part}`} style={{ fontSize: 11, lineHeight: 1.4, overflowWrap: "anywhere" }}>{part}</div>
-                          )) : (
-                            <div style={{ fontSize: 11, color: C.tt }}>No social details yet</div>
-                          )}
-                        </div>
-                      </td>
-                      <td style={{ width: "16%", padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts, verticalAlign: "top" }}>
-                        <div style={{ display: "grid", gap: 6 }}>
-                          {profile.campaigns.filter(campaign => campaign && campaign !== "No campaign").length ? profile.campaigns.filter(campaign => campaign && campaign !== "No campaign").slice(0, 2).map(campaign => (
-                            <span key={`${profile.id}:campaign:${campaign}`} style={{ ...mkP(true, C.bu, C.bb), cursor: "default", width: "fit-content" }}>{campaign}</span>
-                          )) : (
-                            <span style={{ ...mkP(true, C.tt, C.sa), cursor: "default", width: "fit-content" }}>Unassigned</span>
-                          )}
-                          <div style={{ fontSize: 11, color: C.tt }}>{profile.marketingAssignments.length} assignment{profile.marketingAssignments.length === 1 ? "" : "s"}</div>
-                        </div>
-                      </td>
-                      <td style={{ width: "18%", padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts, verticalAlign: "top" }}>
-                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                          {liveStatusSummaryParts(profile).length ? liveStatusSummaryParts(profile).slice(0, 3).map(part => (
-                            <span key={`${profile.id}:status:${part.id}`} style={{ ...mkP(true, marketingStatusTone(part.id, C).tone, marketingStatusTone(part.id, C).bg), cursor: "default" }}>
-                              {part.label} {part.count}
-                            </span>
-                          )) : (
-                            <span style={{ ...mkP(true, C.tt, C.sa), cursor: "default" }}>No status</span>
-                          )}
-                        </div>
-                      </td>
-                      <td style={{ width: "11%", padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.tt, verticalAlign: "top" }}>
-                        {profile.lastTouched ? rD(profile.lastTouched) : "—"}
-                      </td>
-                    </tr>
-                  ))}
+                            {defaultLiveMarketingProject && (
+                              <button
+                                onClick={e => {
+                                  e.stopPropagation();
+                                  launchLiveCampaignAction(profile);
+                                }}
+                                style={{ ...actionBtn(true, "good"), ...lockStyle(isReadOnly) }}
+                              >
+                                + Campaign
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                        <td style={{ width: "24%", minWidth: 210, padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts, verticalAlign: "top" }}>
+                          <div style={{ display: "grid", gap: 4 }}>
+                            {visibleReachParts.length ? visibleReachParts.map(part => (
+                              <div key={`${profile.id}:reach:${part}`} style={{ fontSize: 11, lineHeight: 1.4, overflowWrap: "anywhere" }}>{part}</div>
+                            )) : (
+                              <div style={{ fontSize: 11, color: C.tt }}>No social details yet</div>
+                            )}
+                            {hiddenReachCount > 0 && (
+                              <div style={{ fontSize: 11, color: C.tt }}>+{hiddenReachCount} more</div>
+                            )}
+                          </div>
+                        </td>
+                        <td style={{ width: "18%", minWidth: 170, padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts, verticalAlign: "top" }}>
+                          <div style={{ display: "grid", gap: 6 }}>
+                            {visibleCampaigns.length ? visibleCampaigns.map(campaign => (
+                              <span key={`${profile.id}:campaign:${campaign}`} style={{ ...mkP(true, C.bu, C.bb), cursor: "default", width: "fit-content" }}>{campaign}</span>
+                            )) : (
+                              <span style={{ ...mkP(true, C.tt, C.sa), cursor: "default", width: "fit-content" }}>Unassigned</span>
+                            )}
+                            {hiddenCampaignCount > 0 && (
+                              <div style={{ fontSize: 11, color: C.tt }}>+{hiddenCampaignCount} more campaign{hiddenCampaignCount === 1 ? "" : "s"}</div>
+                            )}
+                            <div style={{ fontSize: 11, color: C.tt }}>{(profile.marketingAssignments || []).length} assignment{(profile.marketingAssignments || []).length === 1 ? "" : "s"}</div>
+                          </div>
+                        </td>
+                        <td style={{ width: "18%", minWidth: 170, padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts, verticalAlign: "top" }}>
+                          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                            {visibleStatusParts.length ? visibleStatusParts.map(part => (
+                              <span key={`${profile.id}:status:${part.id}`} style={{ ...mkP(true, marketingStatusTone(part.id, C).tone, marketingStatusTone(part.id, C).bg), cursor: "default" }}>
+                                {part.label} {part.count}
+                              </span>
+                            )) : (
+                              <span style={{ ...mkP(true, C.tt, C.sa), cursor: "default" }}>No status</span>
+                            )}
+                            {hiddenStatusCount > 0 && (
+                              <span style={{ ...mkP(true, C.tt, C.sa), cursor: "default" }}>+{hiddenStatusCount} more</span>
+                            )}
+                          </div>
+                        </td>
+                        <td style={{ width: "8%", minWidth: 92, padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.tt, verticalAlign: "top" }}>
+                          {profile.lastTouched ? rD(profile.lastTouched) : "—"}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -10412,9 +10774,9 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                     </div>
                     <div style={{ fontSize: 12, color: C.ts, display: "flex", gap: 10, flexWrap: "wrap" }}>
                       <span>{profile.primaryEmail || "No email yet"}</span>
-                      {profile.instagramHandle && <span>Instagram @{profile.instagramHandle}</span>}
+                      {profile.instagramHandle && <span>Instagram @{normalizeSocialHandle(profile.instagramHandle)}</span>}
                       {profile.instagramFollowers && <span>{profile.instagramFollowers} IG</span>}
-                      {profile.tiktokHandle && <span>TikTok @{profile.tiktokHandle}</span>}
+                      {profile.tiktokHandle && <span>TikTok @{normalizeSocialHandle(profile.tiktokHandle)}</span>}
                       {profile.tiktokFollowers && <span>{profile.tiktokFollowers} TikTok</span>}
                       {profile.spotifyMonthlyListeners && <span>{profile.spotifyMonthlyListeners} listeners</span>}
                       {!profile.spotifyMonthlyListeners && profile.spotifyUrl && <span>Spotify linked</span>}
@@ -12789,7 +13151,7 @@ Requirements:
                       style={{ ...iS, width: "100%", padding: "8px 10px", fontSize: 12 }}
                     >
                       <option value="all">All Campaigns</option>
-                      <option value="No campaign">No campaign</option>
+                      <option value="No campaign">Unassigned</option>
                       {marketingCampaignOptions.map(campaign => (
                         <option key={campaign} value={campaign}>{campaign}</option>
                       ))}
@@ -12877,7 +13239,7 @@ Requirements:
                           <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 12, background: C.sa, color: item.owner ? C.ts : C.rd, border: `1px solid ${C.bd}` }}>{item.owner || "Unassigned"}</span>
                         </div>
                         <div style={{ fontSize: 11, color: C.ts, marginTop: 3, display: "flex", gap: 10, flexWrap: "wrap" }}>
-                          <span>{item.campaign || "No campaign"}</span>
+                          <span>{item.campaign || "Unassigned"}</span>
                           <span>{item.trafficType}</span>
                           <span>{marketingChannelsLabel(item)}</span>
                           {item.deliverableType && <span>{item.deliverableType}</span>}
