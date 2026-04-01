@@ -632,6 +632,14 @@ function marketingRealCampaigns(item) {
   const campaigns = normalizeMarketingCampaigns(item?.campaigns?.length ? item.campaigns : item?.campaign || "");
   return campaigns.filter(campaign => campaign && campaign !== "No campaign");
 }
+
+function compactSocialLabel(platform, handle = "", followers = "") {
+  const normalizedHandle = normalizeSocialHandle(handle);
+  if (normalizedHandle && followers) return `${platform} @${normalizedHandle} · ${followers}`;
+  if (normalizedHandle) return `${platform} @${normalizedHandle}`;
+  if (followers) return `${platform} ${followers}`;
+  return "";
+}
 function normalizeFollowerCount(value) {
   const raw = String(value || "").trim();
   if (!raw) return "";
@@ -3884,22 +3892,12 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   );
   const liveStatusSummaryParts = useCallback(profile => {
     const counts = {};
-    const projectSummaries = Array.isArray(profile?.projectSummaries) ? profile.projectSummaries : null;
-    if (projectSummaries?.length) {
-      projectSummaries.forEach(summary => {
-        (summary.marketingAssignments || []).forEach(assignment => {
-          const status = normalizeMarketingStatus(assignment?.status || "");
-          if (!status) return;
-          counts[status] = (counts[status] || 0) + 1;
-        });
-      });
-    } else {
-      (profile?.marketingAssignments || []).forEach(assignment => {
-        const status = normalizeMarketingStatus(assignment?.status || "");
-        if (!status) return;
-        counts[status] = (counts[status] || 0) + 1;
-      });
-    }
+    (Array.isArray(profile?.marketingAssignments) ? profile.marketingAssignments : []).forEach(assignment => {
+      if (!workspaceProjectIds.has(assignment?.projectId)) return;
+      const status = normalizeMarketingStatus(assignment?.status || "");
+      if (!status) return;
+      counts[status] = (counts[status] || 0) + 1;
+    });
     return Object.entries(counts)
       .sort((a, b) => (MARKETING_STATUS_ORDER[a[0]] ?? 999) - (MARKETING_STATUS_ORDER[b[0]] ?? 999) || b[1] - a[1])
       .map(([status, count]) => ({
@@ -3907,7 +3905,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         count,
         label: MM[status]?.label || titleCaseWords(status),
       }));
-  }, []);
+  }, [workspaceProjectIds]);
   const liveStatusSummaryLabel = useCallback(profile => {
     const parts = liveStatusSummaryParts(profile);
     if (!parts.length) return "No campaign status";
@@ -3936,9 +3934,12 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     return parts;
   }, []);
   const liveRosterTalentMetaLabel = useCallback(profile => {
-    const typeLabel = summarizeWorkspaceValues(profile?.talentTypes || [], 1);
-    const sourceLabel = summarizeWorkspaceValues(profile?.sources || [], 1, value => TALENT_SOURCE_LABELS[value] || value);
-    const ownerLabel = profile?.owners?.length ? `Owner ${summarizeWorkspaceValues(profile.owners, 2)}` : "Unassigned";
+    const typeLabel = uniqStrings(profile?.talentTypes || []).slice(0, 1).join(", ");
+    const sourceLabel = uniqStrings(profile?.sources || [])
+      .slice(0, 1)
+      .map(value => TALENT_SOURCE_LABELS[value] || value)
+      .join(", ");
+    const ownerLabel = profile?.owners?.length ? summarizeWorkspaceValues(profile.owners, 2) : "Unassigned";
     return [typeLabel, sourceLabel, ownerLabel].filter(Boolean).join(" · ");
   }, [summarizeWorkspaceValues]);
   const exportKickoffView = () => {
@@ -4137,23 +4138,28 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const isKickoffTalentContext = effectiveTalentProfileContext === "kickoff";
   const isLiveTalentContext = effectiveTalentProfileContext === "live-crm";
   const talentOverviewProjectSummaries = isKickoffTalentContext ? selectedTalentKickoffProjectSummaries : selectedTalentProjectSummaries;
+  const selectedTalentEditableKickoffRecord = selectedTalentPrimaryKickoffRecord || selectedTalentPrimaryArRecord || null;
   const selectedTalentGenre = String(
-    selectedTalentPrimaryKickoffRecord?.genre
+    selectedTalentEditableKickoffRecord?.genre
+    || selectedTalentPrimaryKickoffRecord?.genre
     || selectedTalentPrimaryArRecord?.genre
     || ""
   ).trim();
   const selectedTalentHitTrack = String(
-    selectedTalentPrimaryKickoffRecord?.hitTrack
+    selectedTalentEditableKickoffRecord?.hitTrack
+    || selectedTalentPrimaryKickoffRecord?.hitTrack
     || selectedTalentPrimaryArRecord?.hitTrack
     || ""
   ).trim();
   const selectedTalentLocation = String(
-    selectedTalentPrimaryKickoffRecord?.location
+    selectedTalentEditableKickoffRecord?.location
+    || selectedTalentPrimaryKickoffRecord?.location
     || selectedTalentPrimaryArRecord?.location
     || ""
   ).trim();
   const selectedTalentListeners = String(
     selectedTalentProfile?.spotifyMonthlyListeners
+    || selectedTalentEditableKickoffRecord?.monthlyListeners
     || selectedTalentPrimaryKickoffRecord?.monthlyListeners
     || selectedTalentPrimaryArRecord?.monthlyListeners
     || selectedTalentPrimaryMarketingAssignment?.spotifyMonthlyListeners
@@ -4168,15 +4174,15 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const selectedTalentHeadlineMarketingStatus = isLiveTalentContext
     ? normalizeMarketingStatus(selectedTalentPrimaryMarketingAssignment?.status || "")
     : "";
-  const selectedTalentEditableKickoffRecord = selectedTalentPrimaryKickoffRecord || selectedTalentPrimaryArRecord || null;
   const selectedTalentTypes = selectedTalentProfile?.talentTypes || [];
   const selectedTalentSources = selectedTalentProfile?.sources || [];
   const selectedTalentMarketingAssignments = selectedTalentProfile?.marketingAssignments || [];
   const selectedTalentProfileCardTitle = selectedTalentTypes.includes("Curator") ? "Curator Profile" : "Artist Profile";
-  const selectedTalentKickoffCardTitle = "Kickoff Details";
+  const selectedTalentKickoffCardTitle = "Current Kickoff Status";
   const selectedTalentProfileSummary = String(
     selectedTalentProfile?.profileSummary
     || selectedTalentEditableKickoffRecord?.profileSummary
+    || selectedTalentPrimaryArRecord?.profileSummary
     || selectedTalentPrimaryMarketingAssignment?.profileSummary
     || ""
   ).trim();
@@ -4233,7 +4239,9 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   ).trim();
   const selectedTalentSpotifyLabel = selectedTalentSpotifyUrl
     ? (selectedTalentListeners ? `Linked · ${selectedTalentListeners} monthly listeners` : "Linked")
-    : "Not linked yet";
+    : selectedTalentListeners
+      ? `${selectedTalentListeners} monthly listeners on file`
+      : "";
   const selectedTalentCuratorPageUrl = String(
     selectedTalentEditableKickoffRecord?.curatorPageUrl
     || selectedTalentProfile?.curatorPageUrl
@@ -4244,10 +4252,15 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       ? selectedTalentEditableKickoffRecord.curatedArtists
       : selectedTalentProfile?.curatedArtists
   );
+  const selectedTalentHeaderMeta = [
+    selectedTalentGenre || "",
+    selectedTalentListeners ? `${selectedTalentListeners} listeners` : "",
+    selectedTalentPrimaryEmail || "",
+  ].filter(Boolean);
   const selectedTalentCanEditProfile = isKickoffTalentContext
     ? !!selectedTalentEditableKickoffRecord
     : !!selectedTalentMarketingAssignments.length;
-  const showSelectedTalentSpotifyRow = !!selectedTalentSpotifyUrl;
+  const showSelectedTalentSpotifyRow = !!selectedTalentSpotifyUrl || !!selectedTalentListeners;
   const selectedTalentRealCampaigns = useMemo(
     () => (selectedTalentProfile?.campaigns || []).filter(campaign => campaign && campaign !== "No campaign"),
     [selectedTalentProfile]
@@ -4521,6 +4534,13 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       lineHeight: 1.1,
     };
   };
+  const compactActionBtn = (active = false, tint = "neutral") => ({
+    ...actionBtn(active, tint),
+    padding: "6px 10px",
+    fontSize: 11,
+    borderRadius: 999,
+    lineHeight: 1,
+  });
   const lockStyle = locked => (locked ? { opacity: 0.55, cursor: "not-allowed" } : {});
   const logAction = useCallback((project, artistName, action, kind = "event", extra = {}) => {
     return addLog(project, artistName, action, kind, { ...extra, actor: extra.actor || currentActor });
@@ -9701,6 +9721,11 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
               <div>
                 <div style={{ fontSize: 11, letterSpacing: 2, textTransform: "uppercase", color: C.ac, fontWeight: 700, marginBottom: 8 }}>Talent Overview</div>
                 <div style={{ fontSize: 28, fontWeight: 800, letterSpacing: "-0.04em", color: C.tx, marginBottom: 8 }}>{selectedTalentProfile.displayName}</div>
+                {selectedTalentHeaderMeta.length > 0 && (
+                  <div style={{ fontSize: 13, color: C.ts, marginBottom: 10, lineHeight: 1.5 }}>
+                    {selectedTalentHeaderMeta.join(" · ")}
+                  </div>
+                )}
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                   {selectedTalentTypes.map(type => (
                     <span key={type} style={{ ...mkP(true, C.ac, C.al), cursor: "default" }}>{type}</span>
@@ -9726,16 +9751,6 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                   {selectedTalentHeadlineOwner && (
                     <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>
                       Owner: {selectedTalentHeadlineOwner}
-                    </span>
-                  )}
-                  {selectedTalentGenre && (
-                    <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>
-                      {selectedTalentGenre}
-                    </span>
-                  )}
-                  {selectedTalentListeners && (
-                    <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>
-                      {selectedTalentListeners} listeners
                     </span>
                   )}
                   {isLiveTalentContext && selectedTalentRealCampaigns.length > 0 && (
@@ -9866,25 +9881,25 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                       <span className="gf-rail-kv-label">Primary email</span>
                       <span className="gf-rail-kv-value">{selectedTalentPrimaryEmail || "No email yet"}</span>
                     </div>
-                    <div className="gf-rail-kv">
-                      <span className="gf-rail-kv-label">Instagram</span>
-                      <span className="gf-rail-kv-value">
-                        {selectedTalentInstagramHandle
-                          ? `@${selectedTalentInstagramHandle}${selectedTalentInstagramFollowers ? ` · ${selectedTalentInstagramFollowers}` : ""}`
-                          : "Not linked yet"}
-                      </span>
-                    </div>
-                    <div className="gf-rail-kv">
-                      <span className="gf-rail-kv-label">TikTok</span>
-                      <span className="gf-rail-kv-value">
-                        {selectedTalentTiktokHandle
-                          ? `@${selectedTalentTiktokHandle}${selectedTalentTiktokFollowers ? ` · ${selectedTalentTiktokFollowers}` : ""}`
-                          : "Not linked yet"}
-                      </span>
-                    </div>
+                    {(selectedTalentInstagramHandle || selectedTalentInstagramFollowers) && (
+                      <div className="gf-rail-kv">
+                        <span className="gf-rail-kv-label">Instagram</span>
+                        <span className="gf-rail-kv-value">
+                          {compactSocialLabel("IG", selectedTalentInstagramHandle, selectedTalentInstagramFollowers)}
+                        </span>
+                      </div>
+                    )}
+                    {(selectedTalentTiktokHandle || selectedTalentTiktokFollowers) && (
+                      <div className="gf-rail-kv">
+                        <span className="gf-rail-kv-label">TikTok</span>
+                        <span className="gf-rail-kv-value">
+                          {compactSocialLabel("TikTok", selectedTalentTiktokHandle, selectedTalentTiktokFollowers)}
+                        </span>
+                      </div>
+                    )}
                     {showSelectedTalentSpotifyRow && (
                       <div className="gf-rail-kv">
-                        <span className="gf-rail-kv-label">Spotify profile</span>
+                        <span className="gf-rail-kv-label">{selectedTalentSpotifyUrl ? "Spotify profile" : "Spotify listeners"}</span>
                         <span className="gf-rail-kv-value">{selectedTalentSpotifyLabel}</span>
                       </div>
                     )}
@@ -9945,34 +9960,42 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
 
               <div style={{ ...cS, padding: "18px 20px" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
-                  <div style={{ fontSize: 14, fontWeight: 700 }}>
-                    {isKickoffTalentContext ? selectedTalentKickoffCardTitle : "Campaign Snapshot"}
-                  </div>
-                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                    {isKickoffTalentContext && selectedTalentHeadlineKickoffStage && (
-                      <span style={{ ...mkP(true, sc(selectedTalentHeadlineKickoffStage, C), sb(selectedTalentHeadlineKickoffStage, C)), cursor: "default" }}>
-                        {SM[selectedTalentHeadlineKickoffStage]?.label || titleCaseWords(selectedTalentHeadlineKickoffStage)}
-                      </span>
-                    )}
-                    {isLiveTalentContext && selectedTalentHeadlineMarketingStatus && (
-                      <span style={{ ...mkP(true, marketingStatusTone(selectedTalentHeadlineMarketingStatus, C).tone, marketingStatusTone(selectedTalentHeadlineMarketingStatus, C).bg), cursor: "default" }}>
-                        {MM[selectedTalentHeadlineMarketingStatus]?.label || titleCaseWords(selectedTalentHeadlineMarketingStatus)}
-                      </span>
-                    )}
-                    {selectedTalentHeadlineOwner && (
-                      <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>Owner: {selectedTalentHeadlineOwner}</span>
-                    )}
-                    {isKickoffTalentContext && selectedTalentEditableKickoffRecord?.followUp && (
-                      <span style={{ ...mkP(true, C.ac, C.al), cursor: "default" }}>
-                        Follow-up {selectedTalentEditableKickoffRecord.followUp}
-                      </span>
-                    )}
+                  <div>
+                    <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 4 }}>
+                      {isKickoffTalentContext ? selectedTalentKickoffCardTitle : "Campaign Snapshot"}
+                    </div>
+                    <div style={{ fontSize: 12, color: C.ts, lineHeight: 1.5 }}>
+                      {isKickoffTalentContext
+                        ? [
+                            selectedTalentHeadlineOwner ? `Owner ${selectedTalentHeadlineOwner}` : "",
+                            selectedTalentHeadlineKickoffStage ? `Stage ${SM[selectedTalentHeadlineKickoffStage]?.label || titleCaseWords(selectedTalentHeadlineKickoffStage)}` : "",
+                            selectedTalentEditableKickoffRecord?.followUp ? `Follow-up ${sD(selectedTalentEditableKickoffRecord.followUp)}` : "",
+                          ].filter(Boolean).join(" · ") || "Keep the pre-live record up to date here."
+                        : [
+                            selectedTalentHeadlineOwner ? `Owner ${selectedTalentHeadlineOwner}` : "",
+                            selectedTalentHeadlineMarketingStatus ? MM[selectedTalentHeadlineMarketingStatus]?.label || titleCaseWords(selectedTalentHeadlineMarketingStatus) : "",
+                            `${selectedTalentMarketingAssignments.length} assignment${selectedTalentMarketingAssignments.length === 1 ? "" : "s"}`,
+                          ].filter(Boolean).join(" · ")}
+                    </div>
                   </div>
                 </div>
 
                 {isKickoffTalentContext ? (
                   selectedTalentEditableKickoffRecord ? (
                     <div style={{ display: "grid", gap: 12 }}>
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        <span style={{ ...mkP(true, sc(normalizeStageId(selectedTalentEditableKickoffRecord.stage || "prospect"), C), sb(normalizeStageId(selectedTalentEditableKickoffRecord.stage || "prospect"), C)), cursor: "default" }}>
+                          {SM[normalizeStageId(selectedTalentEditableKickoffRecord.stage || "prospect")]?.label || "Prospect"}
+                        </span>
+                        <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>
+                          Owner: {selectedTalentEditableKickoffRecord.owner || "Unassigned"}
+                        </span>
+                        {selectedTalentEditableKickoffRecord.followUp && (
+                          <span style={{ ...mkP(true, C.pr, C.pb), cursor: "default" }}>
+                            Follow-up {sD(selectedTalentEditableKickoffRecord.followUp)}
+                          </span>
+                        )}
+                      </div>
                       {selectedTalentEditableKickoffRecord.note && (
                         <div style={{ fontSize: 12, color: C.ts, lineHeight: 1.6 }}>
                           {selectedTalentEditableKickoffRecord.note}
@@ -10548,7 +10571,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
               <span>Stage</span>
               <select value={kickoffStageFilter} onChange={e => setKickoffStageFilter(e.target.value)} style={{ ...iS, width: "100%" }}>
                 <option value="all">All stages</option>
-                {STAGES.filter(stage => stage.id !== "live" && stage.id !== "dead").map(stage => (
+                {STAGES.filter(stage => stage.id !== "live").map(stage => (
                   <option key={stage.id} value={stage.id}>{stage.label}</option>
                 ))}
               </select>
@@ -11007,10 +11030,10 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         ) : liveRosterViewMode === "table" ? (
           <div style={{ ...cS, overflow: "hidden" }}>
             <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", minWidth: 980, borderCollapse: "collapse", fontSize: 12, tableLayout: "fixed" }}>
+              <table style={{ width: "100%", minWidth: 860, borderCollapse: "collapse", fontSize: 12, tableLayout: "fixed" }}>
                 <thead style={{ background: C.sa }}>
                   <tr>
-                    {["Talent", "Reach", "Campaigns", "Status Mix", "Last Updated", "Actions"].map(h => (
+                    {["Talent", "Reach", "Campaigns", "Status Mix", "Actions"].map(h => (
                       <th key={`live-table-${h}`} style={{ textAlign: "left", padding: "10px 12px", color: C.ts, fontSize: 11, borderBottom: `1px solid ${C.bd}` }}>{h}</th>
                     ))}
                   </tr>
@@ -11031,7 +11054,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                         onClick={() => openTalentProfileFromWorkspaceProfile(profile)}
                         style={{ cursor: "pointer" }}
                       >
-                        <td style={{ width: "30%", minWidth: 260, padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, verticalAlign: "top" }}>
+                        <td style={{ width: "35%", minWidth: 260, padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, verticalAlign: "top" }}>
                           <button
                             onClick={e => {
                               e.stopPropagation();
@@ -11045,11 +11068,11 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                             {profile.primaryEmail || "No email yet"}
                             {profile.instagramHandle ? ` · @${normalizeSocialHandle(profile.instagramHandle)}` : ""}
                           </div>
-                          <div style={{ fontSize: 11, color: C.ts, marginTop: 8, lineHeight: 1.5, overflowWrap: "anywhere" }}>
+                          <div style={{ fontSize: 10.5, color: C.ts, marginTop: 6, lineHeight: 1.45, overflowWrap: "anywhere" }}>
                             {liveRosterTalentMetaLabel(profile)}
                           </div>
                         </td>
-                        <td style={{ width: "22%", minWidth: 210, padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts, verticalAlign: "top" }}>
+                        <td style={{ width: "21%", minWidth: 180, padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts, verticalAlign: "top" }}>
                           <div style={{ display: "grid", gap: 4 }}>
                             {visibleReachParts.length ? visibleReachParts.map(part => (
                               <div key={`${profile.id}:reach:${part}`} style={{ fontSize: 11, lineHeight: 1.4, overflowWrap: "anywhere" }}>{part}</div>
@@ -11061,10 +11084,10 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                             )}
                           </div>
                         </td>
-                        <td style={{ width: "16%", minWidth: 160, padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts, verticalAlign: "top" }}>
+                        <td style={{ width: "15%", minWidth: 145, padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts, verticalAlign: "top" }}>
                           <div style={{ display: "grid", gap: 6 }}>
                             {visibleCampaigns.length ? visibleCampaigns.map(campaign => (
-                              <span key={`${profile.id}:campaign:${campaign}`} style={{ ...mkP(true, C.bu, C.bb), cursor: "default", width: "fit-content" }}>{campaign}</span>
+                              <span key={`${profile.id}:campaign:${campaign}`} style={{ ...mkP(true, C.bu, C.bb), cursor: "default", width: "fit-content", maxWidth: "100%", overflowWrap: "anywhere" }}>{campaign}</span>
                             )) : (
                               <span style={{ ...mkP(true, C.tt, C.sa), cursor: "default", width: "fit-content" }}>Unassigned</span>
                             )}
@@ -11074,7 +11097,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                             <div style={{ fontSize: 11, color: C.tt }}>{(profile.marketingAssignments || []).length} assignment{(profile.marketingAssignments || []).length === 1 ? "" : "s"}</div>
                           </div>
                         </td>
-                        <td style={{ width: "14%", minWidth: 150, padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts, verticalAlign: "top" }}>
+                        <td style={{ width: "15%", minWidth: 150, padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts, verticalAlign: "top" }}>
                           <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                             {visibleStatusParts.length ? visibleStatusParts.map(part => (
                               <span key={`${profile.id}:status:${part.id}`} style={{ ...mkP(true, marketingStatusTone(part.id, C).tone, marketingStatusTone(part.id, C).bg), cursor: "default" }}>
@@ -11088,31 +11111,33 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                             )}
                           </div>
                         </td>
-                        <td style={{ width: "8%", minWidth: 92, padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.tt, verticalAlign: "top" }}>
-                          {profile.lastTouched ? rD(profile.lastTouched) : "—"}
-                        </td>
-                        <td style={{ width: "10%", minWidth: 128, padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts, verticalAlign: "top" }}>
+                        <td style={{ width: "14%", minWidth: 170, padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts, verticalAlign: "top" }}>
                           <div style={{ display: "grid", gap: 8 }}>
-                            <button
-                              onClick={e => {
-                                e.stopPropagation();
-                                openTalentProfileFromWorkspaceProfile(profile);
-                              }}
-                              style={actionBtn(false, "accent")}
-                            >
-                              View Talent
-                            </button>
-                            {defaultLiveMarketingProject && (
+                            <div style={{ fontSize: 11, color: C.tt }}>
+                              {profile.lastTouched ? `Updated ${rD(profile.lastTouched)}` : "Updated —"}
+                            </div>
+                            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                               <button
                                 onClick={e => {
                                   e.stopPropagation();
-                                  launchLiveCampaignAction(profile);
+                                  openTalentProfileFromWorkspaceProfile(profile);
                                 }}
-                                style={{ ...actionBtn(true, "good"), ...lockStyle(isReadOnly) }}
+                                style={compactActionBtn(false, "accent")}
                               >
-                                + Campaign
+                                View Talent
                               </button>
-                            )}
+                              {defaultLiveMarketingProject && (
+                                <button
+                                  onClick={e => {
+                                    e.stopPropagation();
+                                    launchLiveCampaignAction(profile);
+                                  }}
+                                  style={{ ...compactActionBtn(true, "good"), ...lockStyle(isReadOnly) }}
+                                >
+                                  + Campaign
+                                </button>
+                              )}
+                            </div>
                           </div>
                         </td>
                       </tr>
