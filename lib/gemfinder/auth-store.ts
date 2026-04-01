@@ -58,8 +58,29 @@ function getPool(): Pool {
 
 async function ensureSchema(): Promise<void> {
   if (!hasDatabase() || schemaReady) return;
-  await getPool().query(SCHEMA_SQL);
-  schemaReady = true;
+  try {
+    await getPool().query(SCHEMA_SQL);
+    schemaReady = true;
+    return;
+  } catch (error) {
+    const code = typeof error === 'object' && error && 'code' in error ? String((error as { code?: unknown }).code || '') : '';
+    const message = error instanceof Error ? error.message : String(error || '');
+    const likelyPermissionIssue =
+      code === '42501' ||
+      /permission denied|insufficient privilege|read-only|must be owner/i.test(message);
+    if (!likelyPermissionIssue) throw error;
+
+    const existing = await getPool().query(
+      `select to_regclass('public.gemfinder_auth_users') as users_table,
+              to_regclass('public.gemfinder_password_reset_tokens') as reset_tokens_table`
+    );
+    const row = existing.rows[0] || {};
+    if (row.users_table && row.reset_tokens_table) {
+      schemaReady = true;
+      return;
+    }
+    throw error;
+  }
 }
 
 function normalizeEmail(email: string): string {

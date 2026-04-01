@@ -52,8 +52,29 @@ function getPool(): Pool {
 
 async function ensureSchema(): Promise<void> {
   if (!hasDatabase() || schemaReady) return;
-  await getPool().query(SCHEMA_SQL);
-  schemaReady = true;
+  try {
+    await getPool().query(SCHEMA_SQL);
+    schemaReady = true;
+    return;
+  } catch (error) {
+    const code = typeof error === 'object' && error && 'code' in error ? String((error as { code?: unknown }).code || '') : '';
+    const message = error instanceof Error ? error.message : String(error || '');
+    const likelyPermissionIssue =
+      code === '42501' ||
+      /permission denied|insufficient privilege|read-only|must be owner/i.test(message);
+    if (!likelyPermissionIssue) throw error;
+
+    const existing = await getPool().query(
+      `select to_regclass('public.gemfinder_workspace_state') as state_table,
+              to_regclass('public.gemfinder_workspace_snapshots') as snapshots_table`
+    );
+    const row = existing.rows[0] || {};
+    if (row.state_table && row.snapshots_table) {
+      schemaReady = true;
+      return;
+    }
+    throw error;
+  }
 }
 
 function normalizeProjects(value: unknown): unknown[] {
