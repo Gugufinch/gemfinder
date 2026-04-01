@@ -109,6 +109,16 @@ function emptyMarketingForm() {
   };
 }
 
+function emptyCampaignDetailForm(name = "") {
+  return {
+    name: String(name || "").trim(),
+    owner: "",
+    briefUrl: "",
+    dueDate: "",
+    notes: "",
+  };
+}
+
 function workspaceRoleLabel(role = "") {
   switch (String(role || "").trim()) {
     case "kickoff_ar":
@@ -554,6 +564,33 @@ function parseMarketingBulkTalent(value) {
 }
 function normalizeMarketingCampaignBank(value) {
   return normalizeMarketingCampaigns(Array.isArray(value) ? value : String(value || ""));
+}
+function normalizeMarketingCampaignDetail(value = {}, fallbackName = "") {
+  const name = String(value?.name || fallbackName || "").replace(/\s+/g, " ").trim();
+  if (!name) return null;
+  return {
+    name,
+    owner: String(value?.owner || "").trim(),
+    briefUrl: String(value?.briefUrl || "").trim(),
+    dueDate: String(value?.dueDate || "").trim(),
+    notes: String(value?.notes || "").trim(),
+  };
+}
+function normalizeMarketingCampaignDetails(value = {}) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const seen = new Set();
+  return Object.fromEntries(
+    Object.entries(value)
+      .map(([key, detail]) => normalizeMarketingCampaignDetail(detail, key))
+      .filter(detail => {
+        if (!detail) return false;
+        const normalizedKey = canonicalArtistName(detail.name);
+        if (seen.has(normalizedKey)) return false;
+        seen.add(normalizedKey);
+        return true;
+      })
+      .map(detail => [detail.name, detail])
+  );
 }
 function normalizeMarketingGroup(value, index = 0, validAssignmentIds = []) {
   const name = String(value?.name || "").replace(/\s+/g, " ").trim();
@@ -1644,6 +1681,7 @@ function normalizeProject(p) {
         accent: p.settings?.appearance?.accent && ACCENT_PRESETS[p.settings.appearance.accent] ? p.settings.appearance.accent : "blue",
       },
       marketingCampaignBank: normalizeMarketingCampaignBank(p.settings?.marketingCampaignBank || []),
+      marketingCampaignDetails: normalizeMarketingCampaignDetails(p.settings?.marketingCampaignDetails || {}),
       marketingGroups: normalizeMarketingGroups(p.settings?.marketingGroups || [], marketingItems.map(item => item.id)),
     },
   };
@@ -3300,6 +3338,9 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [talentProfileEditMode, setTalentProfileEditMode] = useState(false);
   const [showFullTalentTimeline, setShowFullTalentTimeline] = useState(false);
   const [showCampaignHubModal, setShowCampaignHubModal] = useState(false);
+  const [showCampaignHubCreate, setShowCampaignHubCreate] = useState(false);
+  const [campaignHubCreateForm, setCampaignHubCreateForm] = useState(() => emptyCampaignDetailForm());
+  const [campaignHubDrafts, setCampaignHubDrafts] = useState({});
   const [pendingWorkspaceAction, setPendingWorkspaceAction] = useState(null);
   const [liveCrmQuery, setLiveCrmQuery] = useState("");
   const [liveCrmTypeFilter, setLiveCrmTypeFilter] = useState("all");
@@ -3491,6 +3532,10 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const defaultKickoffArtistProject = kickoffArtistProjects[0] || null;
   const defaultKickoffCuratorProject = kickoffCuratorProjects[0] || null;
   const defaultLiveMarketingProject = liveMarketingProjects[0] || null;
+  const liveCampaignDetailMap = useMemo(
+    () => normalizeMarketingCampaignDetails(defaultLiveMarketingProject?.settings?.marketingCampaignDetails || {}),
+    [defaultLiveMarketingProject?.settings?.marketingCampaignDetails]
+  );
   const workspaceProjectIds = useMemo(
     () => new Set(workspaceProjects.map(project => project.id)),
     [workspaceProjects]
@@ -4233,28 +4278,50 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   );
   const liveCampaignHubRows = useMemo(() => {
     const byCampaign = new Map();
+    const ensureCampaignSummary = (campaignName) => {
+      const normalizedName = String(campaignName || "").trim();
+      if (!normalizedName || normalizedName === "No campaign") return null;
+      if (!byCampaign.has(normalizedName)) {
+        byCampaign.set(normalizedName, {
+          name: normalizedName,
+          assignments: 0,
+          talentNames: new Set(),
+          owners: new Set(),
+          statuses: {},
+          assignmentDueDates: [],
+          detailOwner: "",
+          briefUrl: "",
+          dueDate: "",
+          notes: "",
+        });
+      }
+      return byCampaign.get(normalizedName);
+    };
     liveMarketingProjects.forEach(project => {
+      const projectCampaignDetails = normalizeMarketingCampaignDetails(project.settings?.marketingCampaignDetails || {});
+      normalizeMarketingCampaignBank(project.settings?.marketingCampaignBank || []).forEach(campaignName => {
+        ensureCampaignSummary(campaignName);
+      });
+      Object.values(projectCampaignDetails).forEach(detail => {
+        const summary = ensureCampaignSummary(detail.name);
+        if (!summary) return;
+        if (!summary.detailOwner && detail.owner) summary.detailOwner = detail.owner;
+        if (!summary.briefUrl && detail.briefUrl) summary.briefUrl = detail.briefUrl;
+        if (!summary.dueDate && detail.dueDate) summary.dueDate = detail.dueDate;
+        if (!summary.notes && detail.notes) summary.notes = detail.notes;
+      });
       (project.marketingItems || [])
         .map(item => normalizeMarketingItem(item, project.teamUsers || DEFAULT_TEAM_USERS))
         .forEach(item => {
           const campaignNames = marketingRealCampaigns(item);
           campaignNames.forEach(campaignName => {
-            if (!byCampaign.has(campaignName)) {
-              byCampaign.set(campaignName, {
-                name: campaignName,
-                assignments: 0,
-                talentNames: new Set(),
-                owners: new Set(),
-                statuses: {},
-                dueDates: [],
-              });
-            }
-            const summary = byCampaign.get(campaignName);
+            const summary = ensureCampaignSummary(campaignName);
+            if (!summary) return;
             summary.assignments += 1;
             if (item.talentName) summary.talentNames.add(item.talentName);
             if (item.owner) summary.owners.add(item.owner);
             summary.statuses[item.status] = (summary.statuses[item.status] || 0) + 1;
-            if (item.dueDate) summary.dueDates.push(item.dueDate);
+            if (item.dueDate) summary.assignmentDueDates.push(item.dueDate);
           });
         });
     });
@@ -4263,7 +4330,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         name: summary.name,
         assignments: summary.assignments,
         talentCount: summary.talentNames.size,
-        owners: [...summary.owners],
+        owners: uniqStrings([summary.detailOwner, ...summary.owners]),
         statusParts: Object.entries(summary.statuses)
           .sort((a, b) => (MARKETING_STATUS_ORDER[a[0]] ?? 999) - (MARKETING_STATUS_ORDER[b[0]] ?? 999) || b[1] - a[1])
           .map(([status, count]) => ({
@@ -4271,9 +4338,15 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
             count,
             label: MM[status]?.label || titleCaseWords(status),
           })),
-        nextDue: summary.dueDates.sort()[0] || "",
+        briefUrl: summary.briefUrl,
+        dueDate: summary.dueDate || summary.assignmentDueDates.sort()[0] || "",
+        notes: summary.notes,
       }))
-      .sort((a, b) => b.assignments - a.assignments || a.name.localeCompare(b.name));
+      .sort((a, b) => {
+        const assignmentCompare = b.assignments - a.assignments;
+        if (assignmentCompare !== 0) return assignmentCompare;
+        return a.name.localeCompare(b.name);
+      });
   }, [liveMarketingProjects]);
   const liveCampaignHubUnassigned = useMemo(() => {
     const talentNames = new Set();
@@ -4296,6 +4369,23 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     () => liveCampaignHubRows.map(row => row.name),
     [liveCampaignHubRows]
   );
+  const liveCampaignCount = liveCampaignHubRows.length;
+  useEffect(() => {
+    if (!showCampaignHubModal) return;
+    setCampaignHubDrafts(prev => {
+      const next = {};
+      liveCampaignHubRows.forEach(campaign => {
+        next[campaign.name] = prev[campaign.name] || {
+          ...emptyCampaignDetailForm(campaign.name),
+          owner: campaign.owners[0] || "",
+          briefUrl: campaign.briefUrl || "",
+          dueDate: campaign.dueDate || "",
+          notes: campaign.notes || "",
+        };
+      });
+      return next;
+    });
+  }, [showCampaignHubModal, liveCampaignHubRows]);
   const sessionUserName = useMemo(
     () => resolveSessionUserName(authEmail, authUserId, proj?.teamUsers || DEFAULT_TEAM_USERS),
     [authEmail, authUserId, proj?.teamUsers],
@@ -5941,6 +6031,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         savedTemplates: [],
         publicCsvToken: "",
         marketingCampaignBank: [],
+        marketingCampaignDetails: {},
         marketingGroups: [],
         appearance: { accent: "blue" },
       },
@@ -6290,6 +6381,12 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     const nextProjects = projects.map(project => {
       if (normalizeProjectType(project.type) !== "marketing") return project;
       let changed = false;
+      const nextCampaignDetails = normalizeMarketingCampaignDetails(project.settings?.marketingCampaignDetails || {});
+      Object.keys(nextCampaignDetails).forEach(key => {
+        if (canonicalArtistName(key) === canonicalArtistName(normalizedCampaign)) {
+          delete nextCampaignDetails[key];
+        }
+      });
       const nextItems = (project.marketingItems || []).map(item => {
         const normalized = normalizeMarketingItem(item, project.teamUsers || DEFAULT_TEAM_USERS);
         if (!marketingRealCampaigns(normalized).includes(normalizedCampaign)) return item;
@@ -6300,10 +6397,11 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
           campaign: "",
           campaigns: [],
           updatedAt: new Date().toISOString(),
-        };
+          };
       });
       const nextCampaignBank = (project.settings?.marketingCampaignBank || []).filter(entry => entry !== normalizedCampaign);
-      if (!changed && nextCampaignBank.length === (project.settings?.marketingCampaignBank || []).length) return project;
+      const detailsChanged = Object.keys(nextCampaignDetails).length !== Object.keys(normalizeMarketingCampaignDetails(project.settings?.marketingCampaignDetails || {})).length;
+      if (!changed && nextCampaignBank.length === (project.settings?.marketingCampaignBank || []).length && !detailsChanged) return project;
       touchedProjects += 1;
       return {
         ...project,
@@ -6311,6 +6409,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         settings: {
           ...(project.settings || {}),
           marketingCampaignBank: nextCampaignBank,
+          marketingCampaignDetails: nextCampaignDetails,
         },
         activityLog: logAction(project, normalizedCampaign, `Campaign deleted · ${normalizedCampaign}`, "event", {
           campaign: normalizedCampaign,
@@ -7875,6 +7974,107 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     await saveProject(nextProj);
   };
 
+  const updateCampaignHubDraft = (campaignName, patch) => {
+    setCampaignHubDrafts(prev => ({
+      ...prev,
+      [campaignName]: {
+        ...(prev[campaignName] || emptyCampaignDetailForm(campaignName)),
+        ...patch,
+      },
+    }));
+  };
+
+  const saveCampaignHubDetails = async (campaignName) => {
+    if (!requireEditor()) return;
+    const targetProject = projects.find(project => project.id === defaultLiveMarketingProject?.id);
+    if (!targetProject) {
+      flash("No live campaign record is mapped in this workspace yet", "err");
+      return;
+    }
+    const normalizedName = String(campaignName || "").trim();
+    if (!normalizedName) {
+      flash("Campaign name is required", "err");
+      return;
+    }
+    const draft = campaignHubDrafts[normalizedName] || emptyCampaignDetailForm(normalizedName);
+    const nextDetails = normalizeMarketingCampaignDetails(targetProject.settings?.marketingCampaignDetails || {});
+    const normalizedDetail = normalizeMarketingCampaignDetail(draft, normalizedName);
+    const hasDetailContent = !!(
+      normalizedDetail?.owner ||
+      normalizedDetail?.briefUrl ||
+      normalizedDetail?.dueDate ||
+      normalizedDetail?.notes
+    );
+    if (hasDetailContent && normalizedDetail) nextDetails[normalizedName] = normalizedDetail;
+    else delete nextDetails[normalizedName];
+    const nextProj = {
+      ...targetProject,
+      settings: {
+        ...(targetProject.settings || {}),
+        marketingCampaignBank: normalizeMarketingCampaignBank([
+          ...(targetProject.settings?.marketingCampaignBank || []),
+          normalizedName,
+        ]),
+        marketingCampaignDetails: nextDetails,
+      },
+    };
+    await saveProject(nextProj);
+    flash(`Saved details for ${normalizedName}`);
+  };
+
+  const createCampaignFromHub = async () => {
+    if (!requireEditor()) return;
+    const targetProject = projects.find(project => project.id === defaultLiveMarketingProject?.id);
+    if (!targetProject) {
+      flash("No live campaign record is mapped in this workspace yet", "err");
+      return;
+    }
+    const normalizedName = String(campaignHubCreateForm.name || "").replace(/\s+/g, " ").trim();
+    if (!normalizedName) {
+      flash("Campaign name is required", "err");
+      return;
+    }
+    const existingCampaigns = new Set(
+      [
+        ...normalizeMarketingCampaignBank(targetProject.settings?.marketingCampaignBank || []),
+        ...Object.keys(normalizeMarketingCampaignDetails(targetProject.settings?.marketingCampaignDetails || {})),
+        ...liveCampaignHubRows.map(row => row.name),
+      ].map(name => canonicalArtistName(name))
+    );
+    if (existingCampaigns.has(canonicalArtistName(normalizedName))) {
+      flash(`"${normalizedName}" already exists`, "err");
+      return;
+    }
+    const nextDetails = normalizeMarketingCampaignDetails(targetProject.settings?.marketingCampaignDetails || {});
+    const normalizedDetail = normalizeMarketingCampaignDetail(campaignHubCreateForm, normalizedName);
+    if (normalizedDetail) nextDetails[normalizedName] = normalizedDetail;
+    const nextProj = {
+      ...targetProject,
+      settings: {
+        ...(targetProject.settings || {}),
+        marketingCampaignBank: normalizeMarketingCampaignBank([
+          ...(targetProject.settings?.marketingCampaignBank || []),
+          normalizedName,
+        ]),
+        marketingCampaignDetails: nextDetails,
+      },
+    };
+    await saveProject(nextProj);
+    setCampaignHubDrafts(prev => ({
+      ...prev,
+      [normalizedName]: {
+        ...emptyCampaignDetailForm(normalizedName),
+        owner: normalizedDetail?.owner || "",
+        briefUrl: normalizedDetail?.briefUrl || "",
+        dueDate: normalizedDetail?.dueDate || "",
+        notes: normalizedDetail?.notes || "",
+      },
+    }));
+    setCampaignHubCreateForm(emptyCampaignDetailForm());
+    setShowCampaignHubCreate(false);
+    flash(`Created campaign "${normalizedName}"`);
+  };
+
   const addMarketingCampaignBankEntry = async () => {
     const nextName = campaignBankDraft.trim();
     if (!nextName) {
@@ -8949,7 +9149,13 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       )}
 
       {showCampaignHubModal && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 127 }} onClick={e => { if (e.target === e.currentTarget) setShowCampaignHubModal(false); }}>
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 127 }} onClick={e => {
+          if (e.target === e.currentTarget) {
+            setShowCampaignHubModal(false);
+            setShowCampaignHubCreate(false);
+            setCampaignHubCreateForm(emptyCampaignDetailForm());
+          }
+        }}>
           <div style={{ background: C.sf, borderRadius: 18, padding: "24px 28px", width: 880, maxWidth: "calc(100vw - 32px)", boxShadow: "0 25px 70px rgba(0,0,0,0.2)", maxHeight: "86vh", overflowY: "auto" }}>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", marginBottom: 14 }}>
               <div>
@@ -8958,14 +9164,73 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                   See the campaigns currently in motion inside Live Roster, then jump back into the roster with that campaign in focus.
                 </div>
               </div>
-              <button onClick={() => setShowCampaignHubModal(false)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: C.ts }}>✕</button>
+              <button onClick={() => { setShowCampaignHubModal(false); setShowCampaignHubCreate(false); setCampaignHubCreateForm(emptyCampaignDetailForm()); }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: C.ts }}>✕</button>
             </div>
 
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
-              <span style={{ ...mkP(true, C.bu, C.bb), cursor: "default" }}>{liveCampaignHubRows.length} campaigns</span>
-              <span style={{ ...mkP(true, C.pr, C.pb), cursor: "default" }}>{liveCrmOverview.assignments} assignments</span>
-              <span style={{ ...mkP(true, C.lv, C.lvb), cursor: "default" }}>{liveCrmOverview.liveTalents} live talent</span>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <span style={{ ...mkP(true, C.bu, C.bb), cursor: "default" }}>{liveCampaignHubRows.length} campaigns</span>
+                <span style={{ ...mkP(true, C.pr, C.pb), cursor: "default" }}>{liveCrmOverview.assignments} assignments</span>
+                <span style={{ ...mkP(true, C.lv, C.lvb), cursor: "default" }}>{liveCrmOverview.liveTalents} live talent</span>
+              </div>
+              <button
+                onClick={() => {
+                  setShowCampaignHubCreate(prev => !prev);
+                  if (showCampaignHubCreate) setCampaignHubCreateForm(emptyCampaignDetailForm());
+                }}
+                disabled={isReadOnly}
+                style={{ ...actionBtn(true, "accent"), ...lockStyle(isReadOnly) }}
+              >
+                {showCampaignHubCreate ? "Close New Campaign" : "+ New Campaign"}
+              </button>
             </div>
+
+            {showCampaignHubCreate && (
+              <div style={{ padding: "14px 16px", borderRadius: 16, border: `1px solid ${C.bd}`, background: C.sf, marginBottom: 12 }}>
+                <div style={{ fontSize: 15, fontWeight: 700, color: C.tx, marginBottom: 4 }}>Build a new campaign</div>
+                <div style={{ fontSize: 12, color: C.ts, marginBottom: 12 }}>
+                  Create the campaign here first, then start dropping assignments into it from the hub or the live roster.
+                </div>
+                <div style={{ display: "grid", gap: 10, gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))" }}>
+                  <input
+                    value={campaignHubCreateForm.name}
+                    onChange={e => setCampaignHubCreateForm(prev => ({ ...prev, name: e.target.value }))}
+                    placeholder="Campaign name"
+                    style={{ ...iS, width: "100%" }}
+                  />
+                  <select
+                    value={campaignHubCreateForm.owner}
+                    onChange={e => setCampaignHubCreateForm(prev => ({ ...prev, owner: e.target.value }))}
+                    style={{ ...iS, width: "100%" }}
+                  >
+                    <option value="">Campaign owner</option>
+                    {workspaceTeamUsers.map(owner => <option key={`campaign-owner-${owner}`} value={owner}>{owner}</option>)}
+                  </select>
+                  <input
+                    type="date"
+                    value={campaignHubCreateForm.dueDate}
+                    onChange={e => setCampaignHubCreateForm(prev => ({ ...prev, dueDate: e.target.value }))}
+                    style={{ ...iS, width: "100%" }}
+                  />
+                  <input
+                    value={campaignHubCreateForm.briefUrl}
+                    onChange={e => setCampaignHubCreateForm(prev => ({ ...prev, briefUrl: e.target.value }))}
+                    placeholder="Brief / deck / plan link"
+                    style={{ ...iS, width: "100%", gridColumn: "1 / -1" }}
+                  />
+                  <textarea
+                    value={campaignHubCreateForm.notes}
+                    onChange={e => setCampaignHubCreateForm(prev => ({ ...prev, notes: e.target.value }))}
+                    placeholder="Campaign notes"
+                    style={{ ...iS, width: "100%", minHeight: 88, resize: "vertical", gridColumn: "1 / -1" }}
+                  />
+                </div>
+                <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 12 }}>
+                  <button onClick={() => { setCampaignHubCreateForm(emptyCampaignDetailForm()); setShowCampaignHubCreate(false); }} style={actionBtn(false, "neutral")}>Cancel</button>
+                  <button onClick={() => { void createCampaignFromHub(); }} disabled={isReadOnly} style={{ ...actionBtn(true, "good"), ...lockStyle(isReadOnly) }}>Create Campaign</button>
+                </div>
+              </div>
+            )}
 
             <div style={{ display: "grid", gap: 10 }}>
               {liveCampaignHubRows.length ? liveCampaignHubRows.map(campaign => (
@@ -8975,7 +9240,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                       <div style={{ fontSize: 16, fontWeight: 700, color: C.tx, marginBottom: 4 }}>{campaign.name}</div>
                       <div style={{ fontSize: 12, color: C.ts }}>
                         {campaign.talentCount} talent · {campaign.assignments} assignment{campaign.assignments === 1 ? "" : "s"}
-                        {campaign.nextDue ? ` · Next due ${sD(campaign.nextDue)}` : ""}
+                        {campaign.dueDate ? ` · Campaign due ${sD(campaign.dueDate)}` : ""}
                       </div>
                     </div>
                     <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -9016,6 +9281,61 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                         {part.label} {part.count}
                       </span>
                     )) : null}
+                  </div>
+                  <div style={{ display: "grid", gap: 10, gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", marginTop: 12 }}>
+                    <div>
+                      <div style={{ fontSize: 11, color: C.tt, textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 }}>Campaign owner</div>
+                      <select
+                        value={campaignHubDrafts[campaign.name]?.owner || ""}
+                        onChange={e => updateCampaignHubDraft(campaign.name, { owner: e.target.value })}
+                        style={{ ...iS, width: "100%" }}
+                      >
+                        <option value="">Unassigned</option>
+                        {workspaceTeamUsers.map(owner => <option key={`${campaign.name}:draft-owner:${owner}`} value={owner}>{owner}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 11, color: C.tt, textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 }}>Campaign due</div>
+                      <input
+                        type="date"
+                        value={campaignHubDrafts[campaign.name]?.dueDate || ""}
+                        onChange={e => updateCampaignHubDraft(campaign.name, { dueDate: e.target.value })}
+                        style={{ ...iS, width: "100%" }}
+                      />
+                    </div>
+                    <div style={{ gridColumn: "1 / -1" }}>
+                      <div style={{ fontSize: 11, color: C.tt, textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 }}>Brief / plan link</div>
+                      <input
+                        value={campaignHubDrafts[campaign.name]?.briefUrl || ""}
+                        onChange={e => updateCampaignHubDraft(campaign.name, { briefUrl: e.target.value })}
+                        placeholder="Deck, brief, notion, drive folder..."
+                        style={{ ...iS, width: "100%" }}
+                      />
+                    </div>
+                    <div style={{ gridColumn: "1 / -1" }}>
+                      <div style={{ fontSize: 11, color: C.tt, textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 }}>Campaign notes</div>
+                      <textarea
+                        value={campaignHubDrafts[campaign.name]?.notes || ""}
+                        onChange={e => updateCampaignHubDraft(campaign.name, { notes: e.target.value })}
+                        placeholder="Goals, angle, briefing notes, edits, next steps..."
+                        style={{ ...iS, width: "100%", minHeight: 78, resize: "vertical" }}
+                      />
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
+                    <div style={{ fontSize: 12, color: C.ts }}>
+                      Campaign details live here now, so you can keep the brief, owner, and notes tied to the campaign itself.
+                    </div>
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      {campaignHubDrafts[campaign.name]?.briefUrl ? (
+                        <a href={campaignHubDrafts[campaign.name]?.briefUrl} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>
+                          Open Brief
+                        </a>
+                      ) : null}
+                      <button onClick={() => { void saveCampaignHubDetails(campaign.name); }} disabled={isReadOnly} style={{ ...actionBtn(true, "accent"), ...lockStyle(isReadOnly) }}>
+                        Save Details
+                      </button>
+                    </div>
                   </div>
                 </div>
               )) : (
@@ -9953,7 +10273,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                 <span style={{ ...mkP(true, C.bu, C.bb), cursor: "default" }}>{kickoffOverview.talents} pre-live talent</span>
                 <span style={{ ...mkP(true, C.lv, C.lvb), cursor: "default" }}>{liveCrmOverview.liveTalents} live talent</span>
                 <span style={{ ...mkP(true, C.pr, C.pb), cursor: "default" }}>{liveCrmOverview.assignments} marketing assignments</span>
-                <span style={{ ...mkP(true, C.ac, C.al), cursor: "default" }}>{liveCrmOverview.campaigns} campaigns</span>
+                <span style={{ ...mkP(true, C.ac, C.al), cursor: "default" }}>{liveCampaignCount} campaigns</span>
               </div>
             </div>
             <div style={{ display: "grid", gap: 12, alignContent: "start" }}>
@@ -10515,7 +10835,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 14 }}>
                 <span style={{ ...mkP(true, C.lv, C.lvb), cursor: "default" }}>{liveCrmOverview.liveTalents} live talent</span>
                 <span style={{ ...mkP(true, C.pr, C.pb), cursor: "default" }}>{liveCrmOverview.assignments} campaign assignments</span>
-                <span style={{ ...mkP(true, C.bu, C.bb), cursor: "default" }}>{liveCrmOverview.campaigns} campaigns</span>
+                <span style={{ ...mkP(true, C.bu, C.bb), cursor: "default" }}>{liveCampaignCount} campaigns</span>
                 {liveCrmOverview.internalArtists > 0 && <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{liveCrmOverview.internalArtists} internal artists</span>}
                 {liveCrmOverview.curators > 0 && <span style={{ ...mkP(true, C.ac, C.al), cursor: "default" }}>{liveCrmOverview.curators} curators</span>}
                 {liveCrmOverview.creators > 0 && <span style={{ ...mkP(true, C.gn, C.gb), cursor: "default" }}>{liveCrmOverview.creators} creators / AI UGC</span>}
@@ -10525,7 +10845,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
             <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(120px, 1fr))", gap: 10 }}>
               {[
                 ["Live Talent", liveCrmOverview.liveTalents, C.lv, C.lvb],
-                ["Campaigns", liveCrmOverview.campaigns, C.bu, C.bb],
+                ["Campaigns", liveCampaignCount, C.bu, C.bb],
                 ["Assignments", liveCrmOverview.assignments, C.pr, C.pb],
                 ["Internal Artists", liveCrmOverview.internalArtists, C.ts, C.sa],
               ].map(([label, value, tone, bg]) => (
