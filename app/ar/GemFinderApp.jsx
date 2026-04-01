@@ -3306,6 +3306,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [liveCrmSourceFilter, setLiveCrmSourceFilter] = useState("all");
   const [liveCrmOwnerFilter, setLiveCrmOwnerFilter] = useState("all");
   const [liveCrmCampaignFilter, setLiveCrmCampaignFilter] = useState("all");
+  const [liveCrmStatusFilter, setLiveCrmStatusFilter] = useState("all");
+  const [liveCrmSortMode, setLiveCrmSortMode] = useState("updated");
   const [liveRosterViewMode, setLiveRosterViewMode] = useState("table");
   const [kickoffQuery, setKickoffQuery] = useState("");
   const [kickoffTypeFilter, setKickoffTypeFilter] = useState("all");
@@ -3530,6 +3532,15 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     ].filter(Boolean))).sort((a, b) => a.localeCompare(b)),
     [liveCrmBaseProfiles]
   );
+  const liveCrmStatusOptions = useMemo(
+    () => uniqStrings(liveCrmBaseProfiles.flatMap(profile =>
+      (profile.marketingAssignments || [])
+        .filter(item => workspaceProjectIds.has(item.projectId))
+        .map(item => normalizeMarketingStatus(item.status || ""))
+        .filter(Boolean)
+    )),
+    [liveCrmBaseProfiles, workspaceProjectIds]
+  );
   const liveCrmProfiles = useMemo(() => {
     const query = liveCrmQuery.trim().toLowerCase();
     return liveCrmBaseProfiles
@@ -3592,6 +3603,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
 
         const owners = uniqStrings(projectSummaries.flatMap(item => item.owners));
         const campaigns = uniqStrings(projectSummaries.flatMap(item => item.campaigns));
+        const marketingStatuses = uniqStrings(projectSummaries.flatMap(item => item.marketingStatuses || []));
         const searchHaystack = [
           profile.displayName,
           profile.primaryEmail,
@@ -3602,6 +3614,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
           profile.tiktokHandle,
           ...projectSummaries.map(item => item.projectName),
           ...campaigns,
+          ...marketingStatuses,
         ].filter(Boolean).join(" ").toLowerCase();
 
         const lastTouched = [
@@ -3614,6 +3627,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
           ...profile,
           owners,
           campaigns,
+          marketingStatuses,
           projectSummaries,
           searchHaystack,
           lastTouched,
@@ -3629,14 +3643,29 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         if (liveCrmOwnerFilter !== "all" && liveCrmOwnerFilter !== "__unassigned__" && !profile.owners.includes(liveCrmOwnerFilter)) return false;
         if (liveCrmCampaignFilter === "none" && profile.campaigns.length) return false;
         if (liveCrmCampaignFilter !== "all" && liveCrmCampaignFilter !== "none" && !profile.campaigns.includes(liveCrmCampaignFilter)) return false;
+        if (liveCrmStatusFilter === "none" && profile.marketingStatuses.length) return false;
+        if (liveCrmStatusFilter !== "all" && liveCrmStatusFilter !== "none" && !profile.marketingStatuses.includes(liveCrmStatusFilter)) return false;
         return true;
       })
       .sort((a, b) => {
+        if (liveCrmSortMode === "name") {
+          return a.displayName.localeCompare(b.displayName);
+        }
+        if (liveCrmSortMode === "status") {
+          const aStatus = liveStatusSummaryParts(a)[0]?.id || "";
+          const bStatus = liveStatusSummaryParts(b)[0]?.id || "";
+          const statusCompare = (MARKETING_STATUS_ORDER[aStatus] ?? 999) - (MARKETING_STATUS_ORDER[bStatus] ?? 999);
+          if (statusCompare !== 0) return statusCompare;
+        }
+        if (liveCrmSortMode === "campaigns") {
+          const campaignCompare = (b.campaigns?.length || 0) - (a.campaigns?.length || 0);
+          if (campaignCompare !== 0) return campaignCompare;
+        }
         const timeCompare = String(b.lastTouched || "").localeCompare(String(a.lastTouched || ""));
         if (timeCompare !== 0) return timeCompare;
         return a.displayName.localeCompare(b.displayName);
       });
-  }, [liveCrmBaseProfiles, liveCrmCampaignFilter, liveCrmOwnerFilter, liveCrmQuery, liveCrmSourceFilter, liveCrmTypeFilter, workspaceProjectIds]);
+  }, [liveCrmBaseProfiles, liveCrmCampaignFilter, liveCrmOwnerFilter, liveCrmQuery, liveCrmSortMode, liveCrmSourceFilter, liveCrmStatusFilter, liveCrmTypeFilter, workspaceProjectIds]);
   const liveCrmOverview = useMemo(() => {
     const projectsSeen = new Set();
     const campaignsSeen = new Set();
@@ -10575,7 +10604,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
               ))}
             </div>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "minmax(240px, 1.2fr) repeat(4, minmax(150px, 0.8fr))", gap: 12, alignItems: "end" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1.1fr) repeat(6, minmax(138px, 0.8fr))", gap: 12, alignItems: "end" }}>
             <label style={{ display: "grid", gap: 6, fontSize: 12, color: C.ts }}>
               <span>Search live talent</span>
               <input
@@ -10621,6 +10650,25 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                 {liveCrmCampaignOptions.map(campaign => (
                   <option key={campaign} value={campaign}>{campaign}</option>
                 ))}
+              </select>
+            </label>
+            <label style={{ display: "grid", gap: 6, fontSize: 12, color: C.ts }}>
+              <span>Marketing stage</span>
+              <select value={liveCrmStatusFilter} onChange={e => setLiveCrmStatusFilter(e.target.value)} style={{ ...iS, width: "100%" }}>
+                <option value="all">All stages</option>
+                <option value="none">No status yet</option>
+                {liveCrmStatusOptions.map(status => (
+                  <option key={status} value={status}>{MM[status]?.label || titleCaseWords(status)}</option>
+                ))}
+              </select>
+            </label>
+            <label style={{ display: "grid", gap: 6, fontSize: 12, color: C.ts }}>
+              <span>Sort by</span>
+              <select value={liveCrmSortMode} onChange={e => setLiveCrmSortMode(e.target.value)} style={{ ...iS, width: "100%" }}>
+                <option value="updated">Last updated</option>
+                <option value="status">Marketing stage</option>
+                <option value="campaigns">Campaign count</option>
+                <option value="name">Artist name</option>
               </select>
             </label>
           </div>
@@ -13994,6 +14042,51 @@ Requirements:
                       ))}
                     </div>
                   </div>
+                </div>
+
+                <div style={{ ...cS, boxShadow: "none", padding: "14px 16px", background: C.sa }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>CSV Export Tools</div>
+                  <div style={{ fontSize: 11, color: C.tt, lineHeight: 1.5, marginBottom: 10 }}>
+                    Export the current workspace slice. These use the live roster filters you set for artist type, campaign stage, owner, and sort order.
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
+                    <label style={{ fontSize: 11, color: C.ts, display: "grid", gap: 4 }}>
+                      <span>Live roster type</span>
+                      <select value={liveCrmTypeFilter} onChange={e => setLiveCrmTypeFilter(e.target.value)} style={{ ...iS, padding: "6px 10px", fontSize: 11 }}>
+                        <option value="all">All types</option>
+                        {liveCrmTypeOptions.map(type => (
+                          <option key={`settings-live-type-${type}`} value={canonicalArtistName(type)}>{type}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label style={{ fontSize: 11, color: C.ts, display: "grid", gap: 4 }}>
+                      <span>Live roster stage</span>
+                      <select value={liveCrmStatusFilter} onChange={e => setLiveCrmStatusFilter(e.target.value)} style={{ ...iS, padding: "6px 10px", fontSize: 11 }}>
+                        <option value="all">All stages</option>
+                        <option value="none">No status yet</option>
+                        {liveCrmStatusOptions.map(status => (
+                          <option key={`settings-live-status-${status}`} value={status}>{MM[status]?.label || titleCaseWords(status)}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label style={{ fontSize: 11, color: C.ts, display: "grid", gap: 4 }}>
+                      <span>Sort order</span>
+                      <select value={liveCrmSortMode} onChange={e => setLiveCrmSortMode(e.target.value)} style={{ ...iS, padding: "6px 10px", fontSize: 11 }}>
+                        <option value="updated">Last updated</option>
+                        <option value="status">Marketing stage</option>
+                        <option value="campaigns">Campaign count</option>
+                        <option value="name">Artist name</option>
+                      </select>
+                    </label>
+                    <div style={{ display: "grid", alignItems: "end" }}>
+                      <button onClick={exportLiveRosterView} style={{ ...actionBtn(false, "neutral"), ...lockStyle(!liveCrmProfiles.length) }}>
+                        Export Live Roster CSV
+                      </button>
+                    </div>
+                  </div>
+                  <button onClick={exportKickoffView} style={{ ...actionBtn(false, "neutral"), ...lockStyle(!kickoffProfiles.length) }}>
+                    Export Kickoff CSV
+                  </button>
                 </div>
 
                 <div style={{ ...cS, boxShadow: "none", padding: "14px 16px", background: C.sa }}>
