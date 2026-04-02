@@ -41,6 +41,7 @@ const MARKETING_STATUSES = [
   { id: "contacted", label: "Contacted", icon: "→", description: "The campaign ask has been sent to the talent." },
   { id: "interested", label: "Interested", icon: "◆", description: "They replied about the opportunity." },
   { id: "creating", label: "Creating", icon: "✦", description: "They accepted and are making the content." },
+  { id: "followed_up", label: "Followed Up", icon: "↻", description: "The team followed up while waiting on content or a reply." },
   { id: "reviewing", label: "Reviewing", icon: "◌", description: "The content is in review with the team." },
   { id: "revising", label: "Revising", icon: "↺", description: "Changes are being made after review." },
   { id: "editing", label: "Editing", icon: "✂", description: "Greg or the editors are shaping the final content." },
@@ -51,7 +52,7 @@ const MARKETING_DELIVERABLE_TYPES = ["UGC", "VO", "MIXED"];
 const MM = Object.fromEntries(MARKETING_STATUSES.map(s => [s.id, s]));
 const VALID_MARKETING_STATUS_IDS = new Set(MARKETING_STATUSES.map(s => s.id));
 const MARKETING_STATUS_ORDER = Object.fromEntries(MARKETING_STATUSES.map((status, index) => [status.id, index]));
-const MARKETING_SLACK_NOTIFY_STATUS_IDS = new Set(["contacted", "interested", "creating", "reviewing", "revising", "editing", "complete", "rejected"]);
+const MARKETING_SLACK_NOTIFY_STATUS_IDS = new Set(["contacted", "interested", "creating", "followed_up", "reviewing", "revising", "editing", "complete", "rejected"]);
 const VALID_STAGE_IDS = new Set(STAGES.map(s => s.id));
 const CONTACTED_STAGE_IDS = ["sent", "replied", "engaged", "won", "live"];
 const REPLIED_STAGE_IDS = ["replied", "engaged", "won", "live"];
@@ -563,7 +564,10 @@ function workspaceTimelineLabel(entry, hub = "generic") {
   return "";
 }
 function normalizeMarketingStatus(status) {
-  const normalized = String(status || "").toLowerCase();
+  const normalized = String(status || "")
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_")
+    .trim();
   return VALID_MARKETING_STATUS_IDS.has(normalized) ? normalized : "prospect";
 }
 function parseCSVGrid(text) {
@@ -1216,6 +1220,8 @@ function marketingStatusTone(status, C) {
       return { fg: C.ac, bg: C.al, border: `${C.ac}33` };
     case "creating":
       return { fg: C.pr, bg: C.pb, border: `${C.pr}33` };
+    case "followed_up":
+      return { fg: C.bu, bg: C.abb, border: `${C.bu}33` };
     case "reviewing":
       return { fg: C.ab, bg: C.abb, border: `${C.ab}33` };
     case "revising":
@@ -1238,6 +1244,7 @@ function summarizeMarketingItems(items = [], today = todayISO()) {
     contacted: 0,
     interested: 0,
     creating: 0,
+    followed_up: 0,
     reviewing: 0,
     revising: 0,
     editing: 0,
@@ -1274,7 +1281,7 @@ function summarizeProjectForHub(project, today = todayISO()) {
         ["Assignments", mk.items, "neutral"],
         ["Prospect", mk.prospect, "accent"],
         ["Contacted", mk.contacted, "accent"],
-        ["In Progress", mk.creating + mk.reviewing + mk.revising + mk.editing, "good"],
+        ["In Progress", mk.creating + mk.followed_up + mk.reviewing + mk.revising + mk.editing, "good"],
         ["Complete", mk.complete, "live"],
       ],
       badges: [
@@ -7638,20 +7645,23 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     const draft = talentOverviewMarketingDrafts[assignmentId] || {};
     const nextStatus = normalizeMarketingStatus(draft.status || currentItem.status || "prospect");
     const nextOwner = String(draft.owner ?? currentItem.owner ?? "");
+    const nextDueDate = String(draft.dueDate ?? currentItem.dueDate ?? "").trim();
     const nextNotes = String(draft.notes ?? currentItem.notes ?? "").trim();
     const nextContentUrl = String(draft.contentUrl ?? currentItem.contentUrl ?? "").trim();
 
     const currentStatus = normalizeMarketingStatus(currentItem.status || "prospect");
     const currentOwner = String(currentItem.owner || "");
+    const currentDueDate = String(currentItem.dueDate || "").trim();
     const currentNotes = String(currentItem.notes || "").trim();
     const currentContentUrl = String(currentItem.contentUrl || "").trim();
 
     const statusChanged = currentStatus !== nextStatus;
     const ownerChanged = currentOwner !== nextOwner;
+    const dueDateChanged = currentDueDate !== nextDueDate;
     const notesChanged = currentNotes !== nextNotes;
     const contentChanged = currentContentUrl !== nextContentUrl;
 
-    if (!statusChanged && !ownerChanged && !notesChanged && !contentChanged) {
+    if (!statusChanged && !ownerChanged && !dueDateChanged && !notesChanged && !contentChanged) {
       flash("No campaign changes to save");
       return;
     }
@@ -7705,6 +7715,21 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
           ),
         };
       }
+      if (dueDateChanged) {
+        nextActivityCarrier = {
+          ...nextActivityCarrier,
+          activityLog: logAction(
+            nextActivityCarrier,
+            assignment.talentName || "",
+            nextDueDate ? `Marketing due date → ${sD(nextDueDate)}` : "Marketing due date cleared",
+            "event",
+            {
+              assignmentId,
+              campaign: assignment.campaign || "",
+            }
+          ),
+        };
+      }
       if (contentChanged) {
         nextActivityCarrier = {
           ...nextActivityCarrier,
@@ -7730,6 +7755,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                 ...item,
                 status: nextStatus,
                 owner: nextOwner,
+                dueDate: nextDueDate,
                 notes: nextNotes,
                 contentUrl: nextContentUrl,
                 updatedAt: new Date().toISOString(),
@@ -7745,6 +7771,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         [assignmentId]: {
           status: nextStatus,
           owner: nextOwner,
+          dueDate: nextDueDate,
           notes: nextNotes,
           contentUrl: nextContentUrl,
         },
@@ -10911,11 +10938,13 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                         const currentStatus = normalizeMarketingStatus(assignment.status || "prospect");
                         const draftStatus = normalizeMarketingStatus(assignmentDraft.status || currentStatus);
                         const draftOwner = String(assignmentDraft.owner ?? assignment.owner ?? "");
+                        const draftDueDate = String(assignmentDraft.dueDate ?? assignment.dueDate ?? "");
                         const draftNotes = String(assignmentDraft.notes ?? assignment.notes ?? "");
                         const draftContentUrl = String(assignmentDraft.contentUrl ?? assignment.contentUrl ?? "");
                         const isDirty =
                           draftStatus !== currentStatus ||
                           draftOwner !== String(assignment.owner || "") ||
+                          draftDueDate !== String(assignment.dueDate || "") ||
                           draftNotes.trim() !== String(assignment.notes || "").trim() ||
                           draftContentUrl.trim() !== String(assignment.contentUrl || "").trim();
                         const isSaving = talentOverviewMarketingSavingId === assignmentId;
@@ -10929,7 +10958,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                                 {draftOwner && <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{draftOwner}</span>}
                               </div>
                               <div style={{ fontSize: 11, color: C.tt }}>
-                                {[assignment.title, assignment.trafficType, assignment.deliverableType, assignment.dueDate ? `Due ${sD(assignment.dueDate)}` : ""].filter(Boolean).join(" · ") || "Marketing assignment"}
+                                {[assignment.title, assignment.trafficType, assignment.deliverableType, draftDueDate ? `Due ${sD(draftDueDate)}` : ""].filter(Boolean).join(" · ") || "Marketing assignment"}
                               </div>
                               {(assignment.rejectedReason) && (
                                 <div style={{ display: "grid", gap: 4, marginTop: 8, fontSize: 11, color: C.ts, lineHeight: 1.5 }}>
@@ -10967,6 +10996,51 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                                   </select>
                                 </label>
                               </div>
+                              <label style={{ fontSize: 11, color: C.ts, display: "grid", gap: 4, marginTop: 10 }}>
+                                <span>Assignment due date</span>
+                                <input
+                                  type="date"
+                                  value={draftDueDate}
+                                  disabled={isReadOnly || isSaving}
+                                  onClick={e => e.stopPropagation()}
+                                  onChange={e => patchTalentOverviewMarketingDraft(assignmentId, { dueDate: e.currentTarget.value })}
+                                  style={{ ...iS, width: "100%", fontSize: 12, ...lockStyle(isReadOnly || isSaving) }}
+                                />
+                                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                                  <button
+                                    type="button"
+                                    onClick={() => patchTalentOverviewMarketingDraft(assignmentId, { dueDate: operationalTodayISOFor(clockNow) })}
+                                    disabled={isReadOnly || isSaving}
+                                    style={{ ...actionBtn(false, "neutral"), padding: "4px 10px", fontSize: 11, ...lockStyle(isReadOnly || isSaving) }}
+                                  >
+                                    Today
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => patchTalentOverviewMarketingDraft(assignmentId, { dueDate: addDaysISO(operationalTodayISOFor(clockNow), 3) })}
+                                    disabled={isReadOnly || isSaving}
+                                    style={{ ...actionBtn(false, "neutral"), padding: "4px 10px", fontSize: 11, ...lockStyle(isReadOnly || isSaving) }}
+                                  >
+                                    +3 days
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => patchTalentOverviewMarketingDraft(assignmentId, { dueDate: addDaysISO(operationalTodayISOFor(clockNow), 7) })}
+                                    disabled={isReadOnly || isSaving}
+                                    style={{ ...actionBtn(false, "neutral"), padding: "4px 10px", fontSize: 11, ...lockStyle(isReadOnly || isSaving) }}
+                                  >
+                                    +7 days
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => patchTalentOverviewMarketingDraft(assignmentId, { dueDate: "" })}
+                                    disabled={isReadOnly || isSaving}
+                                    style={{ ...actionBtn(false, "neutral"), padding: "4px 10px", fontSize: 11, ...lockStyle(isReadOnly || isSaving) }}
+                                  >
+                                    Clear
+                                  </button>
+                                </div>
+                              </label>
                               <label style={{ fontSize: 11, color: C.ts, display: "grid", gap: 4, marginTop: 10 }}>
                                 <span>Campaign notes</span>
                                 <textarea
@@ -14008,7 +14082,7 @@ Requirements:
     const overviewCards = isMarketingProject ? [
       { label: "Assignments", value: marketingSummary.items, tone: C.tx, accent: C.ac, helper: "in this project" },
       { label: "Prospect", value: marketingSummary.prospect, tone: C.tt, accent: C.tt, helper: "uploaded or queued" },
-      { label: "In Progress", value: marketingSummary.creating + marketingSummary.reviewing + marketingSummary.revising + marketingSummary.editing, tone: C.pr, accent: C.pr, helper: "creating, reviewing, revising, editing" },
+      { label: "In Progress", value: marketingSummary.creating + marketingSummary.followed_up + marketingSummary.reviewing + marketingSummary.revising + marketingSummary.editing, tone: C.pr, accent: C.pr, helper: "creating, followed up, reviewing, revising, editing" },
       { label: "Complete", value: marketingSummary.complete, tone: C.gn, accent: C.gn, helper: operationalDayLabel },
     ] : isCuratorProject ? [
       { label: "Curators", value: enriched.length, tone: C.tx, accent: C.ac, helper: "in this project" },
@@ -14464,7 +14538,7 @@ Requirements:
                   ["Prospect", marketingSummary.prospect, "prospect", "Queued or newly uploaded talent"],
                   ["Contacted", marketingSummary.contacted, "contacted", "The opportunity has been sent to the talent"],
                   ["Interested", marketingSummary.interested, "interested", "Talent who replied about the opportunity"],
-                  ["In Progress", marketingSummary.creating + marketingSummary.reviewing + marketingSummary.revising + marketingSummary.editing, "__active__", "Creating, reviewing, revising, and editing"],
+                  ["In Progress", marketingSummary.creating + marketingSummary.followed_up + marketingSummary.reviewing + marketingSummary.revising + marketingSummary.editing, "__active__", "Creating, followed up, reviewing, revising, and editing"],
                   ["Complete", marketingSummary.complete, "complete", "Finished deliverables"],
                   ["Campaigns", marketingSummary.campaigns, "__campaigns__", "Distinct campaign buckets"],
                 ].map(([label, value, filterId, helper]) => (
@@ -14732,7 +14806,7 @@ Requirements:
               <div style={{ ...cS, padding: "12px 14px", marginBottom: 14 }}>
                 <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 8 }}>
                   <button onClick={() => setMarketingStatusFilter("all")} style={mkP(marketingStatusFilter === "all", C.ac, C.al)}>All {marketingSummary.items}</button>
-                  <button onClick={() => setMarketingStatusFilter("active")} style={mkP(marketingStatusFilter === "active", C.pr, C.pb)}>In Progress {marketingSummary.creating + marketingSummary.reviewing + marketingSummary.revising + marketingSummary.editing}</button>
+                  <button onClick={() => setMarketingStatusFilter("active")} style={mkP(marketingStatusFilter === "active", C.pr, C.pb)}>In Progress {marketingSummary.creating + marketingSummary.followed_up + marketingSummary.reviewing + marketingSummary.revising + marketingSummary.editing}</button>
                   {MARKETING_STATUSES.map(status => (
                     <button key={status.id} onClick={() => setMarketingStatusFilter(marketingStatusFilter === status.id ? "all" : status.id)} style={mkP(marketingStatusFilter === status.id, marketingStatusTone(status.id, C).tone, marketingStatusTone(status.id, C).bg)}>
                       {status.icon} {status.label} {marketingStatusCounts[status.id]}
