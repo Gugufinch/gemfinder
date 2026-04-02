@@ -3559,6 +3559,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [liveCrmOwnerFilter, setLiveCrmOwnerFilter] = useState("all");
   const [liveCrmCampaignFilter, setLiveCrmCampaignFilter] = useState("all");
   const [liveCrmStatusFilter, setLiveCrmStatusFilter] = useState("all");
+  const [liveCrmAttentionFilter, setLiveCrmAttentionFilter] = useState("all");
   const [liveCrmSortMode, setLiveCrmSortMode] = useState("updated");
   const [liveRosterViewMode, setLiveRosterViewMode] = useState("table");
   const [kickoffQuery, setKickoffQuery] = useState("");
@@ -3801,11 +3802,42 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     )),
     [liveCrmBaseProfiles, workspaceProjectIds]
   );
-  const liveCrmProfiles = useMemo(() => {
+  const liveCrmMatchesFilters = useCallback((profile, { includeAttention = true } = {}) => {
     const query = liveCrmQuery.trim().toLowerCase();
+    if (query && !profile.searchHaystack.includes(query)) return false;
+    if (liveCrmTypeFilter !== "all" && !profile.talentTypes.some(type => canonicalArtistName(type) === liveCrmTypeFilter)) return false;
+    if (liveCrmSourceFilter !== "all" && !profile.sources.includes(liveCrmSourceFilter)) return false;
+    if (liveCrmOwnerFilter === "__unassigned__" && profile.owners.length) return false;
+    if (liveCrmOwnerFilter !== "all" && liveCrmOwnerFilter !== "__unassigned__" && !profile.owners.includes(liveCrmOwnerFilter)) return false;
+    if (liveCrmCampaignFilter === "none" && profile.campaigns.length) return false;
+    if (liveCrmCampaignFilter !== "all" && liveCrmCampaignFilter !== "none" && !profile.campaigns.includes(liveCrmCampaignFilter)) return false;
+    if (liveCrmStatusFilter === "none" && profile.marketingStatuses.length) return false;
+    if (liveCrmStatusFilter !== "all" && liveCrmStatusFilter !== "none" && !profile.marketingStatuses.includes(liveCrmStatusFilter)) return false;
+    if (includeAttention && liveCrmAttentionFilter === "needs_follow_up" && !profile.needsFollowUp) return false;
+    return true;
+  }, [
+    liveCrmAttentionFilter,
+    liveCrmCampaignFilter,
+    liveCrmOwnerFilter,
+    liveCrmQuery,
+    liveCrmSourceFilter,
+    liveCrmStatusFilter,
+    liveCrmTypeFilter,
+  ]);
+  const liveCrmDecoratedProfiles = useMemo(() => {
+    const today = operationalTodayISOFor(clockNow);
     return liveCrmBaseProfiles
       .map(profile => {
         const byProject = new Map();
+        const normalizedMarketingAssignments = (profile.marketingAssignments || [])
+          .filter(item => workspaceProjectIds.has(item.projectId))
+          .map(item => ({
+            ...normalizeMarketingItem(item),
+            projectId: item.projectId,
+            projectName: item.projectName,
+            updatedAt: item.updatedAt || item.createdAt || "",
+            createdAt: item.createdAt || item.updatedAt || "",
+          }));
         const ensureProjectSummary = (projectId, projectName, projectType) => {
           const key = String(projectId || "");
           if (!byProject.has(key)) {
@@ -3834,7 +3866,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
           if (record.stage) summary.arStages.push(record.stage);
         });
 
-        (profile.marketingAssignments || []).filter(item => workspaceProjectIds.has(item.projectId)).forEach(item => {
+        normalizedMarketingAssignments.forEach(item => {
           const summary = ensureProjectSummary(item.projectId, item.projectName, "marketing");
           if (item.owner) summary.owners.push(item.owner);
           if (item.status) summary.marketingStatuses.push(item.status);
@@ -3864,6 +3896,10 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         const owners = uniqStrings(projectSummaries.flatMap(item => item.owners));
         const campaigns = uniqStrings(projectSummaries.flatMap(item => item.campaigns));
         const marketingStatuses = uniqStrings(projectSummaries.flatMap(item => item.marketingStatuses || []));
+        const activeMarketingAssignments = normalizedMarketingAssignments.filter(item => !isTerminalMarketingStatus(item.status || "prospect"));
+        const followUpAssignments = activeMarketingAssignments.filter(item => item.dueDate && item.dueDate <= today);
+        const overdueAssignments = followUpAssignments.filter(item => item.dueDate < today);
+        const dueTodayAssignments = followUpAssignments.filter(item => item.dueDate === today);
         const primaryMarketingStatus = [...marketingStatuses]
           .sort((a, b) => (MARKETING_STATUS_ORDER[a] ?? 999) - (MARKETING_STATUS_ORDER[b] ?? 999))[0] || "";
         const searchHaystack = [
@@ -3881,7 +3917,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
 
         const lastTouched = [
           ...projectSummaries.map(item => String(item.lastTouched || "")),
-          ...(profile.marketingAssignments || []).filter(item => workspaceProjectIds.has(item.projectId)).map(item => String(item.updatedAt || "")),
+          ...normalizedMarketingAssignments.map(item => String(item.updatedAt || "")),
           ...(profile.arRecords || []).filter(item => workspaceProjectIds.has(item.projectId)).map(item => String(item.updatedAt || "")),
         ].filter(Boolean).sort((a, b) => b.localeCompare(a))[0] || "";
 
@@ -3894,23 +3930,36 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
           projectSummaries,
           searchHaystack,
           lastTouched,
+          activeMarketingAssignments,
+          followUpAssignments,
+          overdueAssignments,
+          dueTodayAssignments,
+          needsFollowUp: followUpAssignments.length > 0,
+          earliestFollowUpDueDate: [...followUpAssignments]
+            .map(item => item.dueDate)
+            .filter(Boolean)
+            .sort((a, b) => a.localeCompare(b))[0] || "",
           primaryProjectId: projectSummaries[0]?.projectId || "",
           primaryAssignmentId: projectSummaries[0]?.leadAssignmentId || "",
         };
-      })
-      .filter(profile => {
-        if (query && !profile.searchHaystack.includes(query)) return false;
-        if (liveCrmTypeFilter !== "all" && !profile.talentTypes.some(type => canonicalArtistName(type) === liveCrmTypeFilter)) return false;
-        if (liveCrmSourceFilter !== "all" && !profile.sources.includes(liveCrmSourceFilter)) return false;
-        if (liveCrmOwnerFilter === "__unassigned__" && profile.owners.length) return false;
-        if (liveCrmOwnerFilter !== "all" && liveCrmOwnerFilter !== "__unassigned__" && !profile.owners.includes(liveCrmOwnerFilter)) return false;
-        if (liveCrmCampaignFilter === "none" && profile.campaigns.length) return false;
-        if (liveCrmCampaignFilter !== "all" && liveCrmCampaignFilter !== "none" && !profile.campaigns.includes(liveCrmCampaignFilter)) return false;
-        if (liveCrmStatusFilter === "none" && profile.marketingStatuses.length) return false;
-        if (liveCrmStatusFilter !== "all" && liveCrmStatusFilter !== "none" && !profile.marketingStatuses.includes(liveCrmStatusFilter)) return false;
-        return true;
-      })
+      });
+  }, [clockNow, liveCrmBaseProfiles, workspaceProjectIds]);
+  const liveCrmFollowUpCount = useMemo(
+    () => liveCrmDecoratedProfiles.filter(profile => liveCrmMatchesFilters(profile, { includeAttention: false }) && profile.needsFollowUp).length,
+    [liveCrmDecoratedProfiles, liveCrmMatchesFilters]
+  );
+  const liveCrmProfiles = useMemo(() => {
+    return liveCrmDecoratedProfiles
+      .filter(profile => liveCrmMatchesFilters(profile))
       .sort((a, b) => {
+        if (liveCrmAttentionFilter === "needs_follow_up") {
+          const aDue = a.earliestFollowUpDueDate || "9999-12-31";
+          const bDue = b.earliestFollowUpDueDate || "9999-12-31";
+          const dueCompare = aDue.localeCompare(bDue);
+          if (dueCompare !== 0) return dueCompare;
+          const overdueCompare = (b.overdueAssignments?.length || 0) - (a.overdueAssignments?.length || 0);
+          if (overdueCompare !== 0) return overdueCompare;
+        }
         if (liveCrmSortMode === "name") {
           return a.displayName.localeCompare(b.displayName);
         }
@@ -3928,7 +3977,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         if (timeCompare !== 0) return timeCompare;
         return a.displayName.localeCompare(b.displayName);
       });
-  }, [liveCrmBaseProfiles, liveCrmCampaignFilter, liveCrmOwnerFilter, liveCrmQuery, liveCrmSortMode, liveCrmSourceFilter, liveCrmStatusFilter, liveCrmTypeFilter, workspaceProjectIds]);
+  }, [liveCrmAttentionFilter, liveCrmDecoratedProfiles, liveCrmMatchesFilters, liveCrmSortMode]);
   const liveCrmOverview = useMemo(() => {
     const projectsSeen = new Set();
     const campaignsSeen = new Set();
@@ -12145,6 +12194,12 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
             >
               Export Current View CSV
             </button>
+            <button
+              onClick={() => setLiveCrmAttentionFilter(current => current === "needs_follow_up" ? "all" : "needs_follow_up")}
+              style={actionBtn(liveCrmAttentionFilter === "needs_follow_up", liveCrmAttentionFilter === "needs_follow_up" ? "warn" : "neutral")}
+            >
+              {`Needs Follow-up${liveCrmFollowUpCount ? ` (${liveCrmFollowUpCount})` : ""}`}
+            </button>
           </div>
           <input type="file" accept=".csv" ref={workspaceCsvRef} onChange={importCSV} disabled={isReadOnly} style={{ display: "none" }} />
         </div>
@@ -12152,7 +12207,9 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         <div style={{ ...cS, padding: "18px 20px", marginBottom: 16 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
             <div style={{ fontSize: 12, color: C.tt }}>
-              {liveCrmProfiles.length} live talent shown
+              {liveCrmAttentionFilter === "needs_follow_up"
+                ? `${liveCrmProfiles.length} live talent due today or overdue`
+                : `${liveCrmProfiles.length} live talent shown`}
             </div>
             <div style={{ display: "flex", gap: 2, background: C.sa, borderRadius: 10, padding: 3, border: `1px solid ${C.bd}` }}>
               {[
