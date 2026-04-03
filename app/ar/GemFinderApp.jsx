@@ -8520,11 +8520,20 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       const exactMatch = (emailKey && byEmailCampaign.get(`${emailKey}::${campaignKey}`))
         || byNameCampaign.get(`${nameKey}::${campaignKey}`);
       if (exactMatch) {
+        const currentStatus = normalizeMarketingStatus(exactMatch.status || "prospect");
+        const nextStatus = normalizeMarketingStatus(row.status || "prospect");
+        const currentOwner = String(exactMatch.owner || "").trim();
+        const nextOwner = String(row.owner || currentOwner || "").trim();
         return {
           ...row,
           action: "update",
           source: "assignment",
           targetId: exactMatch.id,
+          currentStatus,
+          currentOwner,
+          statusChanged: currentStatus !== nextStatus,
+          ownerChanged: currentOwner !== nextOwner,
+          willNotifySlack: MARKETING_SLACK_NOTIFY_STATUS_IDS.has(nextStatus) && currentStatus !== nextStatus,
           previewLabel: `${marketingItemPrimaryLabel(exactMatch)} · ${row.campaign || "Unassigned"}`,
         };
       }
@@ -8536,6 +8545,11 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
           action: "create",
           source: "existing_talent",
           baseItem: sameTalent[0],
+          currentStatus: "prospect",
+          currentOwner: "",
+          statusChanged: normalizeMarketingStatus(row.status || "prospect") !== "prospect",
+          ownerChanged: !!String(row.owner || "").trim(),
+          willNotifySlack: MARKETING_SLACK_NOTIFY_STATUS_IDS.has(normalizeMarketingStatus(row.status || "prospect")),
           previewLabel: `${row.talentName} · ${row.campaign || "Unassigned"}`,
         };
       }
@@ -8547,6 +8561,11 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
           action: "create",
           source: "artist_roster",
           baseArtist: rosterArtist,
+          currentStatus: "prospect",
+          currentOwner: "",
+          statusChanged: normalizeMarketingStatus(row.status || "prospect") !== "prospect",
+          ownerChanged: !!String(row.owner || "").trim(),
+          willNotifySlack: MARKETING_SLACK_NOTIFY_STATUS_IDS.has(normalizeMarketingStatus(row.status || "prospect")),
           previewLabel: `${row.talentName} · ${row.campaign || "Unassigned"}`,
         };
       }
@@ -10282,6 +10301,21 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                     : entry.action === "create"
                       ? [C.gn, C.gb]
                       : [C.rd, C.rb];
+                  const nextStatusLabel = MM[entry.status]?.label || titleCaseWords(entry.status);
+                  const currentStatusLabel = MM[entry.currentStatus]?.label || titleCaseWords(entry.currentStatus || "prospect");
+                  const changeNotes = [];
+                  if (entry.action === "update") {
+                    if (entry.statusChanged) changeNotes.push(`Status ${currentStatusLabel} -> ${nextStatusLabel}`);
+                    if (entry.ownerChanged) {
+                      const currentOwnerLabel = entry.currentOwner || "Unassigned";
+                      const nextOwnerLabel = entry.owner || "Unassigned";
+                      changeNotes.push(`Owner ${currentOwnerLabel} -> ${nextOwnerLabel}`);
+                    }
+                    if (!entry.statusChanged && !entry.ownerChanged) changeNotes.push("No meaningful change");
+                  } else if (entry.action === "create") {
+                    changeNotes.push(`New assignment at ${nextStatusLabel}`);
+                    if (entry.owner) changeNotes.push(`Owner ${entry.owner}`);
+                  }
                   return (
                     <div key={`${entry.lineNumber}-${entry.talentName}-${entry.campaign}`} style={{ display: "grid", gridTemplateColumns: "88px minmax(180px, 1.3fr) minmax(160px, 1fr) 120px minmax(160px, 1.2fr)", gap: 0, padding: "10px 12px", borderTop: `1px solid ${C.bd}`, alignItems: "start" }}>
                       <div><span style={{ ...mkP(true, actionTone[0], actionTone[1]), cursor: "default", fontSize: 11 }}>{entry.action === "update" ? "Update" : entry.action === "create" ? "Create" : "Skip"}</span></div>
@@ -10290,11 +10324,23 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                         <div style={{ fontSize: 11, color: C.tt }}>Line {entry.lineNumber}</div>
                       </div>
                       <div style={{ color: C.ts }}>{entry.campaign || "Unassigned"}</div>
-                      <div style={{ color: C.ts }}>{MM[entry.status]?.label || titleCaseWords(entry.status)}</div>
+                      <div style={{ color: C.ts }}>{nextStatusLabel}</div>
                       <div style={{ color: C.ts, lineHeight: 1.45 }}>
-                        {entry.action === "update" && `Existing assignment match${entry.owner ? ` · Owner → ${entry.owner}` : ""}`}
-                        {entry.action === "create" && `${entry.source === "existing_talent" ? "Existing talent found" : "Matched artist from project roster"} · new campaign assignment${entry.owner ? ` · Owner → ${entry.owner}` : ""}`}
+                        {entry.action === "update" && "Existing assignment match"}
+                        {entry.action === "create" && `${entry.source === "existing_talent" ? "Existing talent found" : "Matched artist from project roster"} · new campaign assignment`}
                         {entry.action === "skip" && entry.reason}
+                        {entry.action !== "skip" && changeNotes.length > 0 && (
+                          <div style={{ marginTop: 4 }}>
+                            {changeNotes.map(note => (
+                              <div key={`${entry.lineNumber}-${note}`}>· {note}</div>
+                            ))}
+                          </div>
+                        )}
+                        {entry.action !== "skip" && (
+                          <div style={{ marginTop: 4, fontWeight: 600, color: entry.willNotifySlack ? C.gn : C.tt }}>
+                            {entry.willNotifySlack ? "Slack will notify" : "Slack stays quiet"}
+                          </div>
+                        )}
                       </div>
                     </div>
                   );
