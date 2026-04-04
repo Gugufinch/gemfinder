@@ -118,6 +118,43 @@ function isDefaultAdminEmail(email: string): boolean {
   return configured.includes(normalizeEmail(email));
 }
 
+async function reconcileDbDefaultAdmin(client: PoolClient, user: AuthUserRecord | null): Promise<AuthUserRecord | null> {
+  if (!user) return null;
+  if (!isDefaultAdminEmail(user.email)) return user;
+  if (user.active && user.role === 'admin') return user;
+
+  const updatedAt = new Date().toISOString();
+  const res = await client.query(
+    `update gemfinder_auth_users
+       set role = 'admin',
+           active = true,
+           updated_at = $2::timestamptz
+     where user_id = $1
+     returning *`,
+    [user.userId, updatedAt]
+  );
+  return res.rows[0] ? mapDbUser(res.rows[0]) : { ...user, role: 'admin', active: true, updatedAt };
+}
+
+async function reconcileLocalDefaultAdmin(store: LocalAuthStore, user: AuthUserRecord | null): Promise<AuthUserRecord | null> {
+  if (!user) return null;
+  if (!isDefaultAdminEmail(user.email)) return user;
+  if (user.active && user.role === 'admin') return user;
+
+  const nextUser = {
+    ...user,
+    role: 'admin' as AuthRole,
+    active: true,
+    updatedAt: new Date().toISOString()
+  };
+  const index = store.users.findIndex((item) => item.userId === user.userId);
+  if (index >= 0) {
+    store.users[index] = nextUser;
+    await writeLocalStore(store);
+  }
+  return nextUser;
+}
+
 function hashPassword(password: string): string {
   const salt = crypto.randomBytes(16).toString('hex');
   const digest = crypto.scryptSync(password, salt, 64).toString('hex');
@@ -356,12 +393,17 @@ export async function loginAuthUser(
         await ensureSchema();
         const client = await getPool().connect();
         try {
-          return await findDbUserByEmail(client, cleanEmail);
+          const hit = await findDbUserByEmail(client, cleanEmail);
+          return await reconcileDbDefaultAdmin(client, hit);
         } finally {
           client.release();
         }
       })()
-    : (await readLocalStore()).users.find((item) => item.email === cleanEmail) || null;
+    : await (async () => {
+        const store = await readLocalStore();
+        const hit = store.users.find((item) => item.email === cleanEmail) || null;
+        return await reconcileLocalDefaultAdmin(store, hit);
+      })();
 
   if (!user) return { ok: false, error: 'Invalid email or password' };
   if (!verifyPassword(cleanPassword, user.passwordHash)) return { ok: false, error: 'Invalid email or password' };
@@ -375,7 +417,8 @@ export async function getAuthUserById(userId: string): Promise<PublicAuthUser | 
     await ensureSchema();
     const client = await getPool().connect();
     try {
-      const user = await findDbUserById(client, userId);
+      const hit = await findDbUserById(client, userId);
+      const user = await reconcileDbDefaultAdmin(client, hit);
       return user ? toPublicUser(user) : null;
     } finally {
       client.release();
@@ -383,7 +426,8 @@ export async function getAuthUserById(userId: string): Promise<PublicAuthUser | 
   }
 
   const store = await readLocalStore();
-  const user = findUserById(store.users, userId);
+  const hit = findUserById(store.users, userId) || null;
+  const user = await reconcileLocalDefaultAdmin(store, hit);
   return user ? toPublicUser(user) : null;
 }
 
