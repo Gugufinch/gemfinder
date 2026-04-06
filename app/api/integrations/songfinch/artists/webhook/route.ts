@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { listWorkspaceProjects, saveWorkspaceProjects } from '@/lib/gemfinder/project-store';
 import { notifySlackOnProjectTransitions } from '@/lib/gemfinder/slack';
 
+export const runtime = 'nodejs';
+
 type ArtistRecord = {
   n?: string;
   g?: string;
@@ -295,27 +297,7 @@ export async function GET() {
   });
 }
 
-export async function POST(req: NextRequest) {
-  const expectedKey = configuredWebhookKey();
-  if (!expectedKey) {
-    return NextResponse.json(
-      { error: 'Songfinch webhook is not configured yet. Set SONGFINCH_WEBHOOK_KEY in Render.' },
-      { status: 503 }
-    );
-  }
-
-  const providedKey = String(req.headers.get('x-gemfinder-webhook-key') || '').trim();
-  if (!providedKey || providedKey !== expectedKey) {
-    return NextResponse.json({ error: 'Invalid webhook key' }, { status: 401 });
-  }
-
-  const payload = await req.json().catch(() => null);
-  const parsed = payloadSchema.safeParse(payload);
-  if (!parsed.success) {
-    return NextResponse.json({ error: 'Invalid webhook payload', details: parsed.error.issues }, { status: 400 });
-  }
-
-  const data = parsed.data;
+async function processSongfinchWebhook(data: z.infer<typeof payloadSchema>) {
   const environment = String(data.environment || 'production').trim().toLowerCase() || 'production';
   const allowDevelopmentSync = acceptsDevelopmentSync();
 
@@ -467,16 +449,48 @@ export async function POST(req: NextRequest) {
     nextProjects,
     actorEmail: 'songfinch-webhook@songfinch.com',
   });
+}
+
+export async function POST(req: NextRequest) {
+  const expectedKey = configuredWebhookKey();
+  if (!expectedKey) {
+    return NextResponse.json(
+      { error: 'Songfinch webhook is not configured yet. Set SONGFINCH_WEBHOOK_KEY in Render.' },
+      { status: 503 }
+    );
+  }
+
+  const providedKey = String(req.headers.get('x-gemfinder-webhook-key') || '').trim();
+  if (!providedKey || providedKey !== expectedKey) {
+    return NextResponse.json({ error: 'Invalid webhook key' }, { status: 401 });
+  }
+
+  const payload = await req.json().catch(() => null);
+  const parsed = payloadSchema.safeParse(payload);
+  if (!parsed.success) {
+    return NextResponse.json({ error: 'Invalid webhook payload', details: parsed.error.issues }, { status: 400 });
+  }
+
+  const data = parsed.data;
+  const environment = String(data.environment || 'production').trim().toLowerCase() || 'production';
+
+  setImmediate(() => {
+    void processSongfinchWebhook(data).catch((error) => {
+      console.error('[gemfinder] songfinch webhook processing failed', {
+        eventId: data.event_id,
+        eventType: data.event_type,
+        environment,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  });
 
   return NextResponse.json({
     ok: true,
     accepted: true,
-    synced: true,
+    queued: true,
     environment,
-    projectId: String(nextProject.id || ''),
-    projectName: String(nextProject.name || ''),
-    artistName,
-    previousStage,
-    nextStage,
+    eventId: data.event_id,
+    eventType: data.event_type,
   });
 }
