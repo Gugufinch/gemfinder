@@ -97,6 +97,15 @@ function acceptsDevelopmentSync(): boolean {
   );
 }
 
+function allowedWebhookEnvironments(): string[] {
+  const configured = String(process.env.SONGFINCH_WEBHOOK_ALLOWED_ENVIRONMENTS || '')
+    .split(',')
+    .map(value => value.trim().toLowerCase())
+    .filter(Boolean);
+  if (configured.length) return Array.from(new Set(configured));
+  return acceptsDevelopmentSync() ? ['production', 'development'] : ['production'];
+}
+
 function titleCase(value: string): string {
   return String(value || '')
     .trim()
@@ -293,6 +302,7 @@ export async function GET() {
     endpoint: '/api/integrations/songfinch/artists/webhook',
     expectsHeader: 'X-GemFinder-Webhook-Key',
     acceptsDevelopmentSync: acceptsDevelopmentSync(),
+    allowedEnvironments: allowedWebhookEnvironments(),
     message: 'POST Songfinch artist events here. Use the webhook key header and JSON payload.',
   });
 }
@@ -473,6 +483,27 @@ export async function POST(req: NextRequest) {
 
   const data = parsed.data;
   const environment = String(data.environment || 'production').trim().toLowerCase() || 'production';
+  const allowedEnvironments = allowedWebhookEnvironments();
+
+  if (!allowedEnvironments.includes(environment)) {
+    console.info('[gemfinder] songfinch webhook ignored due to environment', {
+      eventId: data.event_id,
+      eventType: data.event_type,
+      environment,
+      allowedEnvironments,
+    });
+    return NextResponse.json({
+      ok: true,
+      accepted: true,
+      queued: false,
+      synced: false,
+      environment,
+      eventId: data.event_id,
+      eventType: data.event_type,
+      reason: 'environment_not_allowed',
+      allowedEnvironments,
+    }, { status: 202 });
+  }
 
   setImmediate(() => {
     void processSongfinchWebhook(data).catch((error) => {
@@ -492,5 +523,6 @@ export async function POST(req: NextRequest) {
     environment,
     eventId: data.event_id,
     eventType: data.event_type,
+    allowedEnvironments,
   });
 }
