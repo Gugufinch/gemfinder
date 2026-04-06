@@ -6904,17 +6904,27 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     }, 350);
   };
 
-  const deleteMarketingItem = async itemId => {
+  const deleteMarketingItem = async (itemId, sourceProjectId = "") => {
     if (!requireEditor()) return;
-    if (!proj) return;
-    const target = (proj.marketingItems || []).find(item => item.id === itemId);
+    const targetProjectId = String(sourceProjectId || proj?.id || "").trim();
+    if (!targetProjectId) return;
+    const targetProject = projects.find(project => project.id === targetProjectId);
+    if (!targetProject) {
+      flash("Could not find that live campaign source record", "err");
+      return;
+    }
+    const target = (targetProject.marketingItems || []).find(item => item.id === itemId);
     if (!target) return;
     if (!window.confirm(`Delete "${marketingItemPrimaryLabel(target)}" from this marketing project?`)) return;
-    const nextProj = {
-      ...proj,
-      marketingItems: (proj.marketingItems || []).filter(item => item.id !== itemId),
+    const nextProject = {
+      ...targetProject,
+      marketingItems: (targetProject.marketingItems || []).filter(item => item.id !== itemId),
     };
-    await saveProject(nextProj);
+    if (proj?.id === targetProject.id) {
+      await saveProject(nextProject);
+    } else {
+      await saveProjectsList(projects.map(project => project.id === targetProject.id ? nextProject : project));
+    }
     if (marketingForm.id === itemId) {
       closeMarketingItemModal();
     }
@@ -11192,13 +11202,13 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                                     Remove from Campaign
                                   </button>
                                 )}
-                                <button
-                                  onClick={() => { void deleteMarketingItem(assignment.assignmentId); }}
-                                  disabled={isReadOnly || isSaving}
-                                  style={{ ...actionBtn(false, "danger"), ...lockStyle(isReadOnly || isSaving) }}
-                                >
-                                  Delete Assignment
-                                </button>
+                                  <button
+                                    onClick={() => { void deleteMarketingItem(assignment.assignmentId, assignment.projectId); }}
+                                    disabled={isReadOnly || isSaving}
+                                    style={{ ...actionBtn(false, "danger"), ...lockStyle(isReadOnly || isSaving) }}
+                                  >
+                                    Delete Assignment
+                                  </button>
                               </div>
                               <div style={{ fontSize: 11, color: willNotifySlack ? C.gn : C.tt, maxWidth: 240, textAlign: "right", lineHeight: 1.5 }}>
                                 {willNotifySlack
@@ -11272,7 +11282,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                                   {assignment.briefUrl && <a href={assignment.briefUrl} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Brief</a>}
                                   {assignment.contentUrl && <a href={assignment.contentUrl} target="_blank" rel="noopener" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>Content</a>}
                                   <button
-                                    onClick={() => { void deleteMarketingItem(assignment.assignmentId); }}
+                                    onClick={() => { void deleteMarketingItem(assignment.assignmentId, assignment.projectId); }}
                                     disabled={isReadOnly}
                                     style={{ ...actionBtn(false, "danger"), ...lockStyle(isReadOnly) }}
                                   >
