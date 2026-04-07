@@ -25,6 +25,22 @@ const KICKOFF_STAGE_ACTIONS = [
   { id: "live", label: "Live" },
   { id: "dead", label: "Dead" },
 ];
+const KICKOFF_STAGE_BUCKET_META = {
+  prospect: { label: "Prospect" },
+  contacted: { label: "Contacted" },
+  engaged: { label: "Engaged" },
+  won: { label: "Onboarding" },
+  live: { label: "Live" },
+  dead: { label: "Dead" },
+};
+const KICKOFF_STAGE_ACTION_BUCKET_IDS = {
+  prospect: "prospect",
+  sent: "contacted",
+  engaged: "engaged",
+  won: "won",
+  live: "live",
+  dead: "dead",
+};
 const PROJECT_TYPES = [
   { id: "ar", label: "A&R" },
   { id: "marketing", label: "Marketing" },
@@ -1192,6 +1208,9 @@ function kickoffStageBucket(stages = []) {
   if (normalized.some(stage => isEngagedStage(stage))) return "engaged";
   if (normalized.some(stage => isContactedStage(stage))) return "contacted";
   return "prospect";
+}
+function kickoffStageBucketLabel(bucketId) {
+  return KICKOFF_STAGE_BUCKET_META[bucketId]?.label || SM[bucketId]?.label || "Prospect";
 }
 function isClosedStage(stage) {
   return CLOSED_STAGE_IDS.includes(stage);
@@ -4130,7 +4149,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       .filter(stage => stage.id !== "live" && stage.id !== "dead")
       .map(stage => ({
         ...stage,
-        profiles: kickoffProfiles.filter(profile => kickoffStageBucket(profile.stages) === stage.id),
+        profiles: kickoffProfiles.filter(profile => kickoffStageBucket(profile.stages) === (KICKOFF_STAGE_ACTION_BUCKET_IDS[stage.id] || stage.id)),
       })),
     [kickoffProfiles]
   );
@@ -4143,7 +4162,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     return rendered.join(", ");
   }, []);
   const kickoffStageSummaryLabel = useCallback(
-    profile => SM[kickoffStageBucket(profile.stages)]?.label || "Prospect",
+    profile => kickoffStageBucketLabel(kickoffStageBucket(profile.stages)),
     []
   );
   const liveStatusSummaryParts = useCallback(profile => {
