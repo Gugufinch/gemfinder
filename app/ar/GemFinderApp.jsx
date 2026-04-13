@@ -4928,6 +4928,19 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   );
   const defaultWorkspaceUser = sessionUserName || "Greg";
   const currentActor = sessionUserName || authEmail || authUserId || "Unknown";
+  const renderSessionIdentity = (hint = "") => (
+    <div style={{ display: "grid", gap: 6, justifyItems: "end", textAlign: "right" }}>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+        <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>
+          Signed in as {authLabel}
+        </span>
+        <span style={{ ...mkP(true, C.ac, C.al), cursor: "default", textTransform: "uppercase" }}>
+          {roleLabel}
+        </span>
+      </div>
+      {hint ? <div style={{ fontSize: 11, color: C.tt, maxWidth: 260 }}>{hint}</div> : null}
+    </div>
+  );
   const reportScopeMode = workspaceUser === ALL_USER_VIEW ? "team" : "workspace";
   const reportViewLabel = workspaceUser === ALL_USER_VIEW ? "All" : workspaceUser === UNASSIGNED_USER_VIEW ? "Unassigned" : workspaceUser;
   const gmailConnectionMeta = gmailStatus.currentConnection || null;
@@ -10269,6 +10282,9 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                   Paste a quick list of <code style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>name | campaign | status | owner</code> rows.
                   We will update exact talent + campaign matches, create a new campaign assignment when the talent already exists in the project, and skip unmatched names safely.
                 </div>
+                <div style={{ marginTop: 10 }}>
+                  {renderSessionIdentity("Slack attribution for this batch will use this signed-in account.")}
+                </div>
               </div>
               <button onClick={closeMarketingBulkUpdateModal} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: C.ts }}>✕</button>
             </div>
@@ -11394,7 +11410,10 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
           >
             ← Project Home
           </button>
-          <DkBtn />
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            {renderSessionIdentity("Workspace actions and Slack posts will use this signed-in account.")}
+            <DkBtn />
+          </div>
         </div>
       </div>
 
@@ -11502,7 +11521,10 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
           >
             ← {selectedWorkspace.name}
           </button>
-          <DkBtn />
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            {renderSessionIdentity("Kickoff changes, notes, and Slack milestones will post as this account.")}
+            <DkBtn />
+          </div>
         </div>
       </div>
 
@@ -11757,10 +11779,13 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                 Use these to add or bulk-load new artists and curators directly from Kickoff. This is the working pre-live hub for scouting, curator outreach, and onboarding.
               </div>
             </div>
-            <div style={{ fontSize: 11, color: C.tt, textAlign: "right" }}>
-              {defaultKickoffArtistProject ? "Artist intake ready" : "Artist intake not connected yet"}
-              <br />
-              {defaultKickoffCuratorProject ? "Curator intake ready" : "Curator intake not connected yet"}
+            <div style={{ display: "grid", gap: 8, justifyItems: "end" }}>
+              <div style={{ fontSize: 11, color: C.tt, textAlign: "right" }}>
+                {defaultKickoffArtistProject ? "Artist intake ready" : "Artist intake not connected yet"}
+                <br />
+                {defaultKickoffCuratorProject ? "Curator intake ready" : "Curator intake not connected yet"}
+              </div>
+              {renderSessionIdentity("If this looks wrong, sign out before moving stages or making team-visible updates.")}
             </div>
           </div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
@@ -12185,7 +12210,10 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
           >
             ← {selectedWorkspace.name}
           </button>
-          <DkBtn />
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            {renderSessionIdentity("Live campaign saves and #marketing-gems posts will use this signed-in account.")}
+            <DkBtn />
+          </div>
         </div>
       </div>
 
@@ -12232,10 +12260,13 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                 Campaign work, groups, imports, and exports happen here.
               </div>
             </div>
-            <div style={{ fontSize: 11, color: C.tt, textAlign: "right" }}>
-              {defaultLiveMarketingProject ? "Campaign tools are ready" : "No live campaign record yet"}
-              <br />
-              {liveCrmProfiles.length ? `${liveCrmProfiles.length} live talent in this view` : "Live roster is empty in this view"}
+            <div style={{ display: "grid", gap: 8, justifyItems: "end" }}>
+              <div style={{ fontSize: 11, color: C.tt, textAlign: "right" }}>
+                {defaultLiveMarketingProject ? "Campaign tools are ready" : "No live campaign record yet"}
+                <br />
+                {liveCrmProfiles.length ? `${liveCrmProfiles.length} live talent in this view` : "Live roster is empty in this view"}
+              </div>
+              {renderSessionIdentity("Bulk updates, assignment saves, and marketing Slack posts will use this account.")}
             </div>
           </div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
