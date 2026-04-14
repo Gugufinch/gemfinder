@@ -14,6 +14,16 @@ async function getActor(req: NextRequest) {
   return getAuthUserById(userId);
 }
 
+function matchesExpectedActor(req: NextRequest, actor: { userId: string; email: string } | null) {
+  const expectedActorId = String(req.headers.get('x-gemfinder-expected-actor-id') || '').trim();
+  const expectedActorEmail = String(req.headers.get('x-gemfinder-expected-actor-email') || '').trim().toLowerCase();
+  if (!expectedActorId && !expectedActorEmail) return true;
+  if (!actor) return false;
+  if (expectedActorId && actor.userId !== expectedActorId) return false;
+  if (expectedActorEmail && actor.email.toLowerCase() !== expectedActorEmail) return false;
+  return true;
+}
+
 export async function GET(req: NextRequest) {
   const actor = await getActor(req);
   if (!actor || !actor.active) {
@@ -29,6 +39,15 @@ export async function PUT(req: NextRequest) {
   const actor = await getActor(req);
   if (!actor || !actor.active) {
     return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
+  }
+  if (!matchesExpectedActor(req, actor)) {
+    return NextResponse.json(
+      {
+        error:
+          'Your signed-in account changed while this page was open. Refresh GemFinder or sign in again before saving.',
+      },
+      { status: 409 }
+    );
   }
   if (actor.role !== 'admin' && actor.role !== 'editor') {
     return NextResponse.json({ error: 'Editor or admin role required' }, { status: 403 });

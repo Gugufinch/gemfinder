@@ -3055,11 +3055,17 @@ async function apiGetProjects() {
   }
 }
 
-async function apiSaveProjects(projects) {
+async function apiSaveProjects(projects, options = {}) {
+  const expectedActorId = String(options.expectedActorId || "");
+  const expectedActorEmail = String(options.expectedActorEmail || "");
   try {
     const res = await fetch("/api/ar/projects", {
       method: "PUT",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(expectedActorId ? { "x-gemfinder-expected-actor-id": expectedActorId } : {}),
+        ...(expectedActorEmail ? { "x-gemfinder-expected-actor-email": expectedActorEmail } : {}),
+      },
       body: JSON.stringify({ projects }),
     });
     const data = await res.json().catch(() => ({}));
@@ -5418,7 +5424,10 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
             if (shared.projects.length) {
               setProjects(shared.projects.map(normalizeProject));
             } else if (localProjects.length && canEdit) {
-              const migrated = await apiSaveProjects(localProjects);
+              const migrated = await apiSaveProjects(localProjects, {
+                expectedActorId: authUserId,
+                expectedActorEmail: authEmail,
+              });
               if (migrated.ok) {
                 setProjects(localProjects.map(normalizeProject));
               } else {
@@ -5713,7 +5722,10 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
           : [];
 
     if (np !== undefined && authUserId && canEdit) {
-      const result = await apiSaveProjects(nextProjects);
+      const result = await apiSaveProjects(nextProjects, {
+        expectedActorId: authUserId,
+        expectedActorEmail: authEmail,
+      });
       if (!result.ok) {
         console.error("Shared project save failed:", result.error);
         setToast({
