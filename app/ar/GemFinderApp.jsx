@@ -538,8 +538,11 @@ const AB_VARIANTS = {
 function sc(id, C) { return { prospect: C.tt, drafted: C.ab, sent: C.bu, replied: C.gn, engaged: C.pr, won: C.ac, live: C.lv, dead: C.rd }[id] || C.tt; }
 function sb(id, C) { return { prospect: C.sa, drafted: C.abb, sent: C.bb, replied: C.gb, engaged: C.pb, won: C.al, live: C.lvb, dead: C.rb }[id] || C.sa; }
 function normalizeStageId(stage) {
-  if (stage === "researched") return "drafted";
-  if (VALID_STAGE_IDS.has(stage)) return stage;
+  const normalized = String(stage || "").trim().toLowerCase();
+  if (normalized === "researched") return "drafted";
+  if (normalized === "contacted") return "sent";
+  if (normalized === "onboarding") return "won";
+  if (VALID_STAGE_IDS.has(normalized)) return normalized;
   return "prospect";
 }
 function normalizeProjectType(type) {
@@ -4114,7 +4117,11 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         if (kickoffSourceFilter !== "all" && !profile.sources.includes(kickoffSourceFilter)) return false;
         if (kickoffOwnerFilter === "__unassigned__" && profile.owners.length) return false;
         if (kickoffOwnerFilter !== "all" && kickoffOwnerFilter !== "__unassigned__" && !profile.owners.includes(kickoffOwnerFilter)) return false;
-        if (kickoffStageFilter !== "all" && !profile.stages.includes(kickoffStageFilter)) return false;
+        if (kickoffStageFilter !== "all") {
+          const normalizedFilter = normalizeStageId(kickoffStageFilter);
+          const normalizedStages = (profile.stages || []).map(stage => normalizeStageId(stage));
+          if (!normalizedStages.includes(normalizedFilter)) return false;
+        }
         return true;
       })
       .sort((a, b) => a.displayName.localeCompare(b.displayName));
