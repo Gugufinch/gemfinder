@@ -3590,6 +3590,14 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [liveCrmAttentionFilter, setLiveCrmAttentionFilter] = useState("all");
   const [liveCrmSortMode, setLiveCrmSortMode] = useState("updated");
   const [liveRosterViewMode, setLiveRosterViewMode] = useState("table");
+  const [scoutQuery, setScoutQuery] = useState("");
+  const [scoutTypeFilter, setScoutTypeFilter] = useState("all");
+  const [scoutSourceFilter, setScoutSourceFilter] = useState("all");
+  const [scoutGenreFilter, setScoutGenreFilter] = useState("all");
+  const [scoutContactTypeFilter, setScoutContactTypeFilter] = useState("all");
+  const [scoutPlatformFilter, setScoutPlatformFilter] = useState("instagram");
+  const [scoutFollowerMin, setScoutFollowerMin] = useState(0);
+  const [scoutViewMode, setScoutViewMode] = useState("table");
   const [kickoffQuery, setKickoffQuery] = useState("");
   const [kickoffTypeFilter, setKickoffTypeFilter] = useState("all");
   const [kickoffSourceFilter, setKickoffSourceFilter] = useState("all");
@@ -3798,6 +3806,183 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   );
   const workspaceTalentData = useMemo(() => collectWorkspaceTalentProfiles(projects), [projects]);
   const workspaceTalentProfiles = workspaceTalentData.profiles;
+  const scoutPlatformMetric = useCallback((profile, platform = scoutPlatformFilter) => {
+    const normalizedPlatform = String(platform || "instagram").trim().toLowerCase();
+    if (normalizedPlatform === "tiktok") {
+      const value = parseMl(profile?.tiktokFollowers || "");
+      return {
+        platform: "tiktok",
+        value,
+        label: value ? `${fmtCompact(value)} TikTok followers` : "No TikTok follower count yet",
+      };
+    }
+    if (normalizedPlatform === "spotify") {
+      const value = parseMl(profile?.spotifyMonthlyListeners || "");
+      return {
+        platform: "spotify",
+        value,
+        label: value ? `${fmtCompact(value)} monthly listeners` : "No Spotify listener count yet",
+      };
+    }
+    const value = parseMl(profile?.instagramFollowers || "");
+    return {
+      platform: "instagram",
+      value,
+      label: value ? `${fmtCompact(value)} Instagram followers` : "No Instagram follower count yet",
+    };
+  }, [scoutPlatformFilter]);
+  const scoutBaseProfiles = useMemo(
+    () => workspaceTalentProfiles
+      .filter(profile =>
+        profile.platformLifecycle !== "live" &&
+        (profile.projectMemberships || []).some(item => workspaceProjectIds.has(item.projectId))
+      )
+      .map(profile => {
+        const genres = uniqStrings(
+          (profile.arRecords || [])
+            .filter(record => workspaceProjectIds.has(record.projectId))
+            .map(record => normalizeGenreValue(record.genre || ""))
+            .filter(Boolean)
+        );
+        const locations = uniqStrings(
+          (profile.arRecords || [])
+            .filter(record => workspaceProjectIds.has(record.projectId))
+            .map(record => String(record.location || "").trim())
+            .filter(Boolean)
+        );
+        const hitTracks = uniqStrings(
+          (profile.arRecords || [])
+            .filter(record => workspaceProjectIds.has(record.projectId))
+            .map(record => String(record.hitTrack || "").trim())
+            .filter(Boolean)
+        );
+        const stageIds = uniqStrings(
+          (profile.arRecords || [])
+            .filter(record => workspaceProjectIds.has(record.projectId))
+            .map(record => normalizeStageId(record.stage || "prospect"))
+            .filter(Boolean)
+        );
+        const primaryGenre = genres[0] || "";
+        const contactType = String(profile.contactType || "").trim();
+        const contactLabel = [
+          String(profile.contactName || "").trim(),
+          contactType,
+          String(profile.contactEmail || "").trim(),
+        ].filter(Boolean).join(" · ");
+        const searchHaystack = [
+          profile.displayName,
+          profile.primaryEmail,
+          profile.contactName,
+          profile.contactEmail,
+          contactType,
+          ...(profile.aliases || []),
+          ...(profile.talentTypes || []),
+          ...(profile.sources || []),
+          ...(genres || []),
+          ...(locations || []),
+          ...(hitTracks || []),
+          profile.instagramHandle,
+          profile.tiktokHandle,
+          profile.spotifyUrl,
+          profile.profileSummary,
+          profile.curatorPageUrl,
+          ...(profile.curatedArtists || []),
+        ].filter(Boolean).join(" ").toLowerCase();
+        return {
+          ...profile,
+          genres,
+          primaryGenre,
+          locations,
+          hitTracks,
+          stageIds,
+          contactType,
+          contactLabel,
+          searchHaystack,
+        };
+      }),
+    [workspaceTalentProfiles, workspaceProjectIds]
+  );
+  const scoutTypeOptions = useMemo(
+    () => uniqStrings(scoutBaseProfiles.flatMap(profile => profile.talentTypes || []).filter(Boolean)).sort((a, b) => a.localeCompare(b)),
+    [scoutBaseProfiles]
+  );
+  const scoutSourceOptions = useMemo(
+    () => uniqStrings(scoutBaseProfiles.flatMap(profile => profile.sources || []).filter(Boolean)).sort((a, b) => a.localeCompare(b)),
+    [scoutBaseProfiles]
+  );
+  const scoutGenreOptions = useMemo(
+    () => uniqStrings(scoutBaseProfiles.flatMap(profile => profile.genres || []).filter(Boolean)).sort((a, b) => a.localeCompare(b)),
+    [scoutBaseProfiles]
+  );
+  const scoutContactTypeOptions = useMemo(
+    () => uniqStrings(scoutBaseProfiles.map(profile => profile.contactType).filter(Boolean)).sort((a, b) => a.localeCompare(b)),
+    [scoutBaseProfiles]
+  );
+  const scoutFollowerSliderMax = useMemo(() => {
+    const max = scoutBaseProfiles.reduce((highest, profile) => Math.max(highest, scoutPlatformMetric(profile).value || 0), 0);
+    if (!max) return 500000;
+    return Math.max(500000, Math.ceil(max / 10000) * 10000);
+  }, [scoutBaseProfiles, scoutPlatformMetric]);
+  const scoutFollowerSliderStep = useMemo(() => {
+    if (scoutFollowerSliderMax >= 5000000) return 100000;
+    if (scoutFollowerSliderMax >= 1000000) return 50000;
+    if (scoutFollowerSliderMax >= 250000) return 10000;
+    return 1000;
+  }, [scoutFollowerSliderMax]);
+  const scoutProfiles = useMemo(() => {
+    const query = scoutQuery.trim().toLowerCase();
+    return scoutBaseProfiles
+      .filter(profile => {
+        if (query && !profile.searchHaystack.includes(query)) return false;
+        if (scoutTypeFilter !== "all" && !profile.talentTypes.some(type => canonicalArtistName(type) === scoutTypeFilter)) return false;
+        if (scoutSourceFilter !== "all" && !profile.sources.includes(scoutSourceFilter)) return false;
+        if (scoutGenreFilter !== "all" && !profile.genres.includes(scoutGenreFilter)) return false;
+        if (scoutContactTypeFilter !== "all" && profile.contactType !== scoutContactTypeFilter) return false;
+        if (scoutFollowerMin > 0 && scoutPlatformMetric(profile).value < scoutFollowerMin) return false;
+        return true;
+      })
+      .sort((a, b) => {
+        const metricCompare = scoutPlatformMetric(b).value - scoutPlatformMetric(a).value;
+        if (metricCompare !== 0) return metricCompare;
+        const listenerCompare = parseMl(b.spotifyMonthlyListeners || "") - parseMl(a.spotifyMonthlyListeners || "");
+        if (listenerCompare !== 0) return listenerCompare;
+        return a.displayName.localeCompare(b.displayName);
+      });
+  }, [
+    scoutBaseProfiles,
+    scoutContactTypeFilter,
+    scoutFollowerMin,
+    scoutGenreFilter,
+    scoutPlatformMetric,
+    scoutQuery,
+    scoutSourceFilter,
+    scoutTypeFilter,
+  ]);
+  const scoutOverview = useMemo(() => {
+    let artists = 0;
+    let curators = 0;
+    let withContact = 0;
+    let withReach = 0;
+    scoutProfiles.forEach(profile => {
+      if ((profile.talentTypes || []).includes("Curator")) curators += 1;
+      else artists += 1;
+      if (profile.primaryEmail || profile.contactEmail || profile.contactName) withContact += 1;
+      if (
+        parseMl(profile.instagramFollowers || "") > 0 ||
+        parseMl(profile.tiktokFollowers || "") > 0 ||
+        parseMl(profile.spotifyMonthlyListeners || "") > 0
+      ) {
+        withReach += 1;
+      }
+    });
+    return {
+      leads: scoutProfiles.length,
+      artists,
+      curators,
+      withContact,
+      withReach,
+    };
+  }, [scoutProfiles]);
   const liveCrmBaseProfiles = useMemo(
     () => workspaceTalentProfiles.filter(
       profile =>
@@ -4230,6 +4415,65 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     const ownerLabel = profile?.owners?.length ? summarizeWorkspaceValues(profile.owners, 2) : "Unassigned";
     return [typeLabel, sourceLabel, ownerLabel].filter(Boolean).join(" · ");
   }, [summarizeWorkspaceValues]);
+  useEffect(() => {
+    setScoutFollowerMin(prev => Math.min(prev, scoutFollowerSliderMax));
+  }, [scoutFollowerSliderMax]);
+  const exportScoutView = () => {
+    if (!scoutProfiles.length) {
+      flash("No scout leads are in the current view yet", "err");
+      return;
+    }
+    const rows = [[
+      "Talent Name",
+      "Talent Types",
+      "Lifecycle",
+      "Sources",
+      "Genres",
+      "Current Stage",
+      "Instagram",
+      "Instagram Followers",
+      "TikTok",
+      "TikTok Followers",
+      "Spotify",
+      "Monthly Listeners",
+      "Primary Email",
+      "Contact Name",
+      "Contact Email",
+      "Contact Type",
+      "Locations",
+      "Hit Tracks",
+      "Curator Page",
+      "Curated Artists",
+      "AI Profile Notes",
+    ]];
+    scoutProfiles.forEach(profile => {
+      rows.push([
+        profile.displayName,
+        (profile.talentTypes || []).join(" | "),
+        TALENT_LIFECYCLE_LABELS[profile.platformLifecycle] || "Pre-Live",
+        (profile.sources || []).map(source => TALENT_SOURCE_LABELS[source] || source).join(" | "),
+        (profile.genres || []).join(" | "),
+        kickoffStageBucketLabel(kickoffStageBucket(profile.stageIds || [])),
+        profile.instagramHandle ? `@${profile.instagramHandle}` : "",
+        profile.instagramFollowers || "",
+        profile.tiktokHandle ? `@${profile.tiktokHandle}` : "",
+        profile.tiktokFollowers || "",
+        profile.spotifyUrl || "",
+        profile.spotifyMonthlyListeners || "",
+        profile.primaryEmail || "",
+        profile.contactName || "",
+        profile.contactEmail || "",
+        profile.contactType || "",
+        (profile.locations || []).join(" | "),
+        (profile.hitTracks || []).join(" | "),
+        profile.curatorPageUrl || "",
+        (profile.curatedArtists || []).join(" | "),
+        profile.profileSummary || "",
+      ]);
+    });
+    downloadCsvFile(`${selectedWorkspace.name.replace(/\s+/g, "_")}_scout_view.csv`, rows);
+    flash(`Exported ${scoutProfiles.length} scout row${scoutProfiles.length === 1 ? "" : "s"}`);
+  };
   const exportKickoffView = () => {
     if (!kickoffProfiles.length) {
       flash("No kickoff talent in the current view yet", "err");
@@ -4436,7 +4680,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     () => selectedTalentMarketingProjectSummaries.flatMap(summary => summary.marketingAssignments)[0] || null,
     [selectedTalentMarketingProjectSummaries]
   );
-  const effectiveTalentProfileContext = screen === "kickoff"
+  const effectiveTalentProfileContext = screen === "kickoff" || screen === "scout"
     ? "kickoff"
     : screen === "live-crm"
       ? "live-crm"
@@ -5268,7 +5512,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       : "";
     openTalentProfileById(
       String(profile.id || fallbackMarketingId || fallbackArtistId || "").trim(),
-      screen === "kickoff" ? "kickoff" : screen === "live-crm" ? "live-crm" : "workspace"
+      screen === "kickoff" || screen === "scout" ? "kickoff" : screen === "live-crm" ? "live-crm" : "workspace"
     );
   };
   const seedArtistEditForm = artist => setArtistEditForm({
@@ -5621,7 +5865,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       updateWorkspaceUrl(proj.id, "", "", isMarketingProject && showMarketingItemModal && marketingForm.id ? marketingForm.id : "");
       return;
     }
-    if (screen === "hub" || screen === "workspace" || screen === "kickoff" || screen === "live-crm" || screen === "workspace-report") {
+    if (screen === "hub" || screen === "workspace" || screen === "scout" || screen === "kickoff" || screen === "live-crm" || screen === "workspace-report") {
       updateWorkspaceUrl("", "", "", "");
     }
   }, [loading, screen, proj?.id, selA?.n, detailTab, isMarketingProject, showMarketingItemModal, marketingForm.id]);
@@ -11443,16 +11687,39 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
               <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 3, textTransform: "uppercase", color: C.ac, marginBottom: 8 }}>Workspace</div>
               <div style={{ fontSize: 30, fontWeight: 800, letterSpacing: "-0.04em", marginBottom: 8 }}>{selectedWorkspace.name}</div>
               <div style={{ fontSize: 13, lineHeight: 1.6, color: C.ts, maxWidth: 560 }}>
-                Songfinch runs through two main hubs: Kickoff for pre-live scouting and onboarding, and Live Roster for live talent and campaign operations.
+                Songfinch now runs through three working surfaces: Scout for discovery and qualification, Kickoff for active A&R and onboarding, and Live Roster for live talent and campaign operations.
               </div>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 14 }}>
-                <span style={{ ...mkP(true, C.bu, C.bb), cursor: "default" }}>{kickoffOverview.talents} pre-live talent</span>
+                <span style={{ ...mkP(true, C.ab, C.abb), cursor: "default" }}>{scoutOverview.leads} scout leads</span>
+                <span style={{ ...mkP(true, C.bu, C.bb), cursor: "default" }}>{kickoffOverview.talents} kickoff talent</span>
                 <span style={{ ...mkP(true, C.lv, C.lvb), cursor: "default" }}>{liveCrmOverview.liveTalents} live talent</span>
                 <span style={{ ...mkP(true, C.pr, C.pb), cursor: "default" }}>{liveCrmOverview.assignments} marketing assignments</span>
                 <span style={{ ...mkP(true, C.ac, C.al), cursor: "default" }}>{liveCampaignCount} campaigns</span>
               </div>
             </div>
-            <div style={{ display: "grid", gap: 12, alignContent: "start" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(180px, 1fr))", gap: 12, alignContent: "start" }}>
+              <button
+                onClick={() => setScreen("scout")}
+                style={{
+                  borderRadius: 16,
+                  border: `1px solid ${C.ab}40`,
+                  background: C.abb,
+                  padding: "16px 18px",
+                  cursor: "pointer",
+                  display: "grid",
+                  gap: 6,
+                  textAlign: "left",
+                  fontFamily: ft,
+                }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
+                  <span style={{ fontSize: 16, fontWeight: 800, color: C.ab }}>Open Scout</span>
+                  <span style={{ ...mkP(true, C.ab, C.sf), cursor: "pointer" }}>{scoutOverview.leads}</span>
+                </div>
+                <div style={{ fontSize: 12, color: C.ts, lineHeight: 1.5 }}>
+                  Discovery, filtering, and qualification before artists move into active kickoff work.
+                </div>
+              </button>
               <button
                 onClick={() => setScreen("kickoff")}
                 style={{
@@ -11472,7 +11739,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                   <span style={{ ...mkP(true, C.ac, C.sf), cursor: "pointer" }}>{kickoffOverview.talents}</span>
                 </div>
                 <div style={{ fontSize: 12, color: C.ts, lineHeight: 1.5 }}>
-                  Intake, scouting, curator advocacy, and onboarding for all pre-live talent.
+                  Active A&R, curator advocacy, and onboarding for pre-live talent already in motion.
                 </div>
               </button>
               <button
@@ -11527,6 +11794,309 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       </div>
     </div>
   );
+
+  // ═══ SCOUT ═══
+  if (screen === "scout") {
+    const scoutPlatformLabel = scoutPlatformFilter === "tiktok"
+      ? "TikTok followers"
+      : scoutPlatformFilter === "spotify"
+        ? "Monthly listeners"
+        : "Instagram followers";
+    return (
+      <div style={{ fontFamily: ft, background: C.bg, minHeight: "100vh", color: C.tx }}>
+        <Toast /><style>{css}</style>
+        <div style={{ borderBottom: `1px solid ${C.bd}`, background: C.sf }}>
+          <div style={{ maxWidth: 1180, margin: "0 auto", padding: "16px 24px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <button
+              onClick={() => { setScreen("workspace"); updateWorkspaceUrl("", "", "", ""); }}
+              style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, fontFamily: ft, color: C.ac, fontWeight: 600 }}
+            >
+              ← {selectedWorkspace.name}
+            </button>
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              {renderSessionIdentity("Scout saves and future promotions will use this signed-in account.")}
+              <DkBtn />
+            </div>
+          </div>
+        </div>
+
+        <div style={{ maxWidth: 1180, margin: "0 auto", padding: "24px" }}>
+          <div style={{ ...cS, marginBottom: 18, padding: "22px 24px", background: dark ? "linear-gradient(135deg, #22170c 0%, #1b1a2d 100%)" : "linear-gradient(135deg, #fffdf7 0%, #fff1d7 100%)" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "minmax(320px, 1.3fr) minmax(280px, 1fr)", gap: 18, alignItems: "stretch" }}>
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 3, textTransform: "uppercase", color: C.ab, marginBottom: 8 }}>Scout</div>
+                <div style={{ fontSize: 30, fontWeight: 800, letterSpacing: "-0.04em", marginBottom: 8 }}>{selectedWorkspace.name} · Scout</div>
+                <div style={{ fontSize: 13, lineHeight: 1.6, color: C.ts, maxWidth: 560 }}>
+                  This is the discovery surface for sourcing and qualifying artists before they enter active kickoff work. Filter hard on genre, contact coverage, and reach, then open the full profile when someone looks promising.
+                </div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 14 }}>
+                  <span style={{ ...mkP(true, C.ab, C.abb), cursor: "default" }}>{scoutOverview.leads} scout leads</span>
+                  <span style={{ ...mkP(true, C.bu, C.bb), cursor: "default" }}>{scoutOverview.artists} artists</span>
+                  <span style={{ ...mkP(true, C.gn, C.gb), cursor: "default" }}>{scoutOverview.curators} curators</span>
+                  <span style={{ ...mkP(true, C.pr, C.pb), cursor: "default" }}>{scoutOverview.withContact} with contact</span>
+                  <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{scoutOverview.withReach} with reach data</span>
+                </div>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(120px, 1fr))", gap: 10 }}>
+                {[
+                  ["Leads", scoutOverview.leads, C.ab, C.abb],
+                  ["Artists", scoutOverview.artists, C.bu, C.bb],
+                  ["Curators", scoutOverview.curators, C.gn, C.gb],
+                  ["With Contact", scoutOverview.withContact, C.pr, C.pb],
+                ].map(([label, value, tone, bg]) => (
+                  <div key={`scout-card-${label}`} style={{ borderRadius: 14, border: `1px solid ${C.bd}`, background: bg, padding: "14px 16px" }}>
+                    <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 1.2, color: C.tt, marginBottom: 8 }}>{label}</div>
+                    <div style={{ fontSize: 26, fontWeight: 800, color: tone, lineHeight: 1 }}>{value}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div style={{ ...cS, padding: "18px 20px", marginBottom: 16 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "flex-start", flexWrap: "wrap", marginBottom: 12 }}>
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>Scout Actions</div>
+                <div style={{ fontSize: 12, color: C.ts, maxWidth: 620 }}>
+                  Export the exact scout slice you are looking at. This is the clean place to hunt by metadata before leads move into kickoff.
+                </div>
+              </div>
+              <div style={{ display: "grid", gap: 8, justifyItems: "end" }}>
+                <div style={{ fontSize: 11, color: C.tt, textAlign: "right" }}>
+                  Gender filtering is next once the profile field is added.
+                </div>
+                <button onClick={exportScoutView} style={{ ...actionBtn(false, "neutral"), ...lockStyle(!scoutProfiles.length) }}>
+                  Export Current View CSV
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div style={{ ...cS, padding: "18px 20px", marginBottom: 16 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
+              <div style={{ fontSize: 12, color: C.ts }}>
+                {scoutProfiles.length} scout lead{scoutProfiles.length === 1 ? "" : "s"} shown
+              </div>
+              <div style={{ display: "flex", gap: 6, border: `1px solid ${C.bd}`, borderRadius: 14, padding: 4 }}>
+                {[
+                  ["Cards", "cards"],
+                  ["Table", "table"],
+                ].map(([label, mode]) => (
+                  <button
+                    key={`scout-view-${mode}`}
+                    onClick={() => setScoutViewMode(mode)}
+                    style={{
+                      border: "none",
+                      borderRadius: 10,
+                      background: scoutViewMode === mode ? C.ac : "transparent",
+                      color: scoutViewMode === mode ? "#fff" : C.ts,
+                      fontWeight: 700,
+                      fontSize: 12,
+                      cursor: "pointer",
+                      padding: "8px 14px",
+                    }}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 12, alignItems: "end" }}>
+              <label style={{ display: "grid", gap: 6, fontSize: 12, color: C.ts, gridColumn: "span 2" }}>
+                <span>Search scout leads</span>
+                <input
+                  value={scoutQuery}
+                  onChange={e => setScoutQuery(e.target.value)}
+                  placeholder="Search name, genre, socials, contact, manager..."
+                  style={{ ...iS, width: "100%" }}
+                />
+              </label>
+              <label style={{ display: "grid", gap: 6, fontSize: 12, color: C.ts }}>
+                <span>Talent type</span>
+                <select value={scoutTypeFilter} onChange={e => setScoutTypeFilter(e.target.value)} style={{ ...iS, width: "100%" }}>
+                  <option value="all">All types</option>
+                  {scoutTypeOptions.map(type => (
+                    <option key={`scout-type-${type}`} value={canonicalArtistName(type)}>{type}</option>
+                  ))}
+                </select>
+              </label>
+              <label style={{ display: "grid", gap: 6, fontSize: 12, color: C.ts }}>
+                <span>Source</span>
+                <select value={scoutSourceFilter} onChange={e => setScoutSourceFilter(e.target.value)} style={{ ...iS, width: "100%" }}>
+                  <option value="all">All sources</option>
+                  {scoutSourceOptions.map(source => (
+                    <option key={`scout-source-${source}`} value={source}>{TALENT_SOURCE_LABELS[source] || source}</option>
+                  ))}
+                </select>
+              </label>
+              <label style={{ display: "grid", gap: 6, fontSize: 12, color: C.ts }}>
+                <span>Genre / vibe</span>
+                <select value={scoutGenreFilter} onChange={e => setScoutGenreFilter(e.target.value)} style={{ ...iS, width: "100%" }}>
+                  <option value="all">All genres</option>
+                  {scoutGenreOptions.map(genre => (
+                    <option key={`scout-genre-${genre}`} value={genre}>{genre}</option>
+                  ))}
+                </select>
+              </label>
+              <label style={{ display: "grid", gap: 6, fontSize: 12, color: C.ts }}>
+                <span>Contact type</span>
+                <select value={scoutContactTypeFilter} onChange={e => setScoutContactTypeFilter(e.target.value)} style={{ ...iS, width: "100%" }}>
+                  <option value="all">All contacts</option>
+                  {scoutContactTypeOptions.map(type => (
+                    <option key={`scout-contact-${type}`} value={type}>{type}</option>
+                  ))}
+                </select>
+              </label>
+              <div style={{ display: "grid", gap: 8, gridColumn: "span 2" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
+                  <div style={{ display: "grid", gap: 6, fontSize: 12, color: C.ts, minWidth: 0 }}>
+                    <span>Platform target</span>
+                    <select value={scoutPlatformFilter} onChange={e => setScoutPlatformFilter(e.target.value)} style={{ ...iS, width: "100%" }}>
+                      <option value="instagram">Instagram</option>
+                      <option value="tiktok">TikTok</option>
+                      <option value="spotify">Spotify listeners</option>
+                    </select>
+                  </div>
+                  <div style={{ fontSize: 12, color: C.ts, textAlign: "right", minWidth: 120 }}>
+                    {scoutFollowerMin > 0 ? `Min ${fmtCompact(scoutFollowerMin)}` : "Any reach"}
+                    <div style={{ fontSize: 11, color: C.tt, marginTop: 4 }}>{scoutPlatformLabel}</div>
+                  </div>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={scoutFollowerSliderMax}
+                  step={scoutFollowerSliderStep}
+                  value={Math.min(scoutFollowerMin, scoutFollowerSliderMax)}
+                  onChange={e => setScoutFollowerMin(Number(e.target.value))}
+                  style={{ width: "100%" }}
+                />
+              </div>
+            </div>
+          </div>
+
+          {!scoutProfiles.length ? (
+            <div style={{ ...cS, padding: "32px 28px", textAlign: "center" }}>
+              <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 6 }}>No scout leads match this view yet</div>
+              <div style={{ fontSize: 12, color: C.ts, maxWidth: 520, margin: "0 auto" }}>
+                Try widening the filters. Scout is meant to help you hunt by metadata before anything turns into active kickoff work.
+              </div>
+            </div>
+          ) : scoutViewMode === "cards" ? (
+            <div style={{ display: "grid", gap: 14 }}>
+              {scoutProfiles.map(profile => {
+                const currentStage = kickoffStageBucketLabel(kickoffStageBucket(profile.stageIds || []));
+                const reachParts = liveRosterReachParts(profile);
+                return (
+                  <div key={`scout-card-${profile.id}`} onClick={() => openTalentProfileFromWorkspaceProfile(profile)} style={{ ...cS, padding: "18px 20px", cursor: "pointer" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "flex-start", flexWrap: "wrap", marginBottom: 14 }}>
+                      <div style={{ display: "grid", gap: 8 }}>
+                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                          <span style={{ fontSize: 24, fontWeight: 800, letterSpacing: "-0.03em" }}>{profile.displayName}</span>
+                          {(profile.talentTypes || []).slice(0, 1).map(type => (
+                            <span key={`${profile.id}:scout-type:${type}`} style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{type}</span>
+                          ))}
+                          {profile.primaryGenre && <span style={{ ...mkP(true, C.ab, C.abb), cursor: "default" }}>{profile.primaryGenre}</span>}
+                          <span style={{ ...mkP(true, sc(kickoffStageBucket(profile.stageIds || []), C), sb(kickoffStageBucket(profile.stageIds || []), C)), cursor: "default" }}>{currentStage}</span>
+                        </div>
+                        <div style={{ fontSize: 12, color: C.ts, display: "flex", gap: 10, flexWrap: "wrap" }}>
+                          <span>{profile.primaryEmail || "No email yet"}</span>
+                          {profile.contactLabel && <span>{profile.contactLabel}</span>}
+                          {profile.locations?.[0] && <span>{profile.locations[0]}</span>}
+                        </div>
+                        <div style={{ fontSize: 12, color: C.tt, lineHeight: 1.6 }}>
+                          {reachParts.join(" · ") || scoutPlatformMetric(profile).label}
+                        </div>
+                        {profile.profileSummary && (
+                          <div style={{ fontSize: 12, color: C.tt, lineHeight: 1.6 }}>
+                            {compactText(profile.profileSummary, 180)}
+                          </div>
+                        )}
+                      </div>
+                      <button
+                        onClick={e => { e.stopPropagation(); openTalentProfileFromWorkspaceProfile(profile); }}
+                        style={actionBtn(false, "accent")}
+                      >
+                        View Talent
+                      </button>
+                    </div>
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      {(profile.sources || []).map(source => (
+                        <span key={`${profile.id}:scout-source:${source}`} style={{ ...mkP(true, C.pr, C.pb), cursor: "default" }}>
+                          {TALENT_SOURCE_LABELS[source] || source}
+                        </span>
+                      ))}
+                      {profile.contactType && <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{profile.contactType}</span>}
+                      {profile.hitTracks?.[0] && <span style={{ ...mkP(true, C.gn, C.gb), cursor: "default" }}>Hit track: {profile.hitTracks[0]}</span>}
+                      {profile.curatorPageUrl && <span style={{ ...mkP(true, C.lv, C.lvb), cursor: "default" }}>Curator page linked</span>}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div style={{ ...cS, overflow: "hidden" }}>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                  <thead style={{ background: C.sa }}>
+                    <tr>
+                      {["Talent", "Genre / Vibe", "Reach", "Contact", "Source", "Current Stage", "Actions"].map(h => (
+                        <th key={`scout-table-${h}`} style={{ textAlign: "left", padding: "10px 12px", color: C.ts, fontSize: 11, borderBottom: `1px solid ${C.bd}` }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {scoutProfiles.map(profile => {
+                      const currentStage = kickoffStageBucketLabel(kickoffStageBucket(profile.stageIds || []));
+                      const reachParts = liveRosterReachParts(profile);
+                      return (
+                        <tr key={`scout-row-${profile.id}`}>
+                          <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}` }}>
+                            <div style={{ fontWeight: 700 }}>{profile.displayName}</div>
+                            <div style={{ fontSize: 11, color: C.tt, marginTop: 4 }}>
+                              {[
+                                (profile.talentTypes || []).slice(0, 1).join(", "),
+                                profile.primaryEmail || "",
+                                profile.instagramHandle ? `@${normalizeSocialHandle(profile.instagramHandle)}` : "",
+                              ].filter(Boolean).join(" · ")}
+                            </div>
+                          </td>
+                          <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>
+                            {profile.primaryGenre || "Not categorized yet"}
+                          </td>
+                          <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>
+                            {reachParts.join(" · ") || scoutPlatformMetric(profile).label}
+                          </td>
+                          <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>
+                            {profile.contactLabel || profile.primaryEmail || "No contact details yet"}
+                          </td>
+                          <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>
+                            {(profile.sources || []).map(source => TALENT_SOURCE_LABELS[source] || source).join(" · ") || "—"}
+                          </td>
+                          <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}` }}>
+                            <span style={{ ...mkP(true, sc(kickoffStageBucket(profile.stageIds || []), C), sb(kickoffStageBucket(profile.stageIds || []), C)), cursor: "default" }}>
+                              {currentStage}
+                            </span>
+                          </td>
+                          <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}` }}>
+                            <button onClick={() => openTalentProfileFromWorkspaceProfile(profile)} style={actionBtn(false, "accent")}>
+                              View Talent
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {workspaceOverlays}
+        </div>
+      </div>
+    );
+  }
 
   // ═══ WORKSPACE REPORTS ═══
   if (screen === "workspace-report") return (
