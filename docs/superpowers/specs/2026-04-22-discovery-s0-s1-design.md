@@ -524,25 +524,23 @@ for workspace state — not fully atomic, see "Graduation atomicity" below):
        two writes to the same JSONB row.)
     6. DELETE FROM discovery_candidates WHERE id = $1
   COMMIT pg transaction
-
-### Graduation atomicity
-
-The JSONB workspace-state write (steps 4+5) and the pg transaction (step 6) are
-in SEPARATE writes. The ordering matters: do the JSONB write FIRST, then delete
-the candidate. If the delete fails after a successful JSONB write, the candidate
-will still show in Discovery queue AND the talent record will exist in Kickoff
-— a retryable duplicate that blocklist will catch on next approve attempt (409,
-"already in Kickoff").
-
-This is acceptable because:
-- Worst case = a double-entry state that's detectable and non-destructive
-- Approve is idempotent on the talent side (merges by identity)
-- Reversing is a one-click: delete the still-orphaned candidate
   ↓
 Return { approvedTalentId, kickoffProjectId, kickoffRecordId }
   ↓
 UI: remove row, flash "Approved → ready in Kickoff", offer [Open in Kickoff] button
 ```
+
+### Graduation atomicity
+
+The JSONB workspace-state write (Flow B steps 4+5) and the pg transaction (step 6) are in **separate writes**. The ordering matters: do the JSONB write FIRST, then delete the candidate. If the delete fails after a successful JSONB write, the candidate will still show in the Discovery queue AND the talent record will exist in Kickoff — a retryable duplicate state that the blocklist will catch on the next approve attempt (409, "already in Kickoff").
+
+This is acceptable because:
+
+- Worst case = a double-entry state that is detectable and non-destructive
+- Approve is idempotent on the talent side (merges by identity)
+- Reversing is one click: delete the still-orphaned candidate
+
+If stricter atomicity is needed later (e.g., during S5 when enrichment runs live), introduce a single write-path that updates both the candidates table and the workspace JSONB under a shared advisory lock.
 
 ### Flow C — Reject Candidate
 
@@ -928,10 +926,10 @@ See **Manual test checklist** at the end of this document.
 
 ### Deploy order
 
-1. DB migration (additive, deploys alone)
-2. API routes + backend code (not reachable until UI exists)
-3. UI + nav entry (feature-flag gated)
-4. Flip flag for Songfinch workspace
+1. Backend code + `lib/gemfinder/discovery-store.ts` (includes `ensureSchema()`; tables are created lazily on first API call — no separate migration step)
+2. API routes (not reachable until UI exists, and feature-flag-gated even then)
+3. UI + nav entry (feature-flag gated, off by default)
+4. Flip feature flag on for Songfinch workspace
 5. Monitor `[DISCOVERY_*]` logs for errors
 6. Flip on for other workspaces as trust grows
 
@@ -954,10 +952,12 @@ Shape added to `project.settings`:
 - Checked server-side in all `/api/ar/discovery/*` routes — return `404` (not `403`) if flag is off for the target workspace, so the surface appears non-existent
 - Flipped per-workspace via an admin UI in Settings (future S1 polish) or directly by editing the JSONB blob for initial rollout
 
+**Scope note**: `featureFlags` lives on `project.settings` in the current data model. In this codebase a "project" inside the JSONB blob represents a workspace-level entity (Songfinch's settings sit on one project object, not spread across the 13 campaigns). So the flag is effectively workspace-wide. If the data model later grows separate per-campaign settings, the flag can be promoted to a parent-level key without a migration.
+
 ### Rollback
 
 1. Flip feature flag off → surface disappears, backend becomes unreachable
-2. Drop tables → full reset (no data loss elsewhere; migration is additive)
+2. Drop the two Discovery tables (`discovery_candidates`, `discovery_rejections`) → full data reset; the new schema is isolated from all existing tables, so no other data is affected
 3. Revert code commits
 
 ## Deferred to later phases
@@ -1017,7 +1017,7 @@ Run through after implementation:
 
 ### Reject flow
 
-- [ ] Reason dropdown shows 9 preset codes + "Other"
+- [ ] Reason dropdown shows 8 preset codes + "Other"
 - [ ] Selecting "Other" requires a note (submit disabled without)
 - [ ] Reject moves candidate to rejection log
 - [ ] Rejection log shows date, name, reason, note, rejected by
