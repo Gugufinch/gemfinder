@@ -4165,6 +4165,22 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       }),
     [workspaceScoutState, workspaceTalentProfiles, workspaceProjectIds]
   );
+  const scoutDuplicateCountByProfileId = useMemo(() => {
+    const groups = new Map();
+    for (const profile of scoutBaseProfiles) {
+      const key = canonicalArtistName(profile.displayName || "");
+      if (!key) continue;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(profile.id);
+    }
+    const counts = new Map();
+    for (const ids of groups.values()) {
+      if (ids.length > 1) {
+        for (const id of ids) counts.set(id, ids.length - 1);
+      }
+    }
+    return counts;
+  }, [scoutBaseProfiles]);
   const scoutTypeOptions = useMemo(
     () => uniqStrings(scoutBaseProfiles.flatMap(profile => profile.talentTypes || []).filter(Boolean)).sort((a, b) => a.localeCompare(b)),
     [scoutBaseProfiles]
@@ -12654,6 +12670,72 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                       {profile.hitTracks?.[0] && <span style={{ ...mkP(true, C.gn, C.gb), cursor: "default" }}>Hit track: {profile.hitTracks[0]}</span>}
                       {profile.curatorPageUrl && <span style={{ ...mkP(true, C.lv, C.lvb), cursor: "default" }}>Curator page linked</span>}
                     </div>
+                    <div style={{ marginTop: 14, paddingTop: 12, borderTop: `1px solid ${C.bd}`, display: "grid", gap: 10 }}>
+                      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                        <span style={{ ...mkP(true, scoutDecisionTone(profile.scoutDecision).fg, scoutDecisionTone(profile.scoutDecision).bg), cursor: "default" }}>
+                          {profile.scoutDecisionLabel}
+                        </span>
+                        {profile.primaryOwner ? (
+                          <span style={{ fontSize: 11, color: C.ts }}>
+                            Owner: <strong style={{ color: C.tx }}>{profile.primaryOwner}</strong>
+                          </span>
+                        ) : (
+                          <button
+                            onClick={e => { e.stopPropagation(); assignScoutLeadToCurrentActor(profile); }}
+                            style={compactActionBtn(false, "accent")}
+                          >
+                            Assign to me
+                          </button>
+                        )}
+                        {profile.scoutLastReviewedBy && (
+                          <span style={{ fontSize: 11, color: C.tt }}>
+                            Reviewed by {profile.scoutLastReviewedBy}
+                            {profile.scoutReviewCount > 1 ? ` · ${profile.scoutReviewCount} reviews` : ""}
+                          </span>
+                        )}
+                        {scoutDuplicateCountByProfileId.get(profile.id) > 0 && (
+                          <span style={{ ...mkP(true, C.rd, C.rb), cursor: "default" }}>
+                            ⚠ {scoutDuplicateCountByProfileId.get(profile.id)} same-name lead{scoutDuplicateCountByProfileId.get(profile.id) > 1 ? "s" : ""}
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        {[
+                          { id: "qualified", label: "Qualify", tint: "good" },
+                          { id: "needs_info", label: "Need Info", tint: "warn" },
+                          { id: "passed", label: "Pass", tint: "danger" },
+                          { id: "parked", label: "Park", tint: "neutral" },
+                        ].map(({ id, label, tint }) => (
+                          <button
+                            key={`scout-decision-${profile.id}-${id}`}
+                            onClick={e => { e.stopPropagation(); applyScoutDecision(profile, id); }}
+                            style={compactActionBtn(profile.scoutDecision === id, tint)}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                        {profile.scoutDecision === "promoted" ? (
+                          <button
+                            onClick={e => { e.stopPropagation(); openTalentProfileFromWorkspaceProfile(profile); }}
+                            style={compactActionBtn(true, "accent")}
+                          >
+                            Open in Kickoff →
+                          </button>
+                        ) : (
+                          <button
+                            onClick={e => {
+                              e.stopPropagation();
+                              if (window.confirm(`Promote ${profile.displayName} to Kickoff? This will move them into active A&R work.`)) {
+                                promoteScoutLeadToKickoff(profile);
+                              }
+                            }}
+                            style={compactActionBtn(false, "accent")}
+                          >
+                            Promote to Kickoff →
+                          </button>
+                        )}
+                      </div>
+                    </div>
                   </div>
                 );
               })}
@@ -12682,9 +12764,16 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                         >
                           <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}` }}>
                             <div style={{ fontWeight: 700 }}>{profile.displayName}</div>
-                            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
+                            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6, alignItems: "center" }}>
                               <span style={{ ...mkP(true, queueTone.fg, queueTone.bg), cursor: "default" }}>{profile.scoutQueueLabel}</span>
-                              <span style={{ fontSize: 11, color: C.tt }}>{profile.scoutNextAction}</span>
+                              <span style={{ ...mkP(true, scoutDecisionTone(profile.scoutDecision).fg, scoutDecisionTone(profile.scoutDecision).bg), cursor: "default" }}>
+                                {profile.scoutDecisionLabel}
+                              </span>
+                              {scoutDuplicateCountByProfileId.get(profile.id) > 0 && (
+                                <span style={{ ...mkP(true, C.rd, C.rb), cursor: "default" }}>
+                                  ⚠ {scoutDuplicateCountByProfileId.get(profile.id)} dup
+                                </span>
+                              )}
                             </div>
                             <div style={{ fontSize: 11, color: C.tt, marginTop: 4 }}>
                               {[
@@ -12692,6 +12781,14 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                                 profile.primaryEmail || "",
                                 profile.instagramHandle ? `@${normalizeSocialHandle(profile.instagramHandle)}` : "",
                               ].filter(Boolean).join(" · ")}
+                            </div>
+                            <div style={{ fontSize: 11, color: C.tt, marginTop: 4 }}>
+                              {profile.primaryOwner
+                                ? `Owner: ${profile.primaryOwner}`
+                                : "No owner yet"}
+                              {profile.scoutLastReviewedBy
+                                ? ` · Reviewed by ${profile.scoutLastReviewedBy}${profile.scoutReviewCount > 1 ? ` (${profile.scoutReviewCount}x)` : ""}`
+                                : ""}
                             </div>
                           </td>
                           <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>
@@ -12713,12 +12810,60 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                             </span>
                           </td>
                           <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}` }}>
-                            <button
-                              onClick={e => { e.stopPropagation(); openTalentProfileFromWorkspaceProfile(profile); }}
-                              style={actionBtn(false, "accent")}
-                            >
-                              View Talent
-                            </button>
+                            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                              <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                                {[
+                                  { id: "qualified", label: "Qualify", tint: "good" },
+                                  { id: "needs_info", label: "Need Info", tint: "warn" },
+                                  { id: "passed", label: "Pass", tint: "danger" },
+                                  { id: "parked", label: "Park", tint: "neutral" },
+                                ].map(({ id, label, tint }) => (
+                                  <button
+                                    key={`scout-row-decision-${profile.id}-${id}`}
+                                    onClick={e => { e.stopPropagation(); applyScoutDecision(profile, id); }}
+                                    style={compactActionBtn(profile.scoutDecision === id, tint)}
+                                  >
+                                    {label}
+                                  </button>
+                                ))}
+                              </div>
+                              <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                                {profile.scoutDecision === "promoted" ? (
+                                  <button
+                                    onClick={e => { e.stopPropagation(); openTalentProfileFromWorkspaceProfile(profile); }}
+                                    style={compactActionBtn(true, "accent")}
+                                  >
+                                    Open in Kickoff →
+                                  </button>
+                                ) : (
+                                  <button
+                                    onClick={e => {
+                                      e.stopPropagation();
+                                      if (window.confirm(`Promote ${profile.displayName} to Kickoff? This will move them into active A&R work.`)) {
+                                        promoteScoutLeadToKickoff(profile);
+                                      }
+                                    }}
+                                    style={compactActionBtn(false, "accent")}
+                                  >
+                                    Promote →
+                                  </button>
+                                )}
+                                {!profile.primaryOwner && (
+                                  <button
+                                    onClick={e => { e.stopPropagation(); assignScoutLeadToCurrentActor(profile); }}
+                                    style={compactActionBtn(false, "neutral")}
+                                  >
+                                    Assign me
+                                  </button>
+                                )}
+                                <button
+                                  onClick={e => { e.stopPropagation(); openTalentProfileFromWorkspaceProfile(profile); }}
+                                  style={compactActionBtn(false, "neutral")}
+                                >
+                                  View
+                                </button>
+                              </div>
+                            </div>
                           </td>
                         </tr>
                       );
