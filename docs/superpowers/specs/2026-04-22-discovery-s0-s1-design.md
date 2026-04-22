@@ -88,13 +88,18 @@ POSTGRES STORAGE
 
 6. **API routes namespaced** under `/api/ar/discovery/` matching existing `/api/ar/*` patterns.
 
+### Storage pattern (IMPORTANT — matches existing code)
+
+**This project has no `db/migrations/` directory and no migration tool.** Existing tables (`gemfinder_workspace_state`, `gemfinder_workspace_snapshots`, auth tables) are created at runtime via an `ensureSchema()` function inside each store module using `CREATE TABLE IF NOT EXISTS`. See `lib/gemfinder/project-store.ts` line 13-30 for the canonical example.
+
+Discovery follows the same pattern: `lib/gemfinder/discovery-store.ts` exports `ensureSchema()` that runs the CREATE TABLE statements on first use and caches a `schemaReady` flag thereafter. No separate migration file, no migration runner.
+
 ### Files to create
 
 | File | Purpose |
 |---|---|
-| `db/migrations/XXXX-add-discovery-tables.sql` | Additive DB migration (candidates + rejections tables, indexes) |
-| `lib/gemfinder/discovery-store.ts` | Candidate + rejection persistence |
-| `lib/gemfinder/discovery-blocklist.ts` | Blocklist query service |
+| `lib/gemfinder/discovery-store.ts` | Candidate + rejection persistence. Contains `SCHEMA_SQL` constant + `ensureSchema()` function matching `project-store.ts` pattern. Exports CRUD functions for candidates and rejections. |
+| `lib/gemfinder/discovery-blocklist.ts` | Blocklist query service (`isBlocked`) |
 | `lib/gemfinder/discovery/identity.ts` | canonicalName, parseUrl, buildIdentity utilities |
 | `lib/gemfinder/discovery/validation.ts` | zod schemas for candidate payload |
 | `app/api/ar/discovery/candidates/route.ts` | GET, POST |
@@ -107,9 +112,15 @@ POSTGRES STORAGE
 
 | File | Change |
 |---|---|
-| `app/ar/GemFinderApp.jsx` | Add Discovery nav card; add `screen === 'discovery'` branch; change Scout V2 default filter to hide `qualified + promoted` |
+| `app/ar/GemFinderApp.jsx` | Add Discovery nav card; add `screen === 'discovery'` branch; change Scout V2 default workflow filter (see "Scout V2 filter change" below for exact line) |
+| `lib/gemfinder/project-store.ts` | Add new exported `addTalentToProject(workspaceId, projectId, candidatePayload, actor)` helper (new function — does not exist today; see Flow B for signature) |
 | `package.json` | Add vitest dev dependency + scripts |
 | `lib/gemfinder/types.ts` | Add DiscoveryCandidate, DiscoveryRejection, CandidateIdentity, BlocklistResult types |
+
+### Referenced helpers that do not exist today (must be added as part of this spec's work)
+
+- `addTalentToProject` in `lib/gemfinder/project-store.ts` — currently talent mutations happen inline in `GemFinderApp.jsx` by splicing the JSONB state and calling `saveProjectsList`. This spec requires extracting the add-to-project logic into a reusable server-side helper. See Flow B for the signature.
+- The workspace scout state write on approve uses the `workspaceScoutState` shape already defined in Scout V2 (see `ff24d7f` commit). The Discovery approve handler writes directly to the JSONB blob under `project.settings.scoutState[talentId]` — no new persistence mechanism.
 
 ### Explicit non-goals for S0 + S1
 
@@ -125,7 +136,7 @@ POSTGRES STORAGE
 
 ### Table: `discovery_candidates`
 
-Ephemeral queue. Row deleted on approve or reject.
+Ephemeral queue. Row deleted on approve or reject. Table is created at runtime via `ensureSchema()` in `discovery-store.ts` using `CREATE TABLE IF NOT EXISTS` (matches existing `project-store.ts` pattern; no migration file).
 
 ```sql
 CREATE TABLE discovery_candidates (
@@ -207,7 +218,7 @@ CREATE INDEX idx_disco_cand_primary_email        ON discovery_candidates (worksp
 
 ### Table: `discovery_rejections`
 
-Permanent blocklist. Snapshots candidate at time of rejection.
+Permanent blocklist. Snapshots candidate at time of rejection. Same `ensureSchema()` mechanism as candidates table.
 
 ```sql
 CREATE TABLE discovery_rejections (
@@ -248,7 +259,9 @@ CREATE INDEX idx_disco_rej_musicbrainz_id        ON discovery_rejections (worksp
 CREATE INDEX idx_disco_rej_primary_email         ON discovery_rejections (workspace_id, primary_email) WHERE primary_email IS NOT NULL;
 ```
 
-### Reason codes (initial set)
+### Reason codes (8 preset + other)
+
+**Preset reasons (8):**
 
 - `already_signed` — on another label / project
 - `wrong_genre` — outside target genres
@@ -258,7 +271,10 @@ CREATE INDEX idx_disco_rej_primary_email         ON discovery_rejections (worksp
 - `not_viable` — bot / fake / defunct
 - `dead` — deceased
 - `duplicate` — same artist under another name/handle
-- `other` — freeform note required
+
+**Plus:**
+
+- `other` — requires freeform `reason_note` (validated; submit disabled without note)
 
 ### TypeScript types (added to `lib/gemfinder/types.ts`)
 
@@ -292,7 +308,7 @@ export type DiscoveryCandidate = {
   spotifyMonthlyListeners?: number;
   youtubeSubscribers?: number;
   soundcloudFollowers?: number;
-  hitTracks: string[];
+  hitTracks: string[];   // S0/S1: track names only. S5 may extend to { title; url?; platform? }[] — non-breaking.
   curatorPageUrl?: string;
   artistRole?: "performer" | "curator" | "both";
   aiSummary?: string;
@@ -336,7 +352,9 @@ export type DiscoveryRejection = {
   musicbrainzId?: string;
   bandcampUrl?: string;
   primaryEmail?: string;
-  candidateSnapshot: DiscoveryCandidate;
+  // candidateSnapshot is opaque audit data — stored as-is at rejection time.
+  // Typed loosely so future schema changes to DiscoveryCandidate don't break old snapshots on read.
+  candidateSnapshot: Record<string, unknown>;
   reasonCode: DiscoveryRejectionReason;
   reasonNote?: string;
   rejectedBy: string;
@@ -410,7 +428,17 @@ export async function isBlocked(
 
 1. **Candidates table** — `discovery_candidates WHERE workspace_id = $1 AND (identity match)` — excludes `options.excludeCandidateId` when editing
 2. **Rejections table** — `discovery_rejections WHERE workspace_id = $1 AND (identity match)` — skippable via `options.includeRejections = false`
-3. **Kickoff + Live** — queries workspace projects via existing `project-store`, flattens `projects[].artists[]` into identity records, matches in JavaScript. Scale-appropriate at current ~2k artists. SQL upgrade path available if/when this becomes a bottleneck.
+3. **Kickoff + Live** — loads the workspace JSONB blob via existing `project-store.loadProjectsList()`, flattens `projects[].artists[]` into identity records, matches in JavaScript. Scale-appropriate at current ~2k artists.
+
+### Blocklist SQL migration trigger (concrete thresholds)
+
+Migrate the Kickoff/Live portion of `isBlocked` from in-memory scan to a denormalized SQL index table (`workspace_talent_identity_index`) when ANY of these conditions is hit:
+
+- Workspace exceeds **10,000 artists** (currently 1,686 at Songfinch)
+- p95 `isBlocked` latency exceeds **300ms** (logged via `[DISCOVERY_BLOCKLIST]` slow-query warnings)
+- Blocklist queries consume more than **20% of request time** on Discovery routes
+
+The index table would be synthesized by a trigger on `gemfinder_workspace_state` writes, or by a nightly rebuild job. Defer until one of these thresholds is hit — they're unlikely at current scale.
 
 ## Flows
 
@@ -462,18 +490,28 @@ Modal:
 PATCH /api/ar/discovery/candidates/[id]
   Body: { action: "approve", projectId, note? }
   ↓
-Server transaction:
-  BEGIN
+Server transaction (mixed: pg transaction for discovery_candidates + JSONB write
+for workspace state — not fully atomic, see "Graduation atomicity" below):
+
+  BEGIN pg transaction
     1. SELECT candidate FOR UPDATE (row lock → exactly-once guarantee)
     2. 404 if not found (second user's parallel approve gets this)
     3. Re-check isBlocked() — Kickoff state may have changed since add
        409 if now blocked (e.g., user added to Kickoff via another path mid-flight)
-    4. Call project-store.addTalentToProject(projectId, candidatePayload):
-       • Creates or merges sharedTalent identity
-       • Creates kickoff record at stage 'prospect'
-       • Preserves: socials, contact, genre, location, source, addedBy
-       • Sets discoveredVia = candidate.source
-    5. Write workspaceScoutState[newTalentId] = {
+    4. Call NEW helper addTalentToProject(workspaceId, projectId, candidatePayload, actor):
+       - Signature: (workspaceId: string, projectId: string, payload: DiscoveryCandidate,
+                     actor: AuthUserRecord) => Promise<{ talentId: string; artistRecord: ArtistRecord }>
+       - Implementation: loads workspace JSONB blob via loadProjectsList(),
+         appends new artist record to target project's projects[].artists[] array,
+         saves back via saveProjectsList(). Mirrors the inline mutation pattern
+         used in GemFinderApp.jsx for manual adds today, but lives server-side
+         so API routes can call it.
+       - Creates or merges sharedTalent identity (uses canonical name + email + handles)
+       - Creates kickoff record at stage 'prospect' with initial fields copied from candidate
+       - Preserves: socials, contact, genre, location, source, addedBy
+       - Sets discoveredVia = candidate.source on the new artist record
+    5. Update the same workspace JSONB blob to write
+       project.settings.scoutState[newTalentId] = {
          decision: "qualified",
          decisionBy: approvingActor,
          decisionAt: NOW(),
@@ -482,8 +520,24 @@ Server transaction:
          lastReviewedAt: NOW(),
          note: note || null
        }
+       (Step 4 and 5 can be combined into one saveProjectsList call to avoid
+       two writes to the same JSONB row.)
     6. DELETE FROM discovery_candidates WHERE id = $1
-  COMMIT
+  COMMIT pg transaction
+
+### Graduation atomicity
+
+The JSONB workspace-state write (steps 4+5) and the pg transaction (step 6) are
+in SEPARATE writes. The ordering matters: do the JSONB write FIRST, then delete
+the candidate. If the delete fails after a successful JSONB write, the candidate
+will still show in Discovery queue AND the talent record will exist in Kickoff
+— a retryable duplicate that blocklist will catch on next approve attempt (409,
+"already in Kickoff").
+
+This is acceptable because:
+- Worst case = a double-entry state that's detectable and non-destructive
+- Approve is idempotent on the talent side (merges by identity)
+- Reversing is a one-click: delete the still-orphaned candidate
   ↓
 Return { approvedTalentId, kickoffProjectId, kickoffRecordId }
   ↓
@@ -496,8 +550,8 @@ UI: remove row, flash "Approved → ready in Kickoff", offer [Open in Kickoff] b
 User clicks [✗ Reject]
   ↓
 Modal:
-  • Reason dropdown (9 preset codes + "Other")
-  • Optional note (required if reason = "other")
+  • Reason dropdown (8 preset codes + "Other")
+  • Optional note (required when reason = "other"; submit disabled without)
   • [Cancel] [✗ Reject]
   ↓
 PATCH /api/ar/discovery/candidates/[id]
@@ -507,6 +561,9 @@ Server transaction:
   BEGIN
     1. SELECT candidate FOR UPDATE
     2. 404 if not found
+       (covers concurrent approve-won race: if a parallel approve already
+        graduated + deleted this candidate, the row is gone by the time
+        reject locks — UI removes the row with "Already handled" toast)
     3. INSERT into discovery_rejections (
          identity fields copied,
          candidate_snapshot = full row as JSONB,
@@ -591,7 +648,7 @@ Find new artists not yet in Kickoff or Live.
 [N pending] [M rejected] [K approved today] [J blocked]
 
 Discovery Actions:
-[+ Add candidate]  [Export CSV]
+[+ Add candidate]
 
 Tabs: [Queue · N]  [Rejection log · M]
 
@@ -630,7 +687,7 @@ Actions cell: `[✓][✗][…]` — ellipsis opens details drawer.
 
 - **Add Candidate**: paste-URL mode + manual-form mode. Extra links as repeating {label, url} rows.
 - **Approve**: project dropdown (smart-default to last-used), optional note, confirmation.
-- **Reject**: reason dropdown (9 codes), optional note (required if "other").
+- **Reject**: reason dropdown (8 preset reasons + "Other"), optional note (required if "Other" selected).
 - **Collision**: match details, [Open existing] + [Cancel] + admin-only [Force add with note].
 - **Edit**: same as Add, pre-filled, re-runs blocklist on save.
 
@@ -654,9 +711,66 @@ Read-only table: date, name, reason badge, note, rejected by. Sortable, searchab
 - Score pill: green (>70), amber (40–70), gray (unscored)
 - Role badge: blue (performer), purple (curator), teal (both), gray (unknown)
 
-### Scout V2 default filter change (2-line follow-up)
+### Field naming convention (SQL ↔ TS)
 
-Scout V2's default workflow filter changes from `"all"` → hides `qualified + promoted` decisions. Keeps Discovery-approved records out of Scout's triage queue. Users can flip the filter to "all" to see everything.
+SQL uses `snake_case`, TypeScript uses `camelCase`. The `discovery-store.ts` module owns all bidirectional mapping:
+
+- On write: `camelCase → snake_case` in SQL bind parameters
+- On read: `snake_case → camelCase` in a `rowToCandidate(row)` helper
+
+Callers (API routes, UI) always work in camelCase. Never leak snake_case fields above the store layer. The `extra_links` / `extraLinks` pair is the clearest example of this convention.
+
+### Nav badge staleness (default behavior)
+
+- Badge count fetched on workspace landing page load via `GET /api/ar/discovery/stats`
+- Count updates after any `add`, `approve`, or `reject` action completes (client-side state update, no re-fetch)
+- No polling, no websockets, no live updates in S0
+- User can manually refresh the page to re-sync — acceptable staleness given single-user-at-a-time workflow pattern
+
+### Scout V2 default filter change (exact edit)
+
+The change is in `app/ar/GemFinderApp.jsx`:
+
+1. **Line 75-82** (`SCOUT_DECISION_LABELS` constant region): no change to labels, but add `SCOUT_WORKFLOW_FILTERS` entry:
+
+   ```javascript
+   const SCOUT_WORKFLOW_FILTERS = [
+     { id: "all", label: "All Workflow" },
+     { id: "needs_attention", label: "Needs Attention" },  // NEW — default
+     { id: "unreviewed", label: "Unreviewed" },
+     { id: "needs_info", label: "Needs Info" },
+     { id: "qualified", label: "Qualified" },
+     { id: "promoted", label: "Promoted" },
+     { id: "passed", label: "Passed" },
+     { id: "parked", label: "Parked" },
+   ];
+   ```
+
+2. **Line 3688** (initial state):
+
+   ```javascript
+   // BEFORE:
+   const [scoutWorkflowFilter, setScoutWorkflowFilter] = useState("all");
+
+   // AFTER:
+   const [scoutWorkflowFilter, setScoutWorkflowFilter] = useState("needs_attention");
+   ```
+
+3. **Line ~3959** (`matchesScoutWorkflowFilter` function): add a branch for the new filter:
+
+   ```javascript
+   if (filterId === "needs_attention") {
+     return profile.scoutDecision === "unreviewed" || profile.scoutDecision === "needs_info";
+   }
+   ```
+
+4. **Line 4797** (reset helper): update to reset to new default:
+
+   ```javascript
+   setScoutWorkflowFilter("needs_attention");
+   ```
+
+This keeps Discovery-approved records (decision = "qualified") out of Scout's default view while preserving the ability to flip the filter to "All Workflow" to see everything, or to "Qualified" specifically to review them.
 
 ## Error Handling
 
@@ -685,10 +799,48 @@ Scout V2's default workflow filter changes from `"all"` → hides `qualified + p
 
 ### Auth + permissions
 
-- All `/api/ar/discovery/*` routes require a valid session
-- Workspace scoping on every query — user cannot access other workspaces' data
-- Force-add endpoint requires `role === 'admin'` on the user record
-- Rejection log is read-only in UI for all users (no un-reject affordance)
+Matches existing `/api/ar/*` auth pattern. Each route inlines a `requireEditorActor` helper (the pattern is **not shared**, it's duplicated per route to keep dependencies local — see `app/api/ar/gmail/thread/route.ts` for the canonical example).
+
+```typescript
+import { NextRequest, NextResponse } from 'next/server';
+import { getAuthUserById } from '@/lib/gemfinder/auth-store';
+
+async function requireEditorActor(req: NextRequest) {
+  const userId = req.cookies.get('ar_user')?.value || '';
+  const actor = userId ? await getAuthUserById(userId) : null;
+  if (!actor || !actor.active) {
+    return {
+      actor: null,
+      response: NextResponse.json({ error: 'Not authenticated' }, { status: 401 }),
+    };
+  }
+  if (actor.role === 'viewer') {
+    return {
+      actor: null,
+      response: NextResponse.json({ error: 'Editor or admin role required' }, { status: 403 }),
+    };
+  }
+  return { actor, response: null };
+}
+
+// For admin-only routes (force-add):
+async function requireAdminActor(req: NextRequest) {
+  const { actor, response } = await requireEditorActor(req);
+  if (response || !actor) return { actor: null, response };
+  if (actor.role !== 'admin') {
+    return {
+      actor: null,
+      response: NextResponse.json({ error: 'Admin role required' }, { status: 403 }),
+    };
+  }
+  return { actor, response: null };
+}
+```
+
+- `actor.email` is used for `addedBy`, `rejectedBy`, `approvedBy`
+- `actor.role` is one of `'viewer' | 'editor' | 'admin'` (per `auth-store.ts`)
+- Workspace scoping: every route reads `workspaceId` from query params / body and filters all SQL/JSONB accesses by it
+- Rejection log is read-only for all users — no UI affordance to un-reject. Re-surfacing a rejected artist requires the admin force-add override during re-add flow
 
 ## Testing
 
@@ -703,7 +855,26 @@ Added to `package.json`:
 }
 ```
 
-### Unit tests (required S0)
+### Test database strategy
+
+- Tests use a **dedicated test DB** pointed at by `DATABASE_URL_TEST` env var (falls back to a local ephemeral pg if unset)
+- `vitest.setup.ts` opens a connection at suite start, truncates discovery tables + workspace state rows, and seeds fixtures
+- **Integration tests run inside transactions**: each test opens `BEGIN`, runs assertions against the route, then `ROLLBACK` in `afterEach` — ensures test isolation without between-test truncation overhead
+- **Unit tests mock the pg Pool** using `vitest` mock module pattern — no DB connection required
+- Recommended test DB: create a Neon branch or local pg database called `gemfinder_test` that matches production schema
+
+### Fixtures
+
+Co-located under `test/fixtures/discovery/`:
+
+- `candidates.ts` — factories for `buildCandidate(overrides?)` returning realistic `DiscoveryCandidate` shapes with optional field overrides
+- `rejections.ts` — factories for `buildRejection(overrides?)`
+- `workspace-projects.ts` — factories for workspace JSONB state with pre-seeded Kickoff records (for cross-source blocklist tests)
+- `actors.ts` — exports `adminActor`, `editorActor`, `viewerActor` fixtures matching `AuthUserRecord` shape
+
+Each factory returns a complete object with sensible defaults; tests override only the fields relevant to the assertion.
+
+### Unit tests (required S0, 90%+ coverage of blocklist + identity code paths)
 
 Co-located `*.test.ts` files for:
 
@@ -711,21 +882,23 @@ Co-located `*.test.ts` files for:
 - `lib/gemfinder/discovery-blocklist.test.ts` — every match type + no-match + excludeCandidateId + skip-rejections option
 - `lib/gemfinder/discovery/validation.test.ts` — zod schema coverage
 
-**Coverage target**: 90%+ of blocklist + identity code paths.
-
 ### Integration tests (required S1)
+
+Coverage target: **happy path + every error code + every state transition** (no numeric percentage target — structural coverage instead).
 
 - `app/api/ar/discovery/candidates/route.test.ts`:
   - POST happy path
   - POST collision (4 variants: kickoff, live, rejected, candidate)
   - POST validation failure
-  - POST auth failure
+  - POST auth failure (401 + 403 variants)
+  - POST with feature flag off (404)
   - GET with each filter
 - `app/api/ar/discovery/candidates/[id]/route.test.ts`:
   - PATCH approve happy
   - PATCH approve with re-check collision (state changed mid-flight)
   - PATCH approve concurrent race (two parallel requests, one wins via SELECT FOR UPDATE)
   - PATCH reject happy + log verification
+  - PATCH reject on already-approved candidate (404)
   - PATCH edit with blocklist re-check
 - `app/api/ar/discovery/rejections/route.test.ts`:
   - GET with filters
@@ -744,10 +917,12 @@ See **Manual test checklist** at the end of this document.
 ## Observability
 
 - `[DISCOVERY]` prefix for general operations
-- `[DISCOVERY_BLOCKLIST]` for blocklist queries (slow-query warnings > 500ms)
+- `[DISCOVERY_BLOCKLIST]` for blocklist queries (slow-query warnings > 500ms — **visibility only, no paging**)
 - `[DISCOVERY_DECISION]` for approve/reject events (structured log with candidateId, actor, projectId)
 - `[DISCOVERY_AGENT]` for agent-produced candidate batches (S3+)
 - Request-level metrics: pending count, approvals today, rejections today via `/api/ar/discovery/stats` endpoint (used by nav badge and dashboard counters)
+
+**No alerts or paging are set up in S0/S1.** All observability is log-based. SLOs and alert thresholds are deferred until post-ship data tells us what thresholds matter.
 
 ## Rollout / rollback
 
@@ -762,11 +937,22 @@ See **Manual test checklist** at the end of this document.
 
 ### Feature flag
 
-`project.settings.featureFlags.discovery = true | false`. Default off. Controls:
+**No feature-flag system exists today.** This spec introduces feature flags as a new key within the existing workspace-state JSONB blob stored in `gemfinder_workspace_state` (no new table, no new storage mechanism).
 
-- Discovery nav card visibility on workspace landing
-- Access to Discovery screen (returns 404 if flag off)
-- Candidate API routes (return 404 if flag off for workspace)
+Shape added to `project.settings`:
+
+```json
+{
+  "featureFlags": {
+    "discovery": true
+  }
+}
+```
+
+- Default is **off** (treat missing key as `false`)
+- Read in `GemFinderApp.jsx` to gate the nav card visibility
+- Checked server-side in all `/api/ar/discovery/*` routes — return `404` (not `403`) if flag is off for the target workspace, so the surface appears non-existent
+- Flipped per-workspace via an admin UI in Settings (future S1 polish) or directly by editing the JSONB blob for initial rollout
 
 ### Rollback
 
@@ -791,6 +977,9 @@ See **Manual test checklist** at the end of this document.
 | S7 | Scraper hardening + retry | Ongoing maintenance |
 | Future | Un-reject workflow | Admin force-add covers it |
 | Future | Time-window enrichment (2026 releases) | Needs release-date enrichment |
+| Future | CSV export of Discovery queue | Not needed for initial usage; add after real data volume justifies |
+| Future | Live-update nav badge (polling/websocket) | Page-load refresh is sufficient at current usage pattern |
+| Future | Shared `requireEditorActor` helper | Matches existing codebase pattern of inline duplication |
 
 ## Open questions
 
