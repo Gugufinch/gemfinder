@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef, useDeferredValue } from "react";
 
 /* ═══════════════════════════════════════════════════════════
    GEM FINDER v7 - AI-Powered A&R Management System
@@ -41,6 +41,62 @@ const KICKOFF_STAGE_ACTION_BUCKET_IDS = {
   live: "live",
   dead: "dead",
 };
+const SCOUT_FOCUS_FILTERS = [
+  { id: "all", label: "All Leads" },
+  { id: "ready", label: "Ready Now" },
+  { id: "contact-gap", label: "Need Contact" },
+  { id: "reach-gap", label: "Need Reach" },
+  { id: "artists", label: "Artists" },
+  { id: "curators", label: "Curators" },
+];
+const SCOUT_SORT_OPTIONS = [
+  { id: "recommended", label: "Recommended" },
+  { id: "reach", label: "Reach" },
+  { id: "stage", label: "Stage" },
+  { id: "name", label: "A-Z" },
+];
+const SCOUT_QUEUE_LABELS = {
+  ready: "Ready Now",
+  "contact-gap": "Need Contact",
+  "reach-gap": "Need Reach",
+  "curator-review": "Curator Review",
+  qualify: "Needs Qualification",
+  parked: "Closed / Parked",
+  live: "Already Live",
+};
+const SCOUT_STAGE_SORT_ORDER = {
+  prospect: 0,
+  contacted: 1,
+  engaged: 2,
+  won: 3,
+  live: 4,
+  dead: 5,
+};
+const SCOUT_DECISION_LABELS = {
+  unreviewed: "Unreviewed",
+  needs_info: "Needs Info",
+  qualified: "Qualified",
+  promoted: "Promoted",
+  passed: "Passed",
+  parked: "Parked",
+};
+const SCOUT_DECISION_SORT_ORDER = {
+  unreviewed: 0,
+  needs_info: 1,
+  qualified: 2,
+  promoted: 3,
+  parked: 4,
+  passed: 5,
+};
+const SCOUT_WORKFLOW_FILTERS = [
+  { id: "all", label: "All Workflow" },
+  { id: "unreviewed", label: "Unreviewed" },
+  { id: "needs_info", label: "Needs Info" },
+  { id: "qualified", label: "Qualified" },
+  { id: "promoted", label: "Promoted" },
+  { id: "passed", label: "Passed" },
+  { id: "parked", label: "Parked" },
+];
 const PROJECT_TYPES = [
   { id: "ar", label: "A&R" },
   { id: "marketing", label: "Marketing" },
@@ -1885,6 +1941,7 @@ function normalizeProject(p) {
       appearance: {
         accent: p.settings?.appearance?.accent && ACCENT_PRESETS[p.settings.appearance.accent] ? p.settings.appearance.accent : "blue",
       },
+      scoutState: normalizeScoutWorkspaceState(p.settings?.scoutState || {}),
       marketingCampaignBank: normalizeMarketingCampaignBank(p.settings?.marketingCampaignBank || []),
       marketingCampaignDetails: normalizeMarketingCampaignDetails(p.settings?.marketingCampaignDetails || {}),
       marketingGroups: normalizeMarketingGroups(p.settings?.marketingGroups || [], marketingItems.map(item => item.id)),
@@ -1941,6 +1998,36 @@ function mergePlatformLifecycle(currentValue, nextValue) {
   if (current === "live" || next === "live") return "live";
   if (next === "inactive" || next === "retired") return next;
   return next || current || "pre_live";
+}
+
+function normalizeScoutDecision(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return SCOUT_DECISION_LABELS[normalized] ? normalized : "unreviewed";
+}
+
+function normalizeScoutWorkspaceEntry(entry = {}) {
+  const nextAction = String(entry?.nextAction || "").trim();
+  return {
+    decision: normalizeScoutDecision(entry?.decision),
+    note: String(entry?.note || "").trim(),
+    decisionAt: String(entry?.decisionAt || "").trim(),
+    decisionBy: String(entry?.decisionBy || "").trim(),
+    lastReviewedAt: String(entry?.lastReviewedAt || "").trim(),
+    lastReviewedBy: String(entry?.lastReviewedBy || "").trim(),
+    reviewCount: Math.max(0, Number(entry?.reviewCount || 0) || 0),
+    promotedAt: String(entry?.promotedAt || "").trim(),
+    promotedBy: String(entry?.promotedBy || "").trim(),
+    promotedProjectId: String(entry?.promotedProjectId || "").trim(),
+    nextAction,
+  };
+}
+
+function normalizeScoutWorkspaceState(state = {}) {
+  return Object.fromEntries(
+    Object.entries(state || {})
+      .filter(([profileId]) => String(profileId || "").trim())
+      .map(([profileId, entry]) => [String(profileId).trim(), normalizeScoutWorkspaceEntry(entry)])
+  );
 }
 
 function talentLifecycleTone(lifecycle, C) {
@@ -3597,7 +3684,11 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [scoutContactTypeFilter, setScoutContactTypeFilter] = useState("all");
   const [scoutPlatformFilter, setScoutPlatformFilter] = useState("instagram");
   const [scoutFollowerMin, setScoutFollowerMin] = useState(0);
+  const [scoutFocusFilter, setScoutFocusFilter] = useState("all");
+  const [scoutWorkflowFilter, setScoutWorkflowFilter] = useState("all");
+  const [scoutSortMode, setScoutSortMode] = useState("recommended");
   const [scoutViewMode, setScoutViewMode] = useState("table");
+  const deferredScoutQuery = useDeferredValue(scoutQuery);
   const [kickoffQuery, setKickoffQuery] = useState("");
   const [kickoffTypeFilter, setKickoffTypeFilter] = useState("all");
   const [kickoffSourceFilter, setKickoffSourceFilter] = useState("all");
@@ -3792,6 +3883,15 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     () => new Set(workspaceProjects.map(project => project.id)),
     [workspaceProjects]
   );
+  const workspaceScoutState = useMemo(
+    () => normalizeScoutWorkspaceState(
+      workspaceProjects.reduce((acc, project) => ({
+        ...acc,
+        ...(project.settings?.scoutState || {}),
+      }), {})
+    ),
+    [workspaceProjects]
+  );
   const proj = projects.find(p => p.id === apId);
   const projectType = normalizeProjectType(proj?.type);
   const isMarketingProject = projectType === "marketing";
@@ -3806,31 +3906,66 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   );
   const workspaceTalentData = useMemo(() => collectWorkspaceTalentProfiles(projects), [projects]);
   const workspaceTalentProfiles = workspaceTalentData.profiles;
+  const scoutPlatformLabel = scoutPlatformFilter === "tiktok"
+    ? "TikTok followers"
+    : scoutPlatformFilter === "spotify"
+      ? "Monthly listeners"
+      : "Instagram followers";
   const scoutPlatformMetric = useCallback((profile, platform = scoutPlatformFilter) => {
     const normalizedPlatform = String(platform || "instagram").trim().toLowerCase();
+    const cachedValue = profile?.scoutMetrics && typeof profile.scoutMetrics[normalizedPlatform] === "number"
+      ? profile.scoutMetrics[normalizedPlatform]
+      : normalizedPlatform === "tiktok"
+        ? parseMl(profile?.tiktokFollowers || "")
+        : normalizedPlatform === "spotify"
+          ? parseMl(profile?.spotifyMonthlyListeners || "")
+          : parseMl(profile?.instagramFollowers || "");
     if (normalizedPlatform === "tiktok") {
-      const value = parseMl(profile?.tiktokFollowers || "");
       return {
         platform: "tiktok",
-        value,
-        label: value ? `${fmtCompact(value)} TikTok followers` : "No TikTok follower count yet",
+        value: cachedValue,
+        label: cachedValue ? `${fmtCompact(cachedValue)} TikTok followers` : "No TikTok follower count yet",
       };
     }
     if (normalizedPlatform === "spotify") {
-      const value = parseMl(profile?.spotifyMonthlyListeners || "");
       return {
         platform: "spotify",
-        value,
-        label: value ? `${fmtCompact(value)} monthly listeners` : "No Spotify listener count yet",
+        value: cachedValue,
+        label: cachedValue ? `${fmtCompact(cachedValue)} monthly listeners` : "No Spotify listener count yet",
       };
     }
-    const value = parseMl(profile?.instagramFollowers || "");
     return {
       platform: "instagram",
-      value,
-      label: value ? `${fmtCompact(value)} Instagram followers` : "No Instagram follower count yet",
+      value: cachedValue,
+      label: cachedValue ? `${fmtCompact(cachedValue)} Instagram followers` : "No Instagram follower count yet",
     };
   }, [scoutPlatformFilter]);
+  const matchesScoutFocusFilter = useCallback((profile, filterId) => {
+    switch (filterId) {
+      case "ready":
+        return profile.hasContact && profile.hasReach && !profile.isClosedScoutStage;
+      case "contact-gap":
+        return !profile.hasContact && profile.hasReach && !profile.isClosedScoutStage;
+      case "reach-gap":
+        return profile.hasContact && !profile.hasReach && !profile.isClosedScoutStage;
+      case "artists":
+        return !profile.isCurator;
+      case "curators":
+        return profile.isCurator;
+      default:
+        return true;
+    }
+  }, []);
+  const matchesScoutWorkflowFilter = useCallback((profile, filterId) => {
+    if (filterId === "all") return true;
+    if (filterId === "promoted") return profile.scoutDecision === "promoted";
+    if (filterId === "passed") return profile.scoutDecision === "passed";
+    if (filterId === "parked") return profile.scoutDecision === "parked";
+    if (filterId === "needs_info") return profile.scoutDecision === "needs_info";
+    if (filterId === "qualified") return profile.scoutDecision === "qualified";
+    if (filterId === "unreviewed") return profile.scoutDecision === "unreviewed";
+    return true;
+  }, []);
   const scoutBaseProfiles = useMemo(
     () => workspaceTalentProfiles
       .filter(profile =>
@@ -3838,69 +3973,197 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         (profile.projectMemberships || []).some(item => workspaceProjectIds.has(item.projectId))
       )
       .map(profile => {
+        const workspaceScopedArRecords = (profile.arRecords || [])
+          .filter(record => workspaceProjectIds.has(record.projectId));
+        const talentTypes = uniqStrings((profile.talentTypes || []).filter(Boolean));
+        const sources = uniqStrings((profile.sources || []).filter(Boolean));
+        const curatedArtists = uniqStrings((profile.curatedArtists || []).filter(Boolean));
         const genres = uniqStrings(
-          (profile.arRecords || [])
-            .filter(record => workspaceProjectIds.has(record.projectId))
+          workspaceScopedArRecords
             .map(record => normalizeGenreValue(record.genre || ""))
             .filter(Boolean)
         );
         const locations = uniqStrings(
-          (profile.arRecords || [])
-            .filter(record => workspaceProjectIds.has(record.projectId))
+          workspaceScopedArRecords
             .map(record => String(record.location || "").trim())
             .filter(Boolean)
         );
         const hitTracks = uniqStrings(
-          (profile.arRecords || [])
-            .filter(record => workspaceProjectIds.has(record.projectId))
+          workspaceScopedArRecords
             .map(record => String(record.hitTrack || "").trim())
             .filter(Boolean)
         );
         const stageIds = uniqStrings(
-          (profile.arRecords || [])
-            .filter(record => workspaceProjectIds.has(record.projectId))
+          workspaceScopedArRecords
             .map(record => normalizeStageId(record.stage || "prospect"))
             .filter(Boolean)
         );
+        const owners = uniqStrings(workspaceScopedArRecords.map(record => String(record.owner || "").trim()).filter(Boolean));
+        const activeScoutRecords = workspaceScopedArRecords.filter(record => !isClosedStage(record.stage || "prospect"));
+        const primaryScoutRecord = activeScoutRecords[0] || workspaceScopedArRecords[0] || null;
         const primaryGenre = genres[0] || "";
+        const primaryEmail = String(profile.primaryEmail || "").trim();
+        const contactName = String(profile.contactName || "").trim();
+        const contactEmail = String(profile.contactEmail || "").trim();
         const contactType = String(profile.contactType || "").trim();
         const contactLabel = [
-          String(profile.contactName || "").trim(),
+          contactName,
           contactType,
-          String(profile.contactEmail || "").trim(),
+          contactEmail,
         ].filter(Boolean).join(" · ");
+        const instagramFollowersValue = parseMl(profile.instagramFollowers || "");
+        const tiktokFollowersValue = parseMl(profile.tiktokFollowers || "");
+        const spotifyMonthlyListenersValue = parseMl(profile.spotifyMonthlyListeners || "");
+        const reachValues = [
+          { platform: "instagram", value: instagramFollowersValue },
+          { platform: "tiktok", value: tiktokFollowersValue },
+          { platform: "spotify", value: spotifyMonthlyListenersValue },
+        ].sort((a, b) => b.value - a.value);
+        const dominantReach = reachValues[0] || { platform: "instagram", value: 0 };
+        const dominantMetricLabel = dominantReach.value
+          ? dominantReach.platform === "spotify"
+            ? `${fmtCompact(dominantReach.value)} monthly listeners`
+            : `${fmtCompact(dominantReach.value)} ${dominantReach.platform === "instagram" ? "Instagram" : "TikTok"} followers`
+          : "No reach data yet";
+        const hasContact = Boolean(primaryEmail || contactEmail || contactName);
+        const hasDirectEmail = Boolean(primaryEmail || contactEmail);
+        const hasReach = reachValues.some(item => item.value > 0);
+        const isCurator = talentTypes.some(type => canonicalArtistName(type) === "curator");
+        const stageBucket = kickoffStageBucket(stageIds || []);
+        const isClosedScoutStage = stageBucket === "dead" || stageBucket === "live";
+        const scoutState = workspaceScoutState[String(profile.id || "").trim()] || normalizeScoutWorkspaceEntry();
+        const scoutDecision = normalizeScoutDecision(scoutState.decision);
+        let scoutQueueId = "qualify";
+        let scoutNextAction = "Fill profile gaps";
+        let scoutReason = primaryGenre
+          ? `Start by qualifying the ${primaryGenre} fit`
+          : "Needs more scout data before kickoff";
+        if (hasContact && hasReach && !isClosedScoutStage) {
+          scoutQueueId = "ready";
+          scoutNextAction = stageBucket === "prospect" ? "Open profile and prep kickoff" : "Open profile and keep momentum";
+          scoutReason = `${dominantMetricLabel} with contact coverage`;
+        } else if (!hasContact && hasReach && !isClosedScoutStage) {
+          scoutQueueId = "contact-gap";
+          scoutNextAction = "Find contact details";
+          scoutReason = `${dominantMetricLabel} but no contact info yet`;
+        } else if (hasContact && !hasReach && !isClosedScoutStage) {
+          scoutQueueId = "reach-gap";
+          scoutNextAction = "Verify audience signal";
+          scoutReason = "Contact is ready but reach data is still missing";
+        } else if (isCurator && profile.curatorPageUrl) {
+          scoutQueueId = "curator-review";
+          scoutNextAction = "Review curator fit";
+          scoutReason = "Curator page is linked and ready for vetting";
+        } else if (stageBucket === "dead") {
+          scoutQueueId = "parked";
+          scoutNextAction = "Keep this out of the active queue";
+          scoutReason = "This lead is already closed out";
+        } else if (stageBucket === "live") {
+          scoutQueueId = "live";
+          scoutNextAction = "Review this from Live Roster";
+          scoutReason = "This lead has already moved beyond scout";
+        } else if (hitTracks[0]) {
+          scoutReason = `Track signal from ${hitTracks[0]}`;
+        }
+        if (scoutDecision === "needs_info") {
+          scoutNextAction = scoutState.nextAction || "Resolve the open research blocker";
+          scoutReason = scoutState.note || scoutReason;
+        } else if (scoutDecision === "qualified") {
+          scoutNextAction = scoutState.nextAction || "Move this lead into active kickoff work";
+        } else if (scoutDecision === "promoted") {
+          scoutNextAction = "Open in Kickoff";
+          scoutReason = scoutState.note || scoutReason;
+        } else if (scoutDecision === "passed" || scoutDecision === "parked") {
+          scoutNextAction = scoutDecision === "parked" ? "Keep out of active review" : "No further scout work";
+          scoutReason = scoutState.note || scoutReason;
+        }
+        const scoutScore = Math.round(
+          (hasContact ? 24 : 0) +
+          (hasDirectEmail ? 8 : 0) +
+          (hasReach ? 18 : 0) +
+          (hitTracks.length ? 6 : 0) +
+          (primaryGenre ? 4 : 0) +
+          (locations.length ? 2 : 0) +
+          (profile.curatorPageUrl ? 4 : 0) +
+          Math.min(24, dominantReach.value > 0 ? Math.log10(dominantReach.value + 1) * 6 : 0) +
+          (stageBucket === "prospect" ? 8 : stageBucket === "contacted" ? 6 : stageBucket === "engaged" ? 4 : stageBucket === "won" ? 2 : 0) -
+          (!hasContact && !hasReach ? 8 : 0) -
+          (stageBucket === "dead" ? 40 : 0)
+        );
         const searchHaystack = [
           profile.displayName,
-          profile.primaryEmail,
-          profile.contactName,
-          profile.contactEmail,
+          primaryEmail,
+          contactName,
+          contactEmail,
           contactType,
           ...(profile.aliases || []),
-          ...(profile.talentTypes || []),
-          ...(profile.sources || []),
-          ...(genres || []),
-          ...(locations || []),
-          ...(hitTracks || []),
+          ...talentTypes,
+          ...sources,
+          ...genres,
+          ...locations,
+          ...hitTracks,
           profile.instagramHandle,
           profile.tiktokHandle,
           profile.spotifyUrl,
           profile.profileSummary,
           profile.curatorPageUrl,
-          ...(profile.curatedArtists || []),
+          ...curatedArtists,
+          dominantMetricLabel,
+          scoutReason,
+          scoutNextAction,
+          scoutState.note,
+          scoutState.lastReviewedBy,
+          ...owners,
         ].filter(Boolean).join(" ").toLowerCase();
         return {
           ...profile,
+          talentTypes,
+          sources,
+          curatedArtists,
           genres,
           primaryGenre,
           locations,
           hitTracks,
           stageIds,
+          primaryEmail,
+          contactName,
+          contactEmail,
           contactType,
           contactLabel,
+          scoutMetrics: {
+            instagram: instagramFollowersValue,
+            tiktok: tiktokFollowersValue,
+            spotify: spotifyMonthlyListenersValue,
+          },
+          dominantScoutPlatform: dominantReach.platform,
+          dominantScoutMetricLabel: dominantMetricLabel,
+          hasContact,
+          hasDirectEmail,
+          hasReach,
+          isCurator,
+          owners,
+          primaryOwner: String(primaryScoutRecord?.owner || owners[0] || "").trim(),
+          primaryScoutRecord,
+          stageBucket,
+          isClosedScoutStage,
+          scoutDecision,
+          scoutDecisionLabel: SCOUT_DECISION_LABELS[scoutDecision] || SCOUT_DECISION_LABELS.unreviewed,
+          scoutDecisionNote: scoutState.note,
+          scoutLastReviewedAt: scoutState.lastReviewedAt,
+          scoutLastReviewedBy: scoutState.lastReviewedBy,
+          scoutReviewCount: scoutState.reviewCount,
+          scoutPromotedAt: scoutState.promotedAt,
+          scoutPromotedBy: scoutState.promotedBy,
+          scoutPromotedProjectId: scoutState.promotedProjectId,
+          scoutQueueId,
+          scoutQueueLabel: SCOUT_QUEUE_LABELS[scoutQueueId] || SCOUT_QUEUE_LABELS.qualify,
+          scoutNextAction,
+          scoutReason,
+          scoutScore,
           searchHaystack,
         };
       }),
-    [workspaceTalentProfiles, workspaceProjectIds]
+    [workspaceScoutState, workspaceTalentProfiles, workspaceProjectIds]
   );
   const scoutTypeOptions = useMemo(
     () => uniqStrings(scoutBaseProfiles.flatMap(profile => profile.talentTypes || []).filter(Boolean)).sort((a, b) => a.localeCompare(b)),
@@ -3929,8 +4192,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     if (scoutFollowerSliderMax >= 250000) return 10000;
     return 1000;
   }, [scoutFollowerSliderMax]);
-  const scoutProfiles = useMemo(() => {
-    const query = scoutQuery.trim().toLowerCase();
+  const scoutFilteredBaseProfiles = useMemo(() => {
+    const query = deferredScoutQuery.trim().toLowerCase();
     return scoutBaseProfiles
       .filter(profile => {
         if (query && !profile.searchHaystack.includes(query)) return false;
@@ -3940,40 +4203,98 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         if (scoutContactTypeFilter !== "all" && profile.contactType !== scoutContactTypeFilter) return false;
         if (scoutFollowerMin > 0 && scoutPlatformMetric(profile).value < scoutFollowerMin) return false;
         return true;
-      })
-      .sort((a, b) => {
-        const metricCompare = scoutPlatformMetric(b).value - scoutPlatformMetric(a).value;
-        if (metricCompare !== 0) return metricCompare;
-        const listenerCompare = parseMl(b.spotifyMonthlyListeners || "") - parseMl(a.spotifyMonthlyListeners || "");
-        if (listenerCompare !== 0) return listenerCompare;
-        return a.displayName.localeCompare(b.displayName);
       });
   }, [
+    deferredScoutQuery,
     scoutBaseProfiles,
     scoutContactTypeFilter,
     scoutFollowerMin,
     scoutGenreFilter,
     scoutPlatformMetric,
-    scoutQuery,
     scoutSourceFilter,
     scoutTypeFilter,
+  ]);
+  const scoutQuickFilterCounts = useMemo(() => {
+    const counts = {
+      all: scoutFilteredBaseProfiles.length,
+      ready: 0,
+      "contact-gap": 0,
+      "reach-gap": 0,
+      artists: 0,
+      curators: 0,
+    };
+    scoutFilteredBaseProfiles.forEach(profile => {
+      if (matchesScoutFocusFilter(profile, "ready")) counts.ready += 1;
+      if (matchesScoutFocusFilter(profile, "contact-gap")) counts["contact-gap"] += 1;
+      if (matchesScoutFocusFilter(profile, "reach-gap")) counts["reach-gap"] += 1;
+      if (matchesScoutFocusFilter(profile, "artists")) counts.artists += 1;
+      if (matchesScoutFocusFilter(profile, "curators")) counts.curators += 1;
+    });
+    return counts;
+  }, [matchesScoutFocusFilter, scoutFilteredBaseProfiles]);
+  const scoutWorkflowCounts = useMemo(() => {
+    const counts = {
+      all: scoutFilteredBaseProfiles.length,
+      unreviewed: 0,
+      needs_info: 0,
+      qualified: 0,
+      promoted: 0,
+      passed: 0,
+      parked: 0,
+    };
+    scoutFilteredBaseProfiles.forEach(profile => {
+      const key = profile.scoutDecision || "unreviewed";
+      counts[key] = (counts[key] || 0) + 1;
+    });
+    return counts;
+  }, [scoutFilteredBaseProfiles]);
+  const scoutProfiles = useMemo(() => {
+    return scoutFilteredBaseProfiles
+      .filter(profile => matchesScoutWorkflowFilter(profile, scoutWorkflowFilter))
+      .filter(profile => matchesScoutFocusFilter(profile, scoutFocusFilter))
+      .sort((a, b) => {
+        if (scoutSortMode === "name") return a.displayName.localeCompare(b.displayName);
+        if (scoutSortMode === "stage") {
+          const stageCompare = (SCOUT_STAGE_SORT_ORDER[a.stageBucket] ?? 99) - (SCOUT_STAGE_SORT_ORDER[b.stageBucket] ?? 99);
+          if (stageCompare !== 0) return stageCompare;
+        }
+        if (scoutSortMode === "reach") {
+          const metricCompare = scoutPlatformMetric(b).value - scoutPlatformMetric(a).value;
+          if (metricCompare !== 0) return metricCompare;
+        }
+        const scoreCompare = b.scoutScore - a.scoutScore;
+        if (scoreCompare !== 0) return scoreCompare;
+        const metricCompare = scoutPlatformMetric(b).value - scoutPlatformMetric(a).value;
+        if (metricCompare !== 0) return metricCompare;
+        const listenerCompare = (b.scoutMetrics?.spotify || 0) - (a.scoutMetrics?.spotify || 0);
+        if (listenerCompare !== 0) return listenerCompare;
+        return a.displayName.localeCompare(b.displayName);
+      });
+  }, [
+    matchesScoutFocusFilter,
+    matchesScoutWorkflowFilter,
+    scoutFilteredBaseProfiles,
+    scoutFocusFilter,
+    scoutPlatformMetric,
+    scoutSortMode,
+    scoutWorkflowFilter,
   ]);
   const scoutOverview = useMemo(() => {
     let artists = 0;
     let curators = 0;
     let withContact = 0;
     let withReach = 0;
+    let ready = 0;
+    let contactGap = 0;
+    let reachGap = 0;
     scoutProfiles.forEach(profile => {
-      if ((profile.talentTypes || []).includes("Curator")) curators += 1;
+      if (profile.isCurator) curators += 1;
       else artists += 1;
-      if (profile.primaryEmail || profile.contactEmail || profile.contactName) withContact += 1;
-      if (
-        parseMl(profile.instagramFollowers || "") > 0 ||
-        parseMl(profile.tiktokFollowers || "") > 0 ||
-        parseMl(profile.spotifyMonthlyListeners || "") > 0
-      ) {
-        withReach += 1;
-      }
+      if (profile.hasContact) withContact += 1;
+      if (profile.hasReach) withReach += 1;
+      if (profile.hasContact && profile.hasReach && !profile.isClosedScoutStage) ready += 1;
+      if (!profile.hasContact && profile.hasReach && !profile.isClosedScoutStage) contactGap += 1;
+      if (profile.hasContact && !profile.hasReach && !profile.isClosedScoutStage) reachGap += 1;
     });
     return {
       leads: scoutProfiles.length,
@@ -3981,8 +4302,38 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       curators,
       withContact,
       withReach,
+      ready,
+      contactGap,
+      reachGap,
     };
   }, [scoutProfiles]);
+  const scoutActiveFilters = useMemo(() => {
+    const active = [];
+    if (scoutQuery.trim()) active.push(`Query: ${scoutQuery.trim()}`);
+    if (scoutTypeFilter !== "all") active.push(`Type: ${scoutTypeFilter}`);
+    if (scoutSourceFilter !== "all") active.push(`Source: ${TALENT_SOURCE_LABELS[scoutSourceFilter] || scoutSourceFilter}`);
+    if (scoutGenreFilter !== "all") active.push(`Genre: ${scoutGenreFilter}`);
+    if (scoutContactTypeFilter !== "all") active.push(`Contact: ${scoutContactTypeFilter}`);
+    if (scoutFollowerMin > 0) active.push(`Min ${fmtCompact(scoutFollowerMin)} ${scoutPlatformLabel.toLowerCase()}`);
+    if (scoutFocusFilter !== "all") active.push(`Queue: ${SCOUT_FOCUS_FILTERS.find(filter => filter.id === scoutFocusFilter)?.label || scoutFocusFilter}`);
+    if (scoutWorkflowFilter !== "all") active.push(`Workflow: ${SCOUT_WORKFLOW_FILTERS.find(filter => filter.id === scoutWorkflowFilter)?.label || scoutWorkflowFilter}`);
+    if (scoutSortMode !== "recommended") active.push(`Sort: ${SCOUT_SORT_OPTIONS.find(option => option.id === scoutSortMode)?.label || scoutSortMode}`);
+    return active;
+  }, [
+    scoutContactTypeFilter,
+    scoutFocusFilter,
+    scoutFollowerMin,
+    scoutGenreFilter,
+    scoutPlatformLabel,
+    scoutQuery,
+    scoutSortMode,
+    scoutSourceFilter,
+    scoutTypeFilter,
+    scoutWorkflowFilter,
+  ]);
+  const scoutHasActiveFilters = scoutActiveFilters.length > 0;
+  const scoutTopLead = scoutProfiles[0] || null;
+  const scoutSearchPending = scoutQuery.trim().toLowerCase() !== deferredScoutQuery.trim().toLowerCase();
   const liveCrmBaseProfiles = useMemo(
     () => workspaceTalentProfiles.filter(
       profile =>
@@ -4418,6 +4769,18 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   useEffect(() => {
     setScoutFollowerMin(prev => Math.min(prev, scoutFollowerSliderMax));
   }, [scoutFollowerSliderMax]);
+  const resetScoutFilters = useCallback(() => {
+    setScoutQuery("");
+    setScoutTypeFilter("all");
+    setScoutSourceFilter("all");
+    setScoutGenreFilter("all");
+    setScoutContactTypeFilter("all");
+    setScoutPlatformFilter("instagram");
+    setScoutFollowerMin(0);
+    setScoutFocusFilter("all");
+    setScoutWorkflowFilter("all");
+    setScoutSortMode("recommended");
+  }, []);
   const exportScoutView = () => {
     if (!scoutProfiles.length) {
       flash("No scout leads are in the current view yet", "err");
@@ -5334,6 +5697,44 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     borderRadius: 999,
     lineHeight: 1,
   });
+  const scoutQueueTone = queueId => {
+    switch (queueId) {
+      case "ready":
+        return { fg: C.gn, bg: C.gb };
+      case "contact-gap":
+        return { fg: C.ab, bg: C.abb };
+      case "reach-gap":
+        return { fg: C.pr, bg: C.pb };
+      case "curator-review":
+      case "live":
+        return { fg: C.lv, bg: C.lvb };
+      case "parked":
+        return { fg: C.rd, bg: C.rb };
+      default:
+        return { fg: C.ts, bg: C.sa };
+    }
+  };
+  const scoutFocusTone = filterId => {
+    if (filterId === "all") return { fg: C.ac, bg: C.al };
+    if (filterId === "artists") return { fg: C.bu, bg: C.bb };
+    if (filterId === "curators") return { fg: C.lv, bg: C.lvb };
+    return scoutQueueTone(filterId);
+  };
+  const scoutDecisionTone = decisionId => {
+    switch (decisionId) {
+      case "needs_info":
+        return { fg: C.ab, bg: C.abb };
+      case "qualified":
+        return { fg: C.ac, bg: C.al };
+      case "promoted":
+        return { fg: C.gn, bg: C.gb };
+      case "passed":
+      case "parked":
+        return { fg: C.rd, bg: C.rb };
+      default:
+        return { fg: C.ts, bg: C.sa };
+    }
+  };
   const lockStyle = locked => (locked ? { opacity: 0.55, cursor: "not-allowed" } : {});
   const logAction = useCallback((project, artistName, action, kind = "event", extra = {}) => {
     return addLog(project, artistName, action, kind, { ...extra, actor: extra.actor || currentActor });
@@ -6631,6 +7032,30 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     return nextProjects;
   };
 
+  const saveWorkspaceScoutState = useCallback(async updater => {
+    const workspaceId = selectedWorkspace?.id || DEFAULT_WORKSPACE.id;
+    const nextState = normalizeScoutWorkspaceState(
+      typeof updater === "function" ? updater(workspaceScoutState) : updater
+    );
+    const hasWorkspaceProject = projects.some(project => String(project.workspaceId || DEFAULT_WORKSPACE.id) === workspaceId);
+    if (!hasWorkspaceProject) {
+      flash("No workspace record is available for Scout changes yet", "err");
+      return null;
+    }
+    const nextProjects = projects.map(project => {
+      if (String(project.workspaceId || DEFAULT_WORKSPACE.id) !== workspaceId) return project;
+      return {
+        ...project,
+        settings: {
+          ...(project.settings || {}),
+          scoutState: nextState,
+        },
+      };
+    });
+    await saveProjectsList(nextProjects);
+    return nextState;
+  }, [projects, saveProjectsList, selectedWorkspace?.id, workspaceScoutState]);
+
   const saveProjectFast = nextProj => {
     const updated = projects.map(p => p.id === nextProj.id ? nextProj : p);
     setProjects(updated);
@@ -7796,6 +8221,108 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     await saveProjectsList(projects.map(project => project.id === targetProject.id ? nextProject : project));
     flash(nextFollowUp ? `Follow-up: ${sD(nextFollowUp)}` : "Follow-up cleared");
   };
+
+  const updateScoutWorkflowEntry = useCallback(async (profileId, updater) => {
+    const normalizedProfileId = String(profileId || "").trim();
+    if (!normalizedProfileId) return null;
+    return saveWorkspaceScoutState(prev => {
+      const current = normalizeScoutWorkspaceEntry(prev?.[normalizedProfileId] || {});
+      const patch = typeof updater === "function" ? updater(current) : updater;
+      return {
+        ...(prev || {}),
+        [normalizedProfileId]: normalizeScoutWorkspaceEntry({
+          ...current,
+          ...(patch || {}),
+        }),
+      };
+    });
+  }, [saveWorkspaceScoutState]);
+
+  const recordScoutReview = useCallback(async profile => {
+    if (!profile?.id) return null;
+    const now = new Date().toISOString();
+    return updateScoutWorkflowEntry(profile.id, current => ({
+      ...current,
+      lastReviewedAt: now,
+      lastReviewedBy: currentActor,
+      reviewCount: Math.max(0, Number(current.reviewCount || 0) || 0) + 1,
+    }));
+  }, [currentActor, updateScoutWorkflowEntry]);
+
+  const openScoutReview = useCallback(async profile => {
+    if (!profile?.id) {
+      flash("No shared talent profile found yet", "err");
+      return;
+    }
+    await recordScoutReview(profile);
+    openTalentProfileById(profile.id, "kickoff");
+  }, [recordScoutReview]);
+
+  const applyScoutDecision = useCallback(async (profile, decision, options = {}) => {
+    if (!requireEditor()) return false;
+    if (!profile?.id) {
+      flash("No shared talent profile found yet", "err");
+      return false;
+    }
+    const normalizedDecision = normalizeScoutDecision(decision);
+    const now = new Date().toISOString();
+    const note = String(options.note || "").trim();
+    await updateScoutWorkflowEntry(profile.id, current => ({
+      ...current,
+      decision: normalizedDecision,
+      note: note || current.note,
+      nextAction: String(options.nextAction || "").trim() || current.nextAction,
+      decisionAt: now,
+      decisionBy: currentActor,
+      lastReviewedAt: now,
+      lastReviewedBy: currentActor,
+      reviewCount: Math.max(0, Number(current.reviewCount || 0) || 0) + (options.incrementReview === false ? 0 : 1),
+      promotedAt: normalizedDecision === "promoted" ? now : current.promotedAt,
+      promotedBy: normalizedDecision === "promoted" ? currentActor : current.promotedBy,
+      promotedProjectId: normalizedDecision === "promoted"
+        ? String(options.promotedProjectId || current.promotedProjectId || profile.primaryScoutRecord?.projectId || "")
+        : current.promotedProjectId,
+    }));
+    flash(`${profile.displayName} marked ${SCOUT_DECISION_LABELS[normalizedDecision] || "Updated"}`);
+    return true;
+  }, [currentActor, updateScoutWorkflowEntry]);
+
+  const assignScoutLeadToCurrentActor = useCallback(async profile => {
+    if (!requireEditor()) return;
+    const record = profile?.primaryScoutRecord;
+    if (!record?.projectId || !record?.artistName) {
+      flash("No kickoff source record is attached to this scout lead yet", "err");
+      return;
+    }
+    await updateTalentOverviewKickoffOwner(record, currentActor);
+    await recordScoutReview(profile);
+  }, [currentActor, recordScoutReview]);
+
+  const promoteScoutLeadToKickoff = useCallback(async profile => {
+    if (!requireEditor()) return;
+    const record = profile?.primaryScoutRecord;
+    if (!record?.projectId || !record?.artistName) {
+      flash("This scout lead does not have a kickoff source record yet", "err");
+      return;
+    }
+    const normalizedStage = normalizeStageId(record.stage || "prospect");
+    if (normalizedStage === "dead" || normalizedStage === "live") {
+      flash("Only active pre-live scout leads can move into Kickoff", "err");
+      return;
+    }
+    if (!String(record.owner || "").trim()) {
+      await updateTalentOverviewKickoffOwner(record, currentActor);
+    }
+    await applyScoutDecision(profile, "promoted", {
+      note: profile.scoutDecisionNote || `Promoted to Kickoff by ${currentActor}`,
+      nextAction: "Open in Kickoff",
+      promotedProjectId: record.projectId,
+      incrementReview: false,
+    });
+    setScreen("kickoff");
+    updateWorkspaceUrl("", "", "", "");
+    openTalentProfileById(profile.id, "kickoff");
+  }, [applyScoutDecision, currentActor]);
 
   const openTalentOverviewKickoffEditor = record => {
     if (!record?.projectId || !record?.artistName) return;
@@ -11797,11 +12324,6 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
 
   // ═══ SCOUT ═══
   if (screen === "scout") {
-    const scoutPlatformLabel = scoutPlatformFilter === "tiktok"
-      ? "TikTok followers"
-      : scoutPlatformFilter === "spotify"
-        ? "Monthly listeners"
-        : "Instagram followers";
     return (
       <div style={{ fontFamily: ft, background: C.bg, minHeight: "100vh", color: C.tx }}>
         <Toast /><style>{css}</style>
@@ -11833,16 +12355,17 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                   <span style={{ ...mkP(true, C.ab, C.abb), cursor: "default" }}>{scoutOverview.leads} scout leads</span>
                   <span style={{ ...mkP(true, C.bu, C.bb), cursor: "default" }}>{scoutOverview.artists} artists</span>
                   <span style={{ ...mkP(true, C.gn, C.gb), cursor: "default" }}>{scoutOverview.curators} curators</span>
-                  <span style={{ ...mkP(true, C.pr, C.pb), cursor: "default" }}>{scoutOverview.withContact} with contact</span>
-                  <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{scoutOverview.withReach} with reach data</span>
+                  <span style={{ ...mkP(true, C.gn, C.gb), cursor: "default" }}>{scoutOverview.ready} ready now</span>
+                  <span style={{ ...mkP(true, C.ab, C.abb), cursor: "default" }}>{scoutOverview.contactGap} need contact</span>
+                  <span style={{ ...mkP(true, C.pr, C.pb), cursor: "default" }}>{scoutOverview.reachGap} need reach</span>
                 </div>
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(120px, 1fr))", gap: 10 }}>
                 {[
-                  ["Leads", scoutOverview.leads, C.ab, C.abb],
-                  ["Artists", scoutOverview.artists, C.bu, C.bb],
+                  ["Ready Now", scoutOverview.ready, C.gn, C.gb],
+                  ["Need Contact", scoutOverview.contactGap, C.ab, C.abb],
+                  ["Need Reach", scoutOverview.reachGap, C.pr, C.pb],
                   ["Curators", scoutOverview.curators, C.gn, C.gb],
-                  ["With Contact", scoutOverview.withContact, C.pr, C.pb],
                 ].map(([label, value, tone, bg]) => (
                   <div key={`scout-card-${label}`} style={{ borderRadius: 14, border: `1px solid ${C.bd}`, background: bg, padding: "14px 16px" }}>
                     <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 1.2, color: C.tt, marginBottom: 8 }}>{label}</div>
@@ -11854,51 +12377,93 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
           </div>
 
           <div style={{ ...cS, padding: "18px 20px", marginBottom: 16 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "flex-start", flexWrap: "wrap", marginBottom: 12 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "minmax(280px, 1.4fr) minmax(260px, 1fr)", gap: 16, alignItems: "start" }}>
               <div>
                 <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>Scout Actions</div>
                 <div style={{ fontSize: 12, color: C.ts, maxWidth: 620 }}>
-                  Export the exact scout slice you are looking at. This is the clean place to hunt by metadata before leads move into kickoff.
+                  Default sort now surfaces the highest-signal leads first. Open the current top lead, jump between quick queues, or reset back to the full scout list when you want a fresh pass.
                 </div>
+                {scoutTopLead && (
+                  <div style={{ marginTop: 12, borderRadius: 14, border: `1px solid ${C.bd}`, background: C.sf, padding: "14px 16px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
+                      <div>
+                        <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 1.2, color: C.tt, marginBottom: 8 }}>Top lead right now</div>
+                        <div style={{ fontSize: 18, fontWeight: 800, lineHeight: 1.1 }}>{scoutTopLead.displayName}</div>
+                      </div>
+                      <span style={{ ...mkP(true, scoutQueueTone(scoutTopLead.scoutQueueId).fg, scoutQueueTone(scoutTopLead.scoutQueueId).bg), cursor: "default" }}>
+                        {scoutTopLead.scoutQueueLabel}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: 12, color: C.ts, lineHeight: 1.6, marginTop: 8 }}>{scoutTopLead.scoutReason}</div>
+                    <div style={{ fontSize: 11, color: C.tt, marginTop: 8 }}>Next: {scoutTopLead.scoutNextAction}</div>
+                  </div>
+                )}
               </div>
               <div style={{ display: "grid", gap: 8, justifyItems: "end" }}>
                 <div style={{ fontSize: 11, color: C.tt, textAlign: "right" }}>
-                  Gender filtering is next once the profile field is added.
+                  {scoutHasActiveFilters
+                    ? `${scoutActiveFilters.length} active filter${scoutActiveFilters.length === 1 ? "" : "s"} shaping this queue.`
+                    : "Recommended sort promotes contact-ready, signal-rich leads first."}
                 </div>
-                <button onClick={exportScoutView} style={{ ...actionBtn(false, "neutral"), ...lockStyle(!scoutProfiles.length) }}>
-                  Export Current View CSV
-                </button>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                  <button
+                    onClick={() => { if (scoutTopLead) openTalentProfileFromWorkspaceProfile(scoutTopLead); }}
+                    disabled={!scoutTopLead}
+                    style={{ ...actionBtn(true, "accent"), ...lockStyle(!scoutTopLead) }}
+                  >
+                    Open Top Lead
+                  </button>
+                  <button onClick={resetScoutFilters} disabled={!scoutHasActiveFilters} style={{ ...actionBtn(false, "neutral"), ...lockStyle(!scoutHasActiveFilters) }}>
+                    Reset Filters
+                  </button>
+                  <button onClick={exportScoutView} style={{ ...actionBtn(false, "neutral"), ...lockStyle(!scoutProfiles.length) }}>
+                    Export Current View CSV
+                  </button>
+                </div>
               </div>
             </div>
           </div>
 
           <div style={{ ...cS, padding: "18px 20px", marginBottom: 16 }}>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
-              <div style={{ fontSize: 12, color: C.ts }}>
-                {scoutProfiles.length} scout lead{scoutProfiles.length === 1 ? "" : "s"} shown
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <div style={{ fontSize: 12, color: C.ts }}>
+                  {scoutProfiles.length} scout lead{scoutProfiles.length === 1 ? "" : "s"} shown
+                </div>
+                {scoutSearchPending && <span style={{ ...mkP(true, C.pr, C.pb), cursor: "default" }}>Refreshing search...</span>}
               </div>
-              <div style={{ display: "flex", gap: 6, border: `1px solid ${C.bd}`, borderRadius: 14, padding: 4 }}>
-                {[
-                  ["Cards", "cards"],
-                  ["Table", "table"],
-                ].map(([label, mode]) => (
-                  <button
-                    key={`scout-view-${mode}`}
-                    onClick={() => setScoutViewMode(mode)}
-                    style={{
-                      border: "none",
-                      borderRadius: 10,
-                      background: scoutViewMode === mode ? C.ac : "transparent",
-                      color: scoutViewMode === mode ? "#fff" : C.ts,
-                      fontWeight: 700,
-                      fontSize: 12,
-                      cursor: "pointer",
-                      padding: "8px 14px",
-                    }}
-                  >
-                    {label}
-                  </button>
-                ))}
+              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+                <label style={{ display: "grid", gap: 6, fontSize: 12, color: C.ts }}>
+                  <span>Sort by</span>
+                  <select value={scoutSortMode} onChange={e => setScoutSortMode(e.target.value)} style={{ ...iS, width: 150 }}>
+                    {SCOUT_SORT_OPTIONS.map(option => (
+                      <option key={`scout-sort-${option.id}`} value={option.id}>{option.label}</option>
+                    ))}
+                  </select>
+                </label>
+                <div style={{ display: "flex", gap: 6, border: `1px solid ${C.bd}`, borderRadius: 14, padding: 4 }}>
+                  {[
+                    ["Cards", "cards"],
+                    ["Table", "table"],
+                  ].map(([label, mode]) => (
+                    <button
+                      key={`scout-view-${mode}`}
+                      onClick={() => setScoutViewMode(mode)}
+                      style={{
+                        border: "none",
+                        borderRadius: 10,
+                        background: scoutViewMode === mode ? C.ac : "transparent",
+                        color: scoutViewMode === mode ? "#fff" : C.ts,
+                        fontWeight: 700,
+                        fontSize: 12,
+                        cursor: "pointer",
+                        padding: "8px 14px",
+                      }}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 12, alignItems: "end" }}>
@@ -11973,6 +12538,43 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                 />
               </div>
             </div>
+            <div style={{ display: "grid", gap: 10, marginTop: 14 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.1, textTransform: "uppercase", color: C.tt, marginBottom: 4 }}>Quick queues</div>
+                  <div style={{ fontSize: 12, color: C.ts }}>
+                    One-tap slices inside the current filter set so you can move through the most actionable scout lanes faster.
+                  </div>
+                </div>
+                {scoutHasActiveFilters && <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{scoutActiveFilters.length} active</span>}
+              </div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                {SCOUT_FOCUS_FILTERS.map(filter => {
+                  const tone = scoutFocusTone(filter.id);
+                  const count = scoutQuickFilterCounts[filter.id] || 0;
+                  const active = scoutFocusFilter === filter.id;
+                  return (
+                    <button
+                      key={`scout-focus-${filter.id}`}
+                      onClick={() => setScoutFocusFilter(filter.id)}
+                      disabled={!count && !active}
+                      style={{ ...mkP(active, tone.fg, tone.bg), ...lockStyle(!count && !active) }}
+                    >
+                      {filter.label} {count}
+                    </button>
+                  );
+                })}
+              </div>
+              {scoutActiveFilters.length > 0 && (
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  {scoutActiveFilters.map(label => (
+                    <span key={`scout-active-filter-${label}`} style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>
+                      {label}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
 
           {!scoutProfiles.length ? (
@@ -11981,14 +12583,32 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
               <div style={{ fontSize: 12, color: C.ts, maxWidth: 520, margin: "0 auto" }}>
                 Try widening the filters. Scout is meant to help you hunt by metadata before anything turns into active kickoff work.
               </div>
+              {scoutHasActiveFilters && (
+                <div style={{ marginTop: 14 }}>
+                  <button onClick={resetScoutFilters} style={actionBtn(false, "neutral")}>
+                    Reset Scout Filters
+                  </button>
+                </div>
+              )}
             </div>
           ) : scoutViewMode === "cards" ? (
             <div style={{ display: "grid", gap: 14 }}>
               {scoutProfiles.map(profile => {
                 const currentStage = kickoffStageBucketLabel(kickoffStageBucket(profile.stageIds || []));
                 const reachParts = liveRosterReachParts(profile);
+                const queueTone = scoutQueueTone(profile.scoutQueueId);
                 return (
-                  <div key={`scout-card-${profile.id}`} onClick={() => openTalentProfileFromWorkspaceProfile(profile)} style={{ ...cS, padding: "18px 20px", cursor: "pointer" }}>
+                  <div
+                    key={`scout-card-${profile.id}`}
+                    onClick={() => openTalentProfileFromWorkspaceProfile(profile)}
+                    style={{
+                      ...cS,
+                      padding: "18px 20px",
+                      cursor: "pointer",
+                      borderColor: scoutTopLead?.id === profile.id ? C.ac : C.bd,
+                      background: scoutTopLead?.id === profile.id ? C.al : C.cb,
+                    }}
+                  >
                     <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "flex-start", flexWrap: "wrap", marginBottom: 14 }}>
                       <div style={{ display: "grid", gap: 8 }}>
                         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
@@ -11997,12 +12617,16 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                             <span key={`${profile.id}:scout-type:${type}`} style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{type}</span>
                           ))}
                           {profile.primaryGenre && <span style={{ ...mkP(true, C.ab, C.abb), cursor: "default" }}>{profile.primaryGenre}</span>}
+                          <span style={{ ...mkP(true, queueTone.fg, queueTone.bg), cursor: "default" }}>{profile.scoutQueueLabel}</span>
                           <span style={{ ...mkP(true, sc(kickoffStageBucket(profile.stageIds || []), C), sb(kickoffStageBucket(profile.stageIds || []), C)), cursor: "default" }}>{currentStage}</span>
                         </div>
                         <div style={{ fontSize: 12, color: C.ts, display: "flex", gap: 10, flexWrap: "wrap" }}>
                           <span>{profile.primaryEmail || "No email yet"}</span>
                           {profile.contactLabel && <span>{profile.contactLabel}</span>}
                           {profile.locations?.[0] && <span>{profile.locations[0]}</span>}
+                        </div>
+                        <div style={{ fontSize: 12, color: C.ts, lineHeight: 1.6 }}>
+                          {profile.scoutReason}
                         </div>
                         <div style={{ fontSize: 12, color: C.tt, lineHeight: 1.6 }}>
                           {reachParts.join(" · ") || scoutPlatformMetric(profile).label}
@@ -12049,10 +12673,19 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                     {scoutProfiles.map(profile => {
                       const currentStage = kickoffStageBucketLabel(kickoffStageBucket(profile.stageIds || []));
                       const reachParts = liveRosterReachParts(profile);
+                      const queueTone = scoutQueueTone(profile.scoutQueueId);
                       return (
-                        <tr key={`scout-row-${profile.id}`}>
+                        <tr
+                          key={`scout-row-${profile.id}`}
+                          onClick={() => openTalentProfileFromWorkspaceProfile(profile)}
+                          style={{ cursor: "pointer", background: scoutTopLead?.id === profile.id ? C.al : "transparent" }}
+                        >
                           <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}` }}>
                             <div style={{ fontWeight: 700 }}>{profile.displayName}</div>
+                            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
+                              <span style={{ ...mkP(true, queueTone.fg, queueTone.bg), cursor: "default" }}>{profile.scoutQueueLabel}</span>
+                              <span style={{ fontSize: 11, color: C.tt }}>{profile.scoutNextAction}</span>
+                            </div>
                             <div style={{ fontSize: 11, color: C.tt, marginTop: 4 }}>
                               {[
                                 (profile.talentTypes || []).slice(0, 1).join(", "),
@@ -12062,7 +12695,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                             </div>
                           </td>
                           <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>
-                            {profile.primaryGenre || "Not categorized yet"}
+                            <div>{profile.primaryGenre || "Not categorized yet"}</div>
+                            <div style={{ fontSize: 11, color: C.tt, marginTop: 4 }}>{profile.scoutReason}</div>
                           </td>
                           <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}`, color: C.ts }}>
                             {reachParts.join(" · ") || scoutPlatformMetric(profile).label}
@@ -12079,7 +12713,10 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                             </span>
                           </td>
                           <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.sa}` }}>
-                            <button onClick={() => openTalentProfileFromWorkspaceProfile(profile)} style={actionBtn(false, "accent")}>
+                            <button
+                              onClick={e => { e.stopPropagation(); openTalentProfileFromWorkspaceProfile(profile); }}
+                              style={actionBtn(false, "accent")}
+                            >
                               View Talent
                             </button>
                           </td>
