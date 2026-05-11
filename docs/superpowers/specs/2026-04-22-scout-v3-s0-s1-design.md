@@ -1,26 +1,33 @@
-# Gem Finder Discovery Surface — S0 + S1 Foundation Design
+# Gem Finder Scout V3 Surface — S0 + S1 Foundation Design
 
 **Date**: 2026-04-22
 **Status**: Approved, pending spec review
-**Phase**: S0 + S1 of a 7-phase Discovery roadmap
+**Phase**: S0 + S1 of a 7-phase Scout V3 roadmap
 **Related**: [Scout V2 Operating Queue Spec](./../../scout-v2-operating-queue-spec.md)
 
 ## Context
 
 Gem Finder currently provides four workspace surfaces per workspace:
 
-- **Scout** — triage of pre-Kickoff talent (1,809 leads in the Songfinch workspace)
+- **Scout (V2)** — triage of pre-Kickoff talent (1,809 leads in the Songfinch workspace)
 - **Kickoff** — active A&R work (1,686 records)
 - **Live Roster** — launched campaigns (3 records)
 - **Reports** — staff-level reporting
 
-Scout was recently upgraded to V2 with decision state, review memory, and an action UI. However, V2 assumes leads already exist in the system. It does not answer: **where do new candidate artists come from?**
+Scout V2 was recently upgraded with decision state, review memory, and an action UI. However, V2 conflates two product modes: (a) triage of leads already in the pipeline, and (b) discovery of net-new artists. It does not answer: **where do new candidate artists come from?**
 
-This spec addresses that gap by introducing a new **Discovery** surface upstream of Scout and Kickoff. Discovery is where candidate artists are reviewed and approved or rejected before entering the Kickoff pipeline. Rejected candidates go to a permanent log that blocks future re-surfacing.
+This spec replaces Scout V2's surface with **Scout V3**: a true candidate-discovery queue with binary approve/reject decisions, agent-driven hunting (S3+), and a permanent rejection log that prevents re-surfacing. V2's triage decision UI relocates under Kickoff where active-stage triage actually belongs — see "Scout V2 → Kickoff migration" section for details.
+
+**Final product model after this work ships**:
+
+- **Scout** (V3) = pre-engagement candidate queue (replaces V2's surface)
+- **Kickoff** = engaged talent + active A&R triage (gains V2's decision UI)
+- **Live Roster** = launched campaigns
+- **Reports** = staff reporting
 
 ## Product statement
 
-Discovery answers one question immediately:
+Scout V3 answers one question immediately:
 
 > *"Is this candidate artist worth pursuing, and have we seen them before?"*
 
@@ -47,12 +54,16 @@ Each future phase gets its own brainstorm → spec → plan cycle.
 
 ### Core principle
 
-Discovery is **strictly upstream** of Scout and Kickoff. It does not know about those surfaces' internals. On approve, a candidate graduates into the existing `sharedTalent` + kickoff record pipeline — identical to manual entry today. No coupling in the other direction.
+**Scout V3 IS the new Scout surface.** It replaces the existing Scout V2 triage surface in the product model. The V2 decision UI (Qualify/Need Info/Pass/Park) relocates under Kickoff where active-stage triage actually belongs — see "Scout V2 → Kickoff migration" section.
+
+Scout V3 is **strictly upstream** of Kickoff. On approve, a candidate graduates into the existing `sharedTalent` + kickoff record pipeline — identical to manual entry today. No coupling in the other direction. Kickoff has no knowledge of Scout V3's internals; it just receives new pre-engagement records.
+
+During the build, V2 and V3 coexist behind a feature flag. Post-ship, V2's surface is removed entirely and Scout V3 takes the "Scout" name.
 
 ### Component diagram
 
 ```
-DISCOVERY SURFACE (new workspace tab)
+SCOUT V3 SURFACE (new workspace tab)
  ├─ Queue tab (pending candidates)
  └─ Rejection log tab (permanent history)
         │
@@ -60,67 +71,67 @@ DISCOVERY SURFACE (new workspace tab)
         │            with scoutDecision = 'qualified' (bypasses Scout triage)
         │            record appears in Kickoff, not Scout default view
         │
-        │ reject  → moves to discovery_rejections (permanent blocklist)
+        │ reject  → moves to scout_rejections (permanent blocklist)
         ▼
 BLOCKLIST SERVICE (isBlocked)
- ├─ Checks: discovery_candidates (current pending)
- ├─ Checks: discovery_rejections (past rejected)
+ ├─ Checks: scout_candidates (current pending)
+ ├─ Checks: scout_rejections (past rejected)
  ├─ Checks: sharedTalent in Kickoff (via workspace projects, in-memory)
  └─ Checks: Live Roster (via workspace projects, in-memory)
         │
         ▼
 POSTGRES STORAGE
- ├─ discovery_candidates (ephemeral queue)
- └─ discovery_rejections (permanent memory)
+ ├─ scout_candidates (ephemeral queue)
+ └─ scout_rejections (permanent memory)
 ```
 
 ### Key architectural decisions
 
-1. **Discovery upstream, never downstream of Scout.** Scout does not know Discovery exists. Approval creates records at stage `prospect` with `scoutDecision = 'qualified'`, which Scout's default view hides via workflow filter.
+1. **Scout V3 replaces Scout, upstream of Kickoff.** The OLD Scout V2 surface (triage of pre-Kickoff leads) ceases to exist as a distinct view; its decision UI relocates under Kickoff. Approval in Scout V3 creates a `sharedTalent` + kickoff record at stage `prospect` with `kickoffDecision = 'qualified'` (renamed from `scoutDecision` per migration plan), ready for Kickoff's active-stage triage.
 
 2. **Blocklist as a service, not a field.** Single `isBlocked(workspaceId, identity)` function checks all four sources. Used on every candidate add (manual + agent-produced in S3+).
 
-3. **Candidates ephemeral, rejections permanent.** `discovery_candidates` rows delete on approve/reject. `discovery_rejections` grows forever but stays small (~5 KB/row, queried rarely).
+3. **Candidates ephemeral, rejections permanent.** `scout_candidates` rows delete on approve/reject. `scout_rejections` grows forever but stays small (~5 KB/row, queried rarely).
 
 4. **Multi-field identity resolution.** A candidate matches existing records if ANY identity field collides: Spotify ID → MusicBrainz ID → primary email → IG handle → TikTok handle → YouTube handle → SoundCloud handle → canonical name (last resort, highest false-positive rate).
 
-5. **Two storage modes.** SQL for candidates/rejections (volume, query needs). JSON in `project.settings.discoveryWeights` for weights/preferences (small, frequently-tuned — populated in S2, noted here for schema planning).
+5. **Two storage modes.** SQL for candidates/rejections (volume, query needs). JSON in `project.settings.scoutV3Weights` for weights/preferences (small, frequently-tuned — populated in S2, noted here for schema planning).
 
-6. **API routes namespaced** under `/api/ar/discovery/` matching existing `/api/ar/*` patterns.
+6. **API routes namespaced** under `/api/ar/scout/` matching existing `/api/ar/*` patterns.
 
 ### Storage pattern (IMPORTANT — matches existing code)
 
 **This project has no `db/migrations/` directory and no migration tool.** Existing tables (`gemfinder_workspace_state`, `gemfinder_workspace_snapshots`, auth tables) are created at runtime via an `ensureSchema()` function inside each store module using `CREATE TABLE IF NOT EXISTS`. See `lib/gemfinder/project-store.ts` line 13-30 for the canonical example.
 
-Discovery follows the same pattern: `lib/gemfinder/discovery-store.ts` exports `ensureSchema()` that runs the CREATE TABLE statements on first use and caches a `schemaReady` flag thereafter. No separate migration file, no migration runner.
+Scout V3 follows the same pattern: `lib/gemfinder/scout-candidate-store.ts` exports `ensureSchema()` that runs the CREATE TABLE statements on first use and caches a `schemaReady` flag thereafter. No separate migration file, no migration runner.
 
 ### Files to create
 
 | File | Purpose |
 |---|---|
-| `lib/gemfinder/discovery-store.ts` | Candidate + rejection persistence. Contains `SCHEMA_SQL` constant + `ensureSchema()` function matching `project-store.ts` pattern. Exports CRUD functions for candidates and rejections. |
-| `lib/gemfinder/discovery-blocklist.ts` | Blocklist query service (`isBlocked`) |
-| `lib/gemfinder/discovery/identity.ts` | canonicalName, parseUrl, buildIdentity utilities |
-| `lib/gemfinder/discovery/validation.ts` | zod schemas for candidate payload |
-| `app/api/ar/discovery/candidates/route.ts` | GET, POST |
-| `app/api/ar/discovery/candidates/[id]/route.ts` | PATCH (approve/reject/edit) |
-| `app/api/ar/discovery/rejections/route.ts` | GET |
-| `app/api/ar/discovery/stats/route.ts` | GET counts for nav badges |
+| `lib/gemfinder/scout-candidate-store.ts` | Candidate + rejection persistence. Contains `SCHEMA_SQL` constant + `ensureSchema()` function matching `project-store.ts` pattern. Exports CRUD functions for candidates and rejections. |
+| `lib/gemfinder/scout-blocklist.ts` | Blocklist query service (`isBlocked`) |
+| `lib/gemfinder/scout/identity.ts` | canonicalName, parseUrl, buildIdentity utilities |
+| `lib/gemfinder/scout/validation.ts` | zod schemas for candidate payload |
+| `app/api/ar/scout/candidates/route.ts` | GET, POST |
+| `app/api/ar/scout/candidates/[id]/route.ts` | PATCH (approve/reject/edit) |
+| `app/api/ar/scout/rejections/route.ts` | GET |
+| `app/api/ar/scout/stats/route.ts` | GET counts for nav badges |
 | (Test files co-located alongside source) | vitest coverage |
 
 ### Files to modify
 
 | File | Change |
 |---|---|
-| `app/ar/GemFinderApp.jsx` | Add Discovery nav card; add `screen === 'discovery'` branch; change Scout V2 default workflow filter (see "Scout V2 filter change" below for exact line) |
+| `app/ar/GemFinderApp.jsx` | Add Scout V3 nav card; add `screen === 'scoutV3'` branch; change Scout V2 default workflow filter (see "Scout V2 filter change" below for exact line) |
 | `lib/gemfinder/project-store.ts` | Add new exported `addTalentToProject(workspaceId, projectId, candidatePayload, actor)` helper (new function — does not exist today; see Flow B for signature) |
 | `package.json` | Add vitest dev dependency + scripts |
-| `lib/gemfinder/types.ts` | Add DiscoveryCandidate, DiscoveryRejection, CandidateIdentity, BlocklistResult types |
+| `lib/gemfinder/types.ts` | Add ScoutCandidate, ScoutRejection, CandidateIdentity, BlocklistResult types |
 
 ### Referenced helpers that do not exist today (must be added as part of this spec's work)
 
 - `addTalentToProject` in `lib/gemfinder/project-store.ts` — currently talent mutations happen inline in `GemFinderApp.jsx` by splicing the JSONB state and calling `saveProjectsList`. This spec requires extracting the add-to-project logic into a reusable server-side helper. See Flow B for the signature.
-- The workspace scout state write on approve uses the `workspaceScoutState` shape already defined in Scout V2 (see `ff24d7f` commit). The Discovery approve handler writes directly to the JSONB blob under `project.settings.scoutState[talentId]` — no new persistence mechanism.
+- The workspace scout state write on approve uses the `workspaceScoutState` shape already defined in Scout V2 (see `ff24d7f` commit). The Scout V3 approve handler writes directly to the JSONB blob under `project.settings.scoutState[talentId]` — no new persistence mechanism.
 
 ### Explicit non-goals for S0 + S1
 
@@ -134,12 +145,12 @@ Discovery follows the same pattern: `lib/gemfinder/discovery-store.ts` exports `
 
 ## Data Model
 
-### Table: `discovery_candidates`
+### Table: `scout_candidates`
 
-Ephemeral queue. Row deleted on approve or reject. Table is created at runtime via `ensureSchema()` in `discovery-store.ts` using `CREATE TABLE IF NOT EXISTS` (matches existing `project-store.ts` pattern; no migration file).
+Ephemeral queue. Row deleted on approve or reject. Table is created at runtime via `ensureSchema()` in `scout-candidate-store.ts` using `CREATE TABLE IF NOT EXISTS` (matches existing `project-store.ts` pattern; no migration file).
 
 ```sql
-CREATE TABLE discovery_candidates (
+CREATE TABLE scout_candidates (
   id                          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id                TEXT NOT NULL,
 
@@ -204,24 +215,24 @@ CREATE TABLE discovery_candidates (
   updated_at                  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_disco_cand_workspace_created    ON discovery_candidates (workspace_id, created_at DESC);
-CREATE INDEX idx_disco_cand_workspace_score      ON discovery_candidates (workspace_id, score DESC NULLS LAST);
-CREATE INDEX idx_disco_cand_canonical_name       ON discovery_candidates (workspace_id, canonical_name);
-CREATE INDEX idx_disco_cand_spotify_artist_id    ON discovery_candidates (workspace_id, spotify_artist_id) WHERE spotify_artist_id IS NOT NULL;
-CREATE INDEX idx_disco_cand_instagram_handle     ON discovery_candidates (workspace_id, instagram_handle) WHERE instagram_handle IS NOT NULL;
-CREATE INDEX idx_disco_cand_tiktok_handle        ON discovery_candidates (workspace_id, tiktok_handle) WHERE tiktok_handle IS NOT NULL;
-CREATE INDEX idx_disco_cand_youtube_handle       ON discovery_candidates (workspace_id, youtube_handle) WHERE youtube_handle IS NOT NULL;
-CREATE INDEX idx_disco_cand_soundcloud_handle    ON discovery_candidates (workspace_id, soundcloud_handle) WHERE soundcloud_handle IS NOT NULL;
-CREATE INDEX idx_disco_cand_musicbrainz_id       ON discovery_candidates (workspace_id, musicbrainz_id) WHERE musicbrainz_id IS NOT NULL;
-CREATE INDEX idx_disco_cand_primary_email        ON discovery_candidates (workspace_id, primary_email) WHERE primary_email IS NOT NULL;
+CREATE INDEX idx_disco_cand_workspace_created    ON scout_candidates (workspace_id, created_at DESC);
+CREATE INDEX idx_disco_cand_workspace_score      ON scout_candidates (workspace_id, score DESC NULLS LAST);
+CREATE INDEX idx_disco_cand_canonical_name       ON scout_candidates (workspace_id, canonical_name);
+CREATE INDEX idx_disco_cand_spotify_artist_id    ON scout_candidates (workspace_id, spotify_artist_id) WHERE spotify_artist_id IS NOT NULL;
+CREATE INDEX idx_disco_cand_instagram_handle     ON scout_candidates (workspace_id, instagram_handle) WHERE instagram_handle IS NOT NULL;
+CREATE INDEX idx_disco_cand_tiktok_handle        ON scout_candidates (workspace_id, tiktok_handle) WHERE tiktok_handle IS NOT NULL;
+CREATE INDEX idx_disco_cand_youtube_handle       ON scout_candidates (workspace_id, youtube_handle) WHERE youtube_handle IS NOT NULL;
+CREATE INDEX idx_disco_cand_soundcloud_handle    ON scout_candidates (workspace_id, soundcloud_handle) WHERE soundcloud_handle IS NOT NULL;
+CREATE INDEX idx_disco_cand_musicbrainz_id       ON scout_candidates (workspace_id, musicbrainz_id) WHERE musicbrainz_id IS NOT NULL;
+CREATE INDEX idx_disco_cand_primary_email        ON scout_candidates (workspace_id, primary_email) WHERE primary_email IS NOT NULL;
 ```
 
-### Table: `discovery_rejections`
+### Table: `scout_rejections`
 
 Permanent blocklist. Snapshots candidate at time of rejection. Same `ensureSchema()` mechanism as candidates table.
 
 ```sql
-CREATE TABLE discovery_rejections (
+CREATE TABLE scout_rejections (
   id                          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id                TEXT NOT NULL,
 
@@ -248,15 +259,15 @@ CREATE TABLE discovery_rejections (
   rejected_at                 TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_disco_rej_workspace_rejected_at ON discovery_rejections (workspace_id, rejected_at DESC);
-CREATE INDEX idx_disco_rej_canonical_name        ON discovery_rejections (workspace_id, canonical_name);
-CREATE INDEX idx_disco_rej_spotify_artist_id     ON discovery_rejections (workspace_id, spotify_artist_id) WHERE spotify_artist_id IS NOT NULL;
-CREATE INDEX idx_disco_rej_instagram_handle      ON discovery_rejections (workspace_id, instagram_handle) WHERE instagram_handle IS NOT NULL;
-CREATE INDEX idx_disco_rej_tiktok_handle         ON discovery_rejections (workspace_id, tiktok_handle) WHERE tiktok_handle IS NOT NULL;
-CREATE INDEX idx_disco_rej_youtube_handle        ON discovery_rejections (workspace_id, youtube_handle) WHERE youtube_handle IS NOT NULL;
-CREATE INDEX idx_disco_rej_soundcloud_handle     ON discovery_rejections (workspace_id, soundcloud_handle) WHERE soundcloud_handle IS NOT NULL;
-CREATE INDEX idx_disco_rej_musicbrainz_id        ON discovery_rejections (workspace_id, musicbrainz_id) WHERE musicbrainz_id IS NOT NULL;
-CREATE INDEX idx_disco_rej_primary_email         ON discovery_rejections (workspace_id, primary_email) WHERE primary_email IS NOT NULL;
+CREATE INDEX idx_disco_rej_workspace_rejected_at ON scout_rejections (workspace_id, rejected_at DESC);
+CREATE INDEX idx_disco_rej_canonical_name        ON scout_rejections (workspace_id, canonical_name);
+CREATE INDEX idx_disco_rej_spotify_artist_id     ON scout_rejections (workspace_id, spotify_artist_id) WHERE spotify_artist_id IS NOT NULL;
+CREATE INDEX idx_disco_rej_instagram_handle      ON scout_rejections (workspace_id, instagram_handle) WHERE instagram_handle IS NOT NULL;
+CREATE INDEX idx_disco_rej_tiktok_handle         ON scout_rejections (workspace_id, tiktok_handle) WHERE tiktok_handle IS NOT NULL;
+CREATE INDEX idx_disco_rej_youtube_handle        ON scout_rejections (workspace_id, youtube_handle) WHERE youtube_handle IS NOT NULL;
+CREATE INDEX idx_disco_rej_soundcloud_handle     ON scout_rejections (workspace_id, soundcloud_handle) WHERE soundcloud_handle IS NOT NULL;
+CREATE INDEX idx_disco_rej_musicbrainz_id        ON scout_rejections (workspace_id, musicbrainz_id) WHERE musicbrainz_id IS NOT NULL;
+CREATE INDEX idx_disco_rej_primary_email         ON scout_rejections (workspace_id, primary_email) WHERE primary_email IS NOT NULL;
 ```
 
 ### Reason codes (8 preset + other)
@@ -279,7 +290,7 @@ CREATE INDEX idx_disco_rej_primary_email         ON discovery_rejections (worksp
 ### TypeScript types (added to `lib/gemfinder/types.ts`)
 
 ```typescript
-export type DiscoveryCandidate = {
+export type ScoutCandidate = {
   id: string;
   workspaceId: string;
   displayName: string;
@@ -327,7 +338,7 @@ export type DiscoveryCandidate = {
   updatedAt: string;
 };
 
-export type DiscoveryRejectionReason =
+export type ScoutRejectionReason =
   | "already_signed"
   | "wrong_genre"
   | "no_contact"
@@ -338,7 +349,7 @@ export type DiscoveryRejectionReason =
   | "duplicate"
   | "other";
 
-export type DiscoveryRejection = {
+export type ScoutRejection = {
   id: string;
   workspaceId: string;
   displayName: string;
@@ -353,9 +364,9 @@ export type DiscoveryRejection = {
   bandcampUrl?: string;
   primaryEmail?: string;
   // candidateSnapshot is opaque audit data — stored as-is at rejection time.
-  // Typed loosely so future schema changes to DiscoveryCandidate don't break old snapshots on read.
+  // Typed loosely so future schema changes to ScoutCandidate don't break old snapshots on read.
   candidateSnapshot: Record<string, unknown>;
-  reasonCode: DiscoveryRejectionReason;
+  reasonCode: ScoutRejectionReason;
   reasonNote?: string;
   rejectedBy: string;
   rejectedAt: string;
@@ -402,7 +413,7 @@ export type BlocklistResult = BlocklistMatch | { blocked: false };
 ### Blocklist service signature
 
 ```typescript
-// lib/gemfinder/discovery-blocklist.ts
+// lib/gemfinder/scout-blocklist.ts
 export async function isBlocked(
   workspaceId: string,
   identity: CandidateIdentity,
@@ -426,8 +437,8 @@ export async function isBlocked(
 
 ### Sources checked (in order)
 
-1. **Candidates table** — `discovery_candidates WHERE workspace_id = $1 AND (identity match)` — excludes `options.excludeCandidateId` when editing
-2. **Rejections table** — `discovery_rejections WHERE workspace_id = $1 AND (identity match)` — skippable via `options.includeRejections = false`
+1. **Candidates table** — `scout_candidates WHERE workspace_id = $1 AND (identity match)` — excludes `options.excludeCandidateId` when editing
+2. **Rejections table** — `scout_rejections WHERE workspace_id = $1 AND (identity match)` — skippable via `options.includeRejections = false`
 3. **Kickoff + Live** — loads the workspace JSONB blob via existing `project-store.loadProjectsList()`, flattens `projects[].artists[]` into identity records, matches in JavaScript. Scale-appropriate at current ~2k artists.
 
 ### Blocklist SQL migration trigger (concrete thresholds)
@@ -435,8 +446,8 @@ export async function isBlocked(
 Migrate the Kickoff/Live portion of `isBlocked` from in-memory scan to a denormalized SQL index table (`workspace_talent_identity_index`) when ANY of these conditions is hit:
 
 - Workspace exceeds **10,000 artists** (currently 1,686 at Songfinch)
-- p95 `isBlocked` latency exceeds **300ms** (logged via `[DISCOVERY_BLOCKLIST]` slow-query warnings)
-- Blocklist queries consume more than **20% of request time** on Discovery routes
+- p95 `isBlocked` latency exceeds **300ms** (logged via `[SCOUT_BLOCKLIST]` slow-query warnings)
+- Blocklist queries consume more than **20% of request time** on Scout V3 routes
 
 The index table would be synthesized by a trigger on `gemfinder_workspace_state` writes, or by a nightly rebuild job. Defer until one of these thresholds is hit — they're unlikely at current scale.
 
@@ -454,7 +465,7 @@ Modal opens:
   ↓
 Client-side: normalize identity (canonical name, parse URLs → IDs/handles)
   ↓
-POST /api/ar/discovery/candidates
+POST /api/ar/scout/candidates
   ↓
 Server:
   1. zod validation → 400 on failure with field errors
@@ -487,10 +498,10 @@ Modal:
   • Optional note (carries as scoutDecisionNote in Kickoff record)
   • [Cancel] [✓ Approve into Kickoff]
   ↓
-PATCH /api/ar/discovery/candidates/[id]
+PATCH /api/ar/scout/candidates/[id]
   Body: { action: "approve", projectId, note? }
   ↓
-Server transaction (mixed: pg transaction for discovery_candidates + JSONB write
+Server transaction (mixed: pg transaction for scout_candidates + JSONB write
 for workspace state — not fully atomic, see "Graduation atomicity" below):
 
   BEGIN pg transaction
@@ -499,7 +510,7 @@ for workspace state — not fully atomic, see "Graduation atomicity" below):
     3. Re-check isBlocked() — Kickoff state may have changed since add
        409 if now blocked (e.g., user added to Kickoff via another path mid-flight)
     4. Call NEW helper addTalentToProject(workspaceId, projectId, candidatePayload, actor):
-       - Signature: (workspaceId: string, projectId: string, payload: DiscoveryCandidate,
+       - Signature: (workspaceId: string, projectId: string, payload: ScoutCandidate,
                      actor: AuthUserRecord) => Promise<{ talentId: string; artistRecord: ArtistRecord }>
        - Implementation: loads workspace JSONB blob via loadProjectsList(),
          appends new artist record to target project's projects[].artists[] array,
@@ -522,7 +533,7 @@ for workspace state — not fully atomic, see "Graduation atomicity" below):
        }
        (Step 4 and 5 can be combined into one saveProjectsList call to avoid
        two writes to the same JSONB row.)
-    6. DELETE FROM discovery_candidates WHERE id = $1
+    6. DELETE FROM scout_candidates WHERE id = $1
   COMMIT pg transaction
   ↓
 Return { approvedTalentId, kickoffProjectId, kickoffRecordId }
@@ -532,7 +543,7 @@ UI: remove row, flash "Approved → ready in Kickoff", offer [Open in Kickoff] b
 
 ### Graduation atomicity
 
-The JSONB workspace-state write (Flow B steps 4+5) and the pg transaction (step 6) are in **separate writes**. The ordering matters: do the JSONB write FIRST, then delete the candidate. If the delete fails after a successful JSONB write, the candidate will still show in the Discovery queue AND the talent record will exist in Kickoff — a retryable duplicate state that the blocklist will catch on the next approve attempt (409, "already in Kickoff").
+The JSONB workspace-state write (Flow B steps 4+5) and the pg transaction (step 6) are in **separate writes**. The ordering matters: do the JSONB write FIRST, then delete the candidate. If the delete fails after a successful JSONB write, the candidate will still show in the Scout V3 queue AND the talent record will exist in Kickoff — a retryable duplicate state that the blocklist will catch on the next approve attempt (409, "already in Kickoff").
 
 This is acceptable because:
 
@@ -552,7 +563,7 @@ Modal:
   • Optional note (required when reason = "other"; submit disabled without)
   • [Cancel] [✗ Reject]
   ↓
-PATCH /api/ar/discovery/candidates/[id]
+PATCH /api/ar/scout/candidates/[id]
   Body: { action: "reject", reasonCode, reasonNote? }
   ↓
 Server transaction:
@@ -562,14 +573,14 @@ Server transaction:
        (covers concurrent approve-won race: if a parallel approve already
         graduated + deleted this candidate, the row is gone by the time
         reject locks — UI removes the row with "Already handled" toast)
-    3. INSERT into discovery_rejections (
+    3. INSERT into scout_rejections (
          identity fields copied,
          candidate_snapshot = full row as JSONB,
          reason_code, reason_note,
          rejected_by = session.actor,
          rejected_at = NOW()
        )
-    4. DELETE FROM discovery_candidates WHERE id = $1
+    4. DELETE FROM scout_candidates WHERE id = $1
   COMMIT
   ↓
 Return { rejectionId }
@@ -619,7 +630,7 @@ For each candidate:
   4. Clear → INSERT with source = "agent:<name>", addedBy = "agent:<name>"
   ↓
 Batch log:
-  [DISCOVERY_AGENT] musicbrainz-scraper batch complete:
+  [SCOUT_AGENT] musicbrainz-scraper batch complete:
     added 47, skipped 12 (3 kickoff, 2 live, 6 rejected, 1 candidate dup)
 ```
 
@@ -629,23 +640,23 @@ Batch log:
 
 ### Navigation placement
 
-Workspace dashboard adds **Open Discovery** card alongside Scout / Kickoff / Live Roster / Reports.
+Workspace dashboard adds **Open Scout V3** card alongside Scout / Kickoff / Live Roster / Reports.
 
 - **Color**: blue (distinguishes from Scout's orange)
-- **Position**: first in lifecycle order (Discovery → Scout → Kickoff → Live Roster → Reports)
-- **Badge**: pending count fetched via `GET /api/ar/discovery/stats`
+- **Position**: first in lifecycle order (Scout V3 → Scout → Kickoff → Live Roster → Reports)
+- **Badge**: pending count fetched via `GET /api/ar/scout/stats`
 
-### Discovery screen structure
+### Scout V3 screen structure
 
 ```
 ← Songfinch
-DISCOVERY
-Songfinch · Discovery
+SCOUT V3
+Songfinch · Scout V3
 Find new artists not yet in Kickoff or Live.
 
 [N pending] [M rejected] [K approved today] [J blocked]
 
-Discovery Actions:
+Scout V3 Actions:
 [+ Add candidate]
 
 Tabs: [Queue · N]  [Rejection log · M]
@@ -711,7 +722,7 @@ Read-only table: date, name, reason badge, note, rejected by. Sortable, searchab
 
 ### Field naming convention (SQL ↔ TS)
 
-SQL uses `snake_case`, TypeScript uses `camelCase`. The `discovery-store.ts` module owns all bidirectional mapping:
+SQL uses `snake_case`, TypeScript uses `camelCase`. The `scout-candidate-store.ts` module owns all bidirectional mapping:
 
 - On write: `camelCase → snake_case` in SQL bind parameters
 - On read: `snake_case → camelCase` in a `rowToCandidate(row)` helper
@@ -720,55 +731,72 @@ Callers (API routes, UI) always work in camelCase. Never leak snake_case fields 
 
 ### Nav badge staleness (default behavior)
 
-- Badge count fetched on workspace landing page load via `GET /api/ar/discovery/stats`
+- Badge count fetched on workspace landing page load via `GET /api/ar/scout/stats`
 - Count updates after any `add`, `approve`, or `reject` action completes (client-side state update, no re-fetch)
 - No polling, no websockets, no live updates in S0
 - User can manually refresh the page to re-sync — acceptable staleness given single-user-at-a-time workflow pattern
 
-### Scout V2 default filter change (exact edit)
+### Scout V2 → Kickoff migration (replaces old Scout surface)
 
-The change is in `app/ar/GemFinderApp.jsx`:
+**Context**: in the final product model, Scout V3 IS the Scout surface. The pre-existing Scout V2 surface (triage of 1,809 pre-Kickoff leads with Qualify/Need Info/Pass/Park decisions) goes away — but its **decision UI is genuinely useful** and relocates under Kickoff, where active-stage triage actually belongs.
 
-1. **Line 75-82** (`SCOUT_DECISION_LABELS` constant region): no change to labels, but add `SCOUT_WORKFLOW_FILTERS` entry:
+**Why relocate V2 instead of delete it**: the V2 decision wiring (`applyScoutDecision`, `promoteScoutLeadToKickoff`, `recordScoutReview`, `assignScoutLeadToCurrentActor`, `updateScoutWorkflowEntry`) and the persistence shape (`workspaceScoutState` in `project.settings.scoutState`) are solid code with no architectural problems. The mistake was the surface they lived on, not the code itself. Kickoff is the natural home for "which engaged artists do I push forward this week?" triage.
 
-   ```javascript
-   const SCOUT_WORKFLOW_FILTERS = [
-     { id: "all", label: "All Workflow" },
-     { id: "needs_attention", label: "Needs Attention" },  // NEW — default
-     { id: "unreviewed", label: "Unreviewed" },
-     { id: "needs_info", label: "Needs Info" },
-     { id: "qualified", label: "Qualified" },
-     { id: "promoted", label: "Promoted" },
-     { id: "passed", label: "Passed" },
-     { id: "parked", label: "Parked" },
-   ];
-   ```
+**Migration scope** (part of S1 implementation):
 
-2. **Line 3688** (initial state):
+1. **Rename the V2 helpers** to make Kickoff their proper home:
+   - `applyScoutDecision` → `applyKickoffDecision`
+   - `promoteScoutLeadToKickoff` → `promoteKickoffToActiveStage` (or keep this one — it's already cross-surface)
+   - `recordScoutReview` → `recordKickoffReview`
+   - `assignScoutLeadToCurrentActor` → `assignKickoffLeadToCurrentActor`
+   - `updateScoutWorkflowEntry` → `updateKickoffDecisionEntry`
+   - `workspaceScoutState` → `workspaceKickoffDecisionState`
+   - Log prefix `[SCOUT_*]` for these helpers → `[KICKOFF_*]`
 
-   ```javascript
-   // BEFORE:
-   const [scoutWorkflowFilter, setScoutWorkflowFilter] = useState("all");
+   **Identifier mapping is deliberate**: the data shape stays identical (`project.settings.scoutState[talentId]` → renamed to `project.settings.kickoffDecisionState[talentId]`). A migration on first read merges old key → new key once, then deletes the old.
 
-   // AFTER:
-   const [scoutWorkflowFilter, setScoutWorkflowFilter] = useState("needs_attention");
-   ```
+2. **Move V2 decision UI from Scout to Kickoff**:
+   - The decision button row (Qualify / Need Info / Pass / Park / Promote / Assign) currently rendered in `screen === 'scout'` cards/table moves to `screen === 'kickoff'` cards/table
+   - The dedupe-warning chip moves too
+   - The "view by decision state" filter moves into Kickoff's filter panel
+   - The card/table layouts otherwise stay identical — just the surface they live on changes
 
-3. **Line ~3959** (`matchesScoutWorkflowFilter` function): add a branch for the new filter:
+3. **Replace the Scout surface entirely**:
+   - The OLD `screen === 'scout'` branch in `GemFinderApp.jsx` (lines ~12100-12700) is **replaced** by the new Scout V3 surface (`screen === 'scoutV3'`, eventually renamed back to `'scout'` once V2 is fully decommissioned)
+   - Existing 1,809 records that previously appeared in Scout don't need migration — they're already attached to projects (which is the definition of Kickoff), so they continue to appear in Kickoff. No data loss, no orphan records.
 
-   ```javascript
-   if (filterId === "needs_attention") {
-     return profile.scoutDecision === "unreviewed" || profile.scoutDecision === "needs_info";
-   }
-   ```
+4. **Workspace dashboard updates**:
+   - The "Open Scout" card no longer routes to the V2 triage surface — it routes to Scout V3 (the new candidate queue)
+   - "Open Kickoff" gains the decision UI as part of its existing layout
+   - Counts on the Scout card update: instead of "1,809 leads," it shows "N pending candidates" (the V3 queue count)
 
-4. **Line 4797** (reset helper): update to reset to new default:
+**Feature-flag overlay during build**:
 
-   ```javascript
-   setScoutWorkflowFilter("needs_attention");
-   ```
+During the build, both Scout V2 (existing) and Scout V3 (new) can coexist behind the `featureFlags.scoutV3` flag:
 
-This keeps Discovery-approved records (decision = "qualified") out of Scout's default view while preserving the ability to flip the filter to "All Workflow" to see everything, or to "Qualified" specifically to review them.
+- Flag OFF (default during build): nav shows old Scout V2 surface; Scout V3 backend lives but isn't reachable
+- Flag ON (post-ship): nav shows Scout V3; old Scout surface code is removed; V2 decision UI now lives under Kickoff
+
+This lets us land code in stages and flip the surface in one step.
+
+**Code removal sequence** (post-ship):
+
+Once Scout V3 is flipped on for Songfinch and validated for a week:
+
+1. Delete the `screen === 'scout'` branch from `GemFinderApp.jsx` (lines 12100-12700 in current code)
+2. Delete `scoutBaseProfiles`, `scoutFilteredBaseProfiles`, `scoutProfiles` memos (Scout V3 has its own data path)
+3. Delete `scoutTypeFilter`, `scoutSourceFilter`, etc. state (Scout V3 has its own filters)
+4. Keep the V2 decision helpers (already renamed to `kickoff*` per step 1 above) — they're now Kickoff's
+5. Rename `screen === 'scoutV3'` → `screen === 'scout'`
+6. Rename `featureFlags.scoutV3` → just remove the flag, Scout V3 is now Scout
+
+**Verification at each stage**:
+
+- After move-helpers step: existing 1,809 leads still triage-able from Kickoff with the same buttons
+- After surface-replacement step: Scout shows the new candidate queue, no broken nav links
+- After code-removal step: `npm run build` clean, no orphaned references
+
+This is non-trivial work — figure ~4-6 hours of careful refactoring beyond the core Scout V3 implementation. Reflected in the implementation plan as a distinct phase.
 
 ## Error Handling
 
@@ -792,8 +820,8 @@ This keeps Discovery-approved records (decision = "qualified") out of Scout's de
 1. **Exactly-once approve**: `SELECT FOR UPDATE` + `DELETE` in single transaction
 2. **Blocklist re-check on approve**: Kickoff may have changed between add and approve
 3. **Rejections never lost**: rejection INSERT happens before candidate DELETE in same transaction
-4. **No silent catches**: per `CLAUDE.md` convention, fire-and-forget uses `.catch(err => console.warn('[DISCOVERY] ...', err))` — never `.catch(() => {})`
-5. **All errors logged** with `[DISCOVERY]`, `[DISCOVERY_BLOCKLIST]`, `[DISCOVERY_DECISION]`, or `[DISCOVERY_AGENT]` prefixes
+4. **No silent catches**: per `CLAUDE.md` convention, fire-and-forget uses `.catch(err => console.warn('[SCOUT_HUNT] ...', err))` — never `.catch(() => {})`
+5. **All errors logged** with `[SCOUT_HUNT]`, `[SCOUT_BLOCKLIST]`, `[SCOUT_DECISION]`, or `[SCOUT_AGENT]` prefixes
 
 ### Auth + permissions
 
@@ -856,16 +884,16 @@ Added to `package.json`:
 ### Test database strategy
 
 - Tests use a **dedicated test DB** pointed at by `DATABASE_URL_TEST` env var (falls back to a local ephemeral pg if unset)
-- `vitest.setup.ts` opens a connection at suite start, truncates discovery tables + workspace state rows, and seeds fixtures
+- `vitest.setup.ts` opens a connection at suite start, truncates Scout V3 tables + workspace state rows, and seeds fixtures
 - **Integration tests run inside transactions**: each test opens `BEGIN`, runs assertions against the route, then `ROLLBACK` in `afterEach` — ensures test isolation without between-test truncation overhead
 - **Unit tests mock the pg Pool** using `vitest` mock module pattern — no DB connection required
 - Recommended test DB: create a Neon branch or local pg database called `gemfinder_test` that matches production schema
 
 ### Fixtures
 
-Co-located under `test/fixtures/discovery/`:
+Co-located under `test/fixtures/scout-v3/`:
 
-- `candidates.ts` — factories for `buildCandidate(overrides?)` returning realistic `DiscoveryCandidate` shapes with optional field overrides
+- `candidates.ts` — factories for `buildCandidate(overrides?)` returning realistic `ScoutCandidate` shapes with optional field overrides
 - `rejections.ts` — factories for `buildRejection(overrides?)`
 - `workspace-projects.ts` — factories for workspace JSONB state with pre-seeded Kickoff records (for cross-source blocklist tests)
 - `actors.ts` — exports `adminActor`, `editorActor`, `viewerActor` fixtures matching `AuthUserRecord` shape
@@ -876,29 +904,29 @@ Each factory returns a complete object with sensible defaults; tests override on
 
 Co-located `*.test.ts` files for:
 
-- `lib/gemfinder/discovery/identity.test.ts` — canonicalizeName, parseUrl (every platform), buildIdentity, normalize handles
-- `lib/gemfinder/discovery-blocklist.test.ts` — every match type + no-match + excludeCandidateId + skip-rejections option
-- `lib/gemfinder/discovery/validation.test.ts` — zod schema coverage
+- `lib/gemfinder/scout/identity.test.ts` — canonicalizeName, parseUrl (every platform), buildIdentity, normalize handles
+- `lib/gemfinder/scout-blocklist.test.ts` — every match type + no-match + excludeCandidateId + skip-rejections option
+- `lib/gemfinder/scout/validation.test.ts` — zod schema coverage
 
 ### Integration tests (required S1)
 
 Coverage target: **happy path + every error code + every state transition** (no numeric percentage target — structural coverage instead).
 
-- `app/api/ar/discovery/candidates/route.test.ts`:
+- `app/api/ar/scout/candidates/route.test.ts`:
   - POST happy path
   - POST collision (4 variants: kickoff, live, rejected, candidate)
   - POST validation failure
   - POST auth failure (401 + 403 variants)
   - POST with feature flag off (404)
   - GET with each filter
-- `app/api/ar/discovery/candidates/[id]/route.test.ts`:
+- `app/api/ar/scout/candidates/[id]/route.test.ts`:
   - PATCH approve happy
   - PATCH approve with re-check collision (state changed mid-flight)
   - PATCH approve concurrent race (two parallel requests, one wins via SELECT FOR UPDATE)
   - PATCH reject happy + log verification
   - PATCH reject on already-approved candidate (404)
   - PATCH edit with blocklist re-check
-- `app/api/ar/discovery/rejections/route.test.ts`:
+- `app/api/ar/scout/rejections/route.test.ts`:
   - GET with filters
   - Auth check
 
@@ -914,11 +942,11 @@ See **Manual test checklist** at the end of this document.
 
 ## Observability
 
-- `[DISCOVERY]` prefix for general operations
-- `[DISCOVERY_BLOCKLIST]` for blocklist queries (slow-query warnings > 500ms — **visibility only, no paging**)
-- `[DISCOVERY_DECISION]` for approve/reject events (structured log with candidateId, actor, projectId)
-- `[DISCOVERY_AGENT]` for agent-produced candidate batches (S3+)
-- Request-level metrics: pending count, approvals today, rejections today via `/api/ar/discovery/stats` endpoint (used by nav badge and dashboard counters)
+- `[SCOUT_HUNT]` prefix for general operations
+- `[SCOUT_BLOCKLIST]` for blocklist queries (slow-query warnings > 500ms — **visibility only, no paging**)
+- `[SCOUT_DECISION]` for approve/reject events (structured log with candidateId, actor, projectId)
+- `[SCOUT_AGENT]` for agent-produced candidate batches (S3+)
+- Request-level metrics: pending count, approvals today, rejections today via `/api/ar/scout/stats` endpoint (used by nav badge and dashboard counters)
 
 **No alerts or paging are set up in S0/S1.** All observability is log-based. SLOs and alert thresholds are deferred until post-ship data tells us what thresholds matter.
 
@@ -926,11 +954,11 @@ See **Manual test checklist** at the end of this document.
 
 ### Deploy order
 
-1. Backend code + `lib/gemfinder/discovery-store.ts` (includes `ensureSchema()`; tables are created lazily on first API call — no separate migration step)
+1. Backend code + `lib/gemfinder/scout-candidate-store.ts` (includes `ensureSchema()`; tables are created lazily on first API call — no separate migration step)
 2. API routes (not reachable until UI exists, and feature-flag-gated even then)
 3. UI + nav entry (feature-flag gated, off by default)
 4. Flip feature flag on for Songfinch workspace
-5. Monitor `[DISCOVERY_*]` logs for errors
+5. Monitor `[SCOUT_*]` logs for errors
 6. Flip on for other workspaces as trust grows
 
 ### Feature flag
@@ -942,14 +970,14 @@ Shape added to `project.settings`:
 ```json
 {
   "featureFlags": {
-    "discovery": true
+    "scoutV3": true
   }
 }
 ```
 
 - Default is **off** (treat missing key as `false`)
 - Read in `GemFinderApp.jsx` to gate the nav card visibility
-- Checked server-side in all `/api/ar/discovery/*` routes — return `404` (not `403`) if flag is off for the target workspace, so the surface appears non-existent
+- Checked server-side in all `/api/ar/scout/*` routes — return `404` (not `403`) if flag is off for the target workspace, so the surface appears non-existent
 - Flipped per-workspace via an admin UI in Settings (future S1 polish) or directly by editing the JSONB blob for initial rollout
 
 **Scope note**: `featureFlags` lives on `project.settings` in the current data model. In this codebase a "project" inside the JSONB blob represents a workspace-level entity (Songfinch's settings sit on one project object, not spread across the 13 campaigns). So the flag is effectively workspace-wide. If the data model later grows separate per-campaign settings, the flag can be promoted to a parent-level key without a migration.
@@ -957,7 +985,7 @@ Shape added to `project.settings`:
 ### Rollback
 
 1. Flip feature flag off → surface disappears, backend becomes unreachable
-2. Drop the two Discovery tables (`discovery_candidates`, `discovery_rejections`) → full data reset; the new schema is isolated from all existing tables, so no other data is affected
+2. Drop the two Scout V3 tables (`scout_candidates`, `scout_rejections`) → full data reset; the new schema is isolated from all existing tables, so no other data is affected
 3. Revert code commits
 
 ## Deferred to later phases
@@ -965,7 +993,7 @@ Shape added to `project.settings`:
 | Phase | Feature | Reason deferred |
 |---|---|---|
 | S2 | Weight tuning UI + smarter scoring | Need real candidates to tune against |
-| S2 | `project.settings.discoveryWeights` JSON | Part of S2 UI |
+| S2 | `project.settings.scoutV3Weights` JSON | Part of S2 UI |
 | S3 | First scraper (MusicBrainz) | Build working flow before agents |
 | S3 | Batch-review mode | Not needed until agents produce volume |
 | S4 | Spotify scraper | S3 hardens the pattern first |
@@ -977,14 +1005,14 @@ Shape added to `project.settings`:
 | S7 | Scraper hardening + retry | Ongoing maintenance |
 | Future | Un-reject workflow | Admin force-add covers it |
 | Future | Time-window enrichment (2026 releases) | Needs release-date enrichment |
-| Future | CSV export of Discovery queue | Not needed for initial usage; add after real data volume justifies |
+| Future | CSV export of Scout V3 queue | Not needed for initial usage; add after real data volume justifies |
 | Future | Live-update nav badge (polling/websocket) | Page-load refresh is sufficient at current usage pattern |
 | Future | Shared `requireEditorActor` helper | Matches existing codebase pattern of inline duplication |
 
 ## Open questions
 
 - Agent authentication: how do agents authenticate to POST candidates? (Defer to S3 design.)
-- Should the Discovery nav badge update live or on page load? (UX polish, S1 late.)
+- Should the Scout V3 nav badge update live or on page load? (UX polish, S1 late.)
 - Rate limiting on manual-add to prevent accidental double-submits? (Low risk at current usage; note for S1 polish.)
 - Should we track a `discovered_via` chain field so agent-to-agent attribution is preserved? (S3 question.)
 
@@ -1041,7 +1069,7 @@ Run through after implementation:
 
 ### Auth + permissions
 
-- [ ] Unauthenticated user redirected from Discovery
+- [ ] Unauthenticated user redirected from Scout V3
 - [ ] User from different workspace cannot see other workspaces' candidates
 - [ ] Force-add as non-admin returns 403
 
