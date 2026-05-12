@@ -62,6 +62,8 @@ Hunter v1 ships as the first agent inside the broader Scout V3 ecosystem.
 
 10. **Same feature flag as Scout V3** — Hunter is gated on the existing `featureFlags.scoutV3` flag. No separate Hunter flag in v1; future kill-switch can add one if needed.
 
+11. **Auth + flag helpers duplicated per-route** — matches existing convention in `app/api/ar/scout/*/route.ts`. Each Hunter route inlines both `requireEditorActor(req)` and `requireScoutV3Flag(workspaceId)` at module top. Do NOT extract to a shared module in v1 — current code keeps them inline for dependency locality. Extraction is a follow-up if duplication grows painful.
+
 ## Files to create
 
 | File | Purpose |
@@ -177,10 +179,12 @@ PIPELINE (per run, runs in background)
 
 ### Pipeline guarantees
 
-- **Per-candidate error isolation**: try/catch wraps each candidate. One bad candidate (e.g., Steel scrape timeout on a single artist) doesn't fail the entire run. Errors collected into `summary.errors[]`.
+- **Per-candidate error isolation**: try/catch wraps each candidate. One bad candidate (e.g., Steel scrape timeout on a single artist) doesn't fail the entire run. Exceptions captured in `summary.errors[]`; gate-failures recorded separately in `summary.gatedReasons[]` (different concerns, kept distinct).
 - **Idempotency**: re-running same criteria re-fetches from MB but `isBlocked` filters out already-handled candidates (approved-in-Kickoff, rejected, still-pending in queue). Only genuinely-new artists make it through.
 - **Workspace scoping enforced everywhere**: MusicBrainz returns global results; gates, scoring, blocklist, and storage all filter by workspaceId.
-- **No silent failures**: every error path either updates the run status (`failed`/`stale`) with an error message, or surfaces in `summary.errors[]` while the run completes with `partial` status.
+- **No silent failures**: every error path either updates the run status (`failed`/`stale`) with an error message, or surfaces in `summary.errors[]` (exception) or `summary.gatedReasons[]` (gate failure) while the run reaches a terminal state.
+
+**Important**: `partial` is a per-CANDIDATE `enrichment_status` value (see `scout_candidates.enrichment_status` column), NEVER a run status. A run with some partially-enriched candidates still reaches terminal `complete` state. The four hunter_runs.status values are exactly: `running`, `complete`, `failed`, `stale`.
 
 ### Run state machine
 
@@ -219,7 +223,10 @@ CREATE TABLE IF NOT EXISTS hunter_runs (
   /* summary shape:
      { "fetched": int, "skipped_blocked": int, "gated_out": int,
        "scored": int, "added": int,
-       "errors": [{ "candidateName": str, "stage": str, "message": str }] }
+       "errors":        [{ "candidateName": str, "stage": str, "message": str }],
+       "gatedReasons":  [{ "candidateName": str, "reason": str }] }
+     errors[] = exceptions (network fail, schema fail, etc.)
+     gatedReasons[] = expected gate rejections (genre miss, blocked, etc.)
   */
 
   started_by          TEXT NOT NULL          -- actor email
@@ -250,15 +257,38 @@ CREATE INDEX IF NOT EXISTS idx_scrape_cache_key     ON hunter_scrape_cache (cach
 
 ### Modifications to `scout_candidates`
 
+**Critical pattern**: `ensureSchema()` runs SQL exactly once per process via the `schemaReady` cache (see `scout-candidate-store.ts:98`). The existing `CREATE TABLE IF NOT EXISTS` is no-op on already-deployed databases — so any new column added inline to the existing CREATE statement would silently fail to apply on production DBs that have the old schema.
+
+**Correct approach**: append `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` and `CREATE INDEX IF NOT EXISTS` blocks to the same SCHEMA_SQL string. PostgreSQL treats these as idempotent — safe to run on fresh DBs (column created via CREATE then ALTER no-ops) and on existing DBs (CREATE no-ops, ALTER adds the new column).
+
+The full SCHEMA_SQL string in `scout-candidate-store.ts` becomes (additions only shown):
+
 ```sql
+-- (existing CREATE TABLE scout_candidates / scout_rejections / indexes stays)
+
+-- New for Hunter v1:
 ALTER TABLE scout_candidates
-  ADD COLUMN IF NOT EXISTS hunter_run_id UUID,
-  ADD CONSTRAINT fk_scout_candidates_hunter_run
-    FOREIGN KEY (hunter_run_id) REFERENCES hunter_runs(id) ON DELETE SET NULL;
+  ADD COLUMN IF NOT EXISTS hunter_run_id UUID;
+
+-- Foreign key added separately because PostgreSQL doesn't have
+-- "ADD CONSTRAINT IF NOT EXISTS" prior to v9.6. Use a DO block:
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'fk_scout_candidates_hunter_run'
+  ) THEN
+    ALTER TABLE scout_candidates
+      ADD CONSTRAINT fk_scout_candidates_hunter_run
+      FOREIGN KEY (hunter_run_id) REFERENCES hunter_runs(id) ON DELETE SET NULL;
+  END IF;
+END $$;
 
 CREATE INDEX IF NOT EXISTS idx_scout_cand_hunter_run
   ON scout_candidates (hunter_run_id) WHERE hunter_run_id IS NOT NULL;
 ```
+
+This ensures both fresh installs and existing production databases pick up the new column on next `ensureSchema()` call.
 
 `source` field convention extends:
 - `manual` (existing)
@@ -314,7 +344,9 @@ export type HunterCriteria = {
   recency?: { sinceYear?: number };
   instrument?: string;
   targetCount: number;
-  source: HunterSource;
+  // source is set server-side; not user-selectable in v1 (only musicbrainz available).
+  // Field present in stored criteria for forward-compatibility when v2 adds Bandcamp / others.
+  source?: HunterSource;
 };
 
 export type HunterRunErrorEntry = {
@@ -323,13 +355,19 @@ export type HunterRunErrorEntry = {
   message: string;
 };
 
+export type HunterRunGatedReason = {
+  candidateName?: string;
+  reason: string;     // e.g., 'genre_mismatch', 'blocked:kickoff', 'no_contact'
+};
+
 export type HunterRunSummary = {
   fetched: number;
   skippedBlocked: number;
   gatedOut: number;
   scored: number;
   added: number;
-  errors: HunterRunErrorEntry[];
+  errors: HunterRunErrorEntry[];           // exceptions only
+  gatedReasons: HunterRunGatedReason[];    // expected gate rejections
 };
 
 export type HunterRun = {
@@ -545,6 +583,18 @@ Per-candidate priority order for the ONE Steel scrape:
 
 Quota awareness: every Steel call wrapped in try/catch. 429 or 5xx → cache miss treated as "no scrape data," `enrichment_status: partial`. Run continues.
 
+**Concurrency throttle**: Steel scrapes are limited to **max 3 concurrent sessions process-wide**, regardless of the outer enrichment concurrency (which is 8 candidates in parallel — the other 5 candidates wait their turn for a Steel session, or skip Steel if cached). This protects free-tier session limits from being exhausted by a single fast hunt.
+
+Internal implementation: a simple semaphore in `steel.ts`:
+```typescript
+const steelSemaphore = createSemaphore(3);  // process-wide
+export async function scrapeWebsite(url: string) {
+  return steelSemaphore.run(async () => {
+    // actual scrape work
+  });
+}
+```
+
 ### Scrape cache (`lib/gemfinder/hunter/scrape-cache.ts`)
 
 ```typescript
@@ -598,6 +648,11 @@ Concurrency: enrich up to 8 candidates in parallel (per-pipeline run).
 
 ```typescript
 type GateResult = { pass: true } | { pass: false; reason: string };
+
+// BlocklistResult is the existing return type from
+// lib/gemfinder/scout-blocklist.ts:isBlocked(workspaceId, identity, options?)
+// Shape: { blocked: false } | { blocked: true, source: 'kickoff' | 'live' | 'rejected' | 'candidate', ... }
+import type { BlocklistResult } from '@/lib/gemfinder/scout-blocklist';
 
 export function evaluateGates(
   candidate: EnrichedCandidate,
