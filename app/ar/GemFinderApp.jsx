@@ -13083,16 +13083,28 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         <div style={{ maxWidth: 1180, margin: "0 auto", padding: "24px" }}>
           {/* Header */}
           <div style={{ ...cS, padding: "22px 24px", marginBottom: 16 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 3, textTransform: "uppercase", color: C.bu, marginBottom: 8 }}>SCOUT</div>
-            <div style={{ fontSize: 30, fontWeight: 800, letterSpacing: "-0.04em", marginBottom: 8 }}>
-              {selectedWorkspace?.name || "Workspace"} · Scout
-            </div>
-            <div style={{ fontSize: 13, lineHeight: 1.6, color: C.ts, maxWidth: 560 }}>
-              Find new artists not yet in Kickoff or Live. Approve to graduate into Kickoff, reject to keep them out permanently.
-            </div>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 14 }}>
-              <span style={{ ...mkP(true, C.bu, C.bb), cursor: "default" }}>{scoutV3Stats.pendingCount} pending</span>
-              <span style={{ ...mkP(true, C.rd, C.rb), cursor: "default" }}>{scoutV3Stats.rejectedCount} rejected</span>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 3, textTransform: "uppercase", color: C.bu, marginBottom: 8 }}>SCOUT · V3</div>
+                <div style={{ fontSize: 30, fontWeight: 800, letterSpacing: "-0.04em", marginBottom: 8 }}>
+                  {selectedWorkspace?.name || "Workspace"} · Scout
+                </div>
+                <div style={{ fontSize: 13, lineHeight: 1.6, color: C.ts, maxWidth: 560 }}>
+                  Pre-engagement candidate queue. Approve to graduate into Kickoff, reject to permanently block.
+                </div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 14 }}>
+                  <span style={{ ...mkP(true, C.bu, C.bb), cursor: "default" }}>{scoutV3Stats.pendingCount} pending</span>
+                  <span style={{ ...mkP(true, C.rd, C.rb), cursor: "default" }}>{scoutV3Stats.rejectedCount} rejected</span>
+                </div>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end", minWidth: 200 }}>
+                <button onClick={() => setScreen("kickoff")} style={{ ...actionBtn(false, "neutral"), fontSize: 11 }}>
+                  Kickoff ({selectedWorkspace?.summary?.kickoff || 0} talent) →
+                </button>
+                <button onClick={() => setScreen("scout")} style={{ ...actionBtn(false, "neutral"), fontSize: 11 }}>
+                  Legacy Scout V2 view →
+                </button>
+              </div>
             </div>
           </div>
 
@@ -13121,10 +13133,23 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
           {/* Queue tab */}
           {scoutV3Tab === "queue" && (
             !scoutV3Candidates.length ? (
-              <div style={{ ...cS, padding: "32px 28px", textAlign: "center" }}>
-                <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 6 }}>No candidates yet</div>
-                <div style={{ fontSize: 12, color: C.ts, maxWidth: 520, margin: "0 auto" }}>
-                  Add a candidate manually above, or wait for agents to fill the queue (S3+).
+              <div style={{ ...cS, padding: "32px 28px" }}>
+                <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 12 }}>No candidates yet</div>
+                <div style={{ fontSize: 13, color: C.ts, lineHeight: 1.7, maxWidth: 640 }}>
+                  <strong>Scout V3 is a fresh candidate pipeline.</strong> It starts empty and fills with
+                  net-new artists from agents (Spotify / Bandcamp / MusicBrainz scrapers — coming in S3+)
+                  or from manual adds via the <strong>+ Add candidate</strong> button above.
+                  <br /><br />
+                  <strong>Looking for your {selectedWorkspace?.summary?.kickoff || 0} existing talent records?</strong> They live in <strong>Kickoff</strong> now —
+                  that's the right place for any artist already attached to a project. Scout V3 is strictly
+                  for pre-engagement discovery.
+                  <br /><br />
+                  <button onClick={() => setScreen("kickoff")} style={{ ...actionBtn(false, "accent"), marginRight: 8 }}>
+                    Open Kickoff →
+                  </button>
+                  <button onClick={() => setScoutV3AddModalOpen(true)} style={actionBtn(false, "neutral")}>
+                    + Add a candidate
+                  </button>
                 </div>
               </div>
             ) : (

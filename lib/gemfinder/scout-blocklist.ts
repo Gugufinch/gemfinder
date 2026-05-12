@@ -83,8 +83,15 @@ export async function isBlocked(
 
   // --- Source 3: Workspace projects JSONB (in-memory scan) ---
   // Covers Kickoff + Live records via listWorkspaceProjects().
+  // Workspace-scoped: only check projects belonging to the same workspaceId
+  // so cross-workspace artists don't false-positive-collide.
   try {
-    const projects = await listWorkspaceProjects();
+    const allProjects = await listWorkspaceProjects();
+    const projects = (allProjects as Array<Record<string, unknown>>).filter((project) => {
+      const projWorkspaceId = String(project?.workspaceId ?? '');
+      // Match either the workspace's own id (rare) or the project's workspaceId field.
+      return projWorkspaceId === workspaceId || project?.id === workspaceId;
+    });
     for (const project of projects) {
       const artists = (project as { artists?: Array<Record<string, unknown>> })?.artists ?? [];
       for (const artist of artists) {
