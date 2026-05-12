@@ -19,13 +19,25 @@ export function getTestPool(): Pool {
 }
 
 beforeAll(async () => {
-  // Verify we can reach the test DB before running any tests.
-  const pool = getTestPool();
-  await pool.query('select 1');
-  // Ensure DATABASE_URL points at the test DB during test runs so the
-  // production-code modules (which read DATABASE_URL) connect to the same
-  // place as our test fixtures.
-  process.env.DATABASE_URL = TEST_DATABASE_URL;
+  // Try to reach the test DB. If unreachable (no local pg installed),
+  // log a warning but DON'T throw — non-DB tests should still be able to run.
+  // Tests that actually require pg will fail with a clear error when they
+  // try to query.
+  try {
+    const pool = getTestPool();
+    await pool.query('select 1');
+    // Ensure DATABASE_URL points at the test DB during test runs so the
+    // production-code modules (which read DATABASE_URL) connect to the same
+    // place as our test fixtures.
+    process.env.DATABASE_URL = TEST_DATABASE_URL;
+  } catch (err) {
+    console.warn(
+      `[TEST] Postgres test DB unreachable at ${TEST_DATABASE_URL}. ` +
+      `Pure-JS tests will run; DB-dependent tests will fail. ` +
+      `Set DATABASE_URL_TEST or start a local pg with a "gemfinder_test" database to enable.`,
+      err instanceof Error ? err.message : err
+    );
+  }
 });
 
 afterAll(async () => {
