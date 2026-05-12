@@ -91,7 +91,64 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  // 7. Build info
+  // 7. Hunter env vars (added pre-implementation so Greg can verify Render env is wired)
+  const SPOTIFY_ID = process.env.SPOTIFY_CLIENT_ID;
+  const SPOTIFY_SECRET = process.env.SPOTIFY_CLIENT_SECRET;
+  const STEEL_KEY = process.env.STEEL_API_KEY;
+
+  if (!SPOTIFY_ID) {
+    fail('env.SPOTIFY_CLIENT_ID', 'missing', 'add to Render env vars');
+  } else {
+    pass('env.SPOTIFY_CLIENT_ID', `set (${SPOTIFY_ID.slice(0, 6)}…${SPOTIFY_ID.slice(-4)})`);
+  }
+  if (!SPOTIFY_SECRET) {
+    fail('env.SPOTIFY_CLIENT_SECRET', 'missing', 'add to Render env vars');
+  } else {
+    pass('env.SPOTIFY_CLIENT_SECRET', 'set (hidden)');
+  }
+  if (!STEEL_KEY) {
+    fail('env.STEEL_API_KEY', 'missing', 'add to Render env vars');
+  } else {
+    pass('env.STEEL_API_KEY', `set (${STEEL_KEY.slice(0, 8)}…${STEEL_KEY.slice(-4)})`);
+  }
+
+  // 8. Spotify Client Credentials token exchange — proves Spotify creds actually work
+  if (SPOTIFY_ID && SPOTIFY_SECRET) {
+    try {
+      const basicAuth = Buffer.from(`${SPOTIFY_ID}:${SPOTIFY_SECRET}`).toString('base64');
+      const ctrl = new AbortController();
+      const timeoutId = setTimeout(() => ctrl.abort(), 6000);
+      const res = await fetch('https://accounts.spotify.com/api/token', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Basic ${basicAuth}`,
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: 'grant_type=client_credentials',
+        signal: ctrl.signal,
+      });
+      clearTimeout(timeoutId);
+      if (!res.ok) {
+        const errText = await res.text().catch(() => '');
+        fail(
+          'spotify.token_exchange',
+          `HTTP ${res.status}: ${errText.slice(0, 200)}`,
+          'creds rejected by Spotify — check Client ID/Secret are correct and from the same app'
+        );
+      } else {
+        const body = (await res.json()) as { access_token?: string; expires_in?: number };
+        if (body.access_token) {
+          pass('spotify.token_exchange', `OK · token expires in ${body.expires_in}s`);
+        } else {
+          fail('spotify.token_exchange', 'no access_token in response body');
+        }
+      }
+    } catch (err) {
+      fail('spotify.token_exchange', err, 'network or timeout reaching accounts.spotify.com');
+    }
+  }
+
+  // 9. Build info
   pass('build.scout_v3', 'live');
 
   return NextResponse.json(
