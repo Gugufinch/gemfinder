@@ -667,7 +667,7 @@ Order (short-circuits on first failure):
 3. **genre_match**: `candidate.genres.some(g => weights.genre_fit.targetGenres.includes(g.toLowerCase()))`
 4. **reachable**: `candidate.contactReadiness !== 'none'`
 
-Gate result + reason recorded in `summary.errors[]` for `gated_out` accounting.
+Gate result + reason recorded in `summary.gatedReasons[]` for `gated_out` accounting. Exceptions (network fail, schema fail, etc.) go into the separate `summary.errors[]` array.
 
 ### Scoring (`lib/gemfinder/hunter/scoring.ts`)
 
@@ -829,7 +829,7 @@ v1.1 will replace with form-based editor.
 
 ### Per-candidate error isolation
 
-Each candidate's enrichment + scoring wrapped in try/catch. Failure increments `summary.errors[]` with `{ candidateName, stage, message }`. Run completes with `status: complete` (or `partial` if any errors). Single-candidate failure does NOT kill the run.
+Each candidate's enrichment + scoring wrapped in try/catch. Failure increments `summary.errors[]` with `{ candidateName, stage, message }`. Run reaches `status: complete` regardless of per-candidate errors — failures are surfaced via the `errors[]` array and individual `enrichment_status: partial` markers, NOT as a run status. Single-candidate failure does NOT kill the run.
 
 ### Logging conventions
 
@@ -1019,7 +1019,7 @@ Run through after implementation:
 - [ ] Artist with no contact path filtered out
 
 ### Error handling
-- [ ] Run with intentionally bad Spotify creds → completes with `partial` status, warnings in errors[]
+- [ ] Run with intentionally bad Spotify creds → run completes (status=complete), candidates have `enrichment_status: partial`, warnings in summary.errors[]
 - [ ] Run during Steel outage → individual candidates skip Steel gracefully
 - [ ] MB returns 429 (simulated) → run retries up to 3x, fails with clear error_message
 - [ ] Process restart mid-run → run becomes `stale` via sweeper
