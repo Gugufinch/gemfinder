@@ -3689,6 +3689,30 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [scoutSortMode, setScoutSortMode] = useState("recommended");
   const [scoutViewMode, setScoutViewMode] = useState("table");
   const deferredScoutQuery = useDeferredValue(scoutQuery);
+
+  // Scout V3 — pre-engagement candidate queue (feature-flagged)
+  const [scoutV3Stats, setScoutV3Stats] = useState({ pendingCount: 0, rejectedCount: 0 });
+  const [scoutV3Tab, setScoutV3Tab] = useState("queue");
+  const [scoutV3Candidates, setScoutV3Candidates] = useState([]);
+  const [scoutV3Rejections, setScoutV3Rejections] = useState([]);
+  const [scoutV3AddModalOpen, setScoutV3AddModalOpen] = useState(false);
+  const [scoutV3ApproveTarget, setScoutV3ApproveTarget] = useState(null);
+  const [scoutV3RejectTarget, setScoutV3RejectTarget] = useState(null);
+  const [scoutV3CollisionTarget, setScoutV3CollisionTarget] = useState(null);
+  const [scoutV3ApproveNote, setScoutV3ApproveNote] = useState("");
+  const [scoutV3ApproveProjectId, setScoutV3ApproveProjectId] = useState("");
+  const [scoutV3RejectReason, setScoutV3RejectReason] = useState("already_signed");
+  const [scoutV3RejectNote, setScoutV3RejectNote] = useState("");
+  const [scoutV3LastProjectId, setScoutV3LastProjectId] = useState(() =>
+    typeof window !== "undefined" ? localStorage.getItem("scoutV3LastProjectId") || "" : ""
+  );
+  const [scoutV3AddForm, setScoutV3AddForm] = useState({
+    displayName: "", spotifyUrl: "", instagramHandle: "", tiktokHandle: "",
+    youtubeHandle: "", soundcloudUrl: "", bandcampUrl: "", musicbrainzId: "",
+    primaryEmail: "", contactName: "", contactEmail: "", contactType: "",
+    primaryGenre: "", locations: "", artistRole: "",
+    extraLinks: [{ label: "", url: "" }],
+  });
   const [kickoffQuery, setKickoffQuery] = useState("");
   const [kickoffTypeFilter, setKickoffTypeFilter] = useState("all");
   const [kickoffSourceFilter, setKickoffSourceFilter] = useState("all");
@@ -4785,6 +4809,37 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   useEffect(() => {
     setScoutFollowerMin(prev => Math.min(prev, scoutFollowerSliderMax));
   }, [scoutFollowerSliderMax]);
+
+  // Scout V3: fetch stats when on workspace screen + flag is on
+  useEffect(() => {
+    if (!selectedWorkspace?.settings?.featureFlags?.scoutV3) return;
+    if (!selectedWorkspace?.id) return;
+    fetch(`/api/ar/scout/stats?workspaceId=${selectedWorkspace.id}`)
+      .then(r => r.json())
+      .then(data => { if (data.ok) setScoutV3Stats(data.stats); })
+      .catch(err => console.warn("[SCOUT_V3_UI] stats fetch failed:", err));
+  }, [selectedWorkspace?.id, selectedWorkspace?.settings?.featureFlags?.scoutV3]);
+
+  // Scout V3: fetch candidate queue when screen is scoutV3 + tab is queue
+  useEffect(() => {
+    if (screen !== "scoutV3" || scoutV3Tab !== "queue") return;
+    if (!selectedWorkspace?.id) return;
+    fetch(`/api/ar/scout/candidates?workspaceId=${selectedWorkspace.id}`)
+      .then(r => r.json())
+      .then(data => { if (data.ok) setScoutV3Candidates(data.candidates); })
+      .catch(err => console.warn("[SCOUT_V3_UI] candidates fetch failed:", err));
+  }, [screen, scoutV3Tab, selectedWorkspace?.id]);
+
+  // Scout V3: fetch rejections when tab is rejections
+  useEffect(() => {
+    if (screen !== "scoutV3" || scoutV3Tab !== "rejections") return;
+    if (!selectedWorkspace?.id) return;
+    fetch(`/api/ar/scout/rejections?workspaceId=${selectedWorkspace.id}`)
+      .then(r => r.json())
+      .then(data => { if (data.ok) setScoutV3Rejections(data.rejections); })
+      .catch(err => console.warn("[SCOUT_V3_UI] rejections fetch failed:", err));
+  }, [screen, scoutV3Tab, selectedWorkspace?.id]);
+
   const resetScoutFilters = useCallback(() => {
     setScoutQuery("");
     setScoutTypeFilter("all");
@@ -12241,28 +12296,37 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
               </div>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(180px, 1fr))", gap: 12, alignContent: "start" }}>
-              <button
-                onClick={() => setScreen("scout")}
-                style={{
-                  borderRadius: 16,
-                  border: `1px solid ${C.ab}40`,
-                  background: C.abb,
-                  padding: "16px 18px",
-                  cursor: "pointer",
-                  display: "grid",
-                  gap: 6,
-                  textAlign: "left",
-                  fontFamily: ft,
-                }}
-              >
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
-                  <span style={{ fontSize: 16, fontWeight: 800, color: C.ab }}>Open Scout</span>
-                  <span style={{ ...mkP(true, C.ab, C.sf), cursor: "pointer" }}>{scoutOverview.leads}</span>
-                </div>
-                <div style={{ fontSize: 12, color: C.ts, lineHeight: 1.5 }}>
-                  Discovery, filtering, and qualification before artists move into active kickoff work.
-                </div>
-              </button>
+              {(() => {
+                const v3On = Boolean(selectedWorkspace?.settings?.featureFlags?.scoutV3);
+                return (
+                  <button
+                    onClick={() => setScreen(v3On ? "scoutV3" : "scout")}
+                    style={{
+                      borderRadius: 16,
+                      border: `1px solid ${C.ab}40`,
+                      background: C.abb,
+                      padding: "16px 18px",
+                      cursor: "pointer",
+                      display: "grid",
+                      gap: 6,
+                      textAlign: "left",
+                      fontFamily: ft,
+                    }}
+                  >
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
+                      <span style={{ fontSize: 16, fontWeight: 800, color: C.ab }}>Open Scout</span>
+                      <span style={{ ...mkP(true, C.ab, C.sf), cursor: "pointer" }}>
+                        {v3On ? `${scoutV3Stats?.pendingCount ?? 0} pending` : scoutOverview.leads}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: 12, color: C.ts, lineHeight: 1.5 }}>
+                      {v3On
+                        ? "Hunt new artists. Approve into Kickoff, reject to block forever."
+                        : "Discovery, filtering, and qualification before artists move into active kickoff work."}
+                    </div>
+                  </button>
+                );
+              })()}
               <button
                 onClick={() => setScreen("kickoff")}
                 style={{
