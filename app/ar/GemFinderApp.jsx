@@ -12944,6 +12944,473 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     );
   }
 
+  // ═══ SCOUT V3 — PRE-ENGAGEMENT CANDIDATE QUEUE ═══
+  if (screen === "scoutV3") {
+    // Submit handlers — inline closures over state
+    const submitScoutV3Add = async () => {
+      const form = scoutV3AddForm;
+      const payload = {
+        displayName: form.displayName.trim(),
+        spotifyUrl: form.spotifyUrl || undefined,
+        instagramHandle: form.instagramHandle || undefined,
+        tiktokHandle: form.tiktokHandle || undefined,
+        youtubeHandle: form.youtubeHandle || undefined,
+        soundcloudUrl: form.soundcloudUrl || undefined,
+        bandcampUrl: form.bandcampUrl || undefined,
+        musicbrainzId: form.musicbrainzId || undefined,
+        primaryEmail: form.primaryEmail || undefined,
+        contactName: form.contactName || undefined,
+        contactEmail: form.contactEmail || undefined,
+        contactType: form.contactType || undefined,
+        primaryGenre: form.primaryGenre || undefined,
+        locations: form.locations ? form.locations.split(",").map(s => s.trim()).filter(Boolean) : [],
+        artistRole: form.artistRole || undefined,
+        extraLinks: form.extraLinks.filter(l => l.label && l.url),
+        source: "manual",
+      };
+      try {
+        const res = await fetch(`/api/ar/scout/candidates?workspaceId=${selectedWorkspace.id}`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (res.status === 409) {
+          const data = await res.json();
+          setScoutV3CollisionTarget(data.match);
+          return;
+        }
+        if (!res.ok) {
+          flash("Failed to add candidate", "err");
+          return;
+        }
+        const data = await res.json();
+        setScoutV3Candidates(prev => [data.candidate, ...prev]);
+        flash("Added to queue");
+        setScoutV3AddForm({
+          displayName: "", spotifyUrl: "", instagramHandle: "", tiktokHandle: "",
+          youtubeHandle: "", soundcloudUrl: "", bandcampUrl: "", musicbrainzId: "",
+          primaryEmail: "", contactName: "", contactEmail: "", contactType: "",
+          primaryGenre: "", locations: "", artistRole: "",
+          extraLinks: [{ label: "", url: "" }],
+        });
+        setScoutV3AddModalOpen(false);
+      } catch (err) {
+        console.warn("[SCOUT_V3_UI] add submit failed:", err);
+        flash("Add failed — check your connection", "err");
+      }
+    };
+
+    const submitScoutV3Approve = async (candidate, projectId, note) => {
+      if (!projectId) return;
+      try {
+        const res = await fetch(`/api/ar/scout/candidates/${candidate.id}?workspaceId=${selectedWorkspace.id}`, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ action: "approve", projectId, note: note || undefined }),
+        });
+        if (res.status === 409) {
+          const data = await res.json();
+          flash(`Already in Kickoff: ${data.match?.matchedRecord?.displayName || "unknown"}`, "err");
+          return;
+        }
+        if (!res.ok) {
+          flash("Approve failed", "err");
+          return;
+        }
+        setScoutV3Candidates(prev => prev.filter(c => c.id !== candidate.id));
+        setScoutV3LastProjectId(projectId);
+        if (typeof window !== "undefined") localStorage.setItem("scoutV3LastProjectId", projectId);
+        setScoutV3ApproveTarget(null);
+        setScoutV3ApproveNote("");
+        setScoutV3ApproveProjectId("");
+        flash("Approved → ready in Kickoff");
+      } catch (err) {
+        console.warn("[SCOUT_V3_UI] approve failed:", err);
+        flash("Approve failed — check your connection", "err");
+      }
+    };
+
+    const submitScoutV3Reject = async (candidate, reasonCode, reasonNote) => {
+      try {
+        const res = await fetch(`/api/ar/scout/candidates/${candidate.id}?workspaceId=${selectedWorkspace.id}`, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ action: "reject", reasonCode, reasonNote: reasonNote || undefined }),
+        });
+        if (!res.ok) {
+          flash("Reject failed", "err");
+          return;
+        }
+        setScoutV3Candidates(prev => prev.filter(c => c.id !== candidate.id));
+        setScoutV3RejectTarget(null);
+        setScoutV3RejectNote("");
+        setScoutV3RejectReason("already_signed");
+        flash("Rejected → in rejection log");
+      } catch (err) {
+        console.warn("[SCOUT_V3_UI] reject failed:", err);
+        flash("Reject failed — check your connection", "err");
+      }
+    };
+
+    const SCOUT_V3_REJECT_REASONS = [
+      { code: "already_signed", label: "Already signed" },
+      { code: "wrong_genre", label: "Wrong genre" },
+      { code: "no_contact", label: "No contact" },
+      { code: "too_big", label: "Too big" },
+      { code: "too_small", label: "Too small" },
+      { code: "not_viable", label: "Not viable" },
+      { code: "dead", label: "Dead" },
+      { code: "duplicate", label: "Duplicate" },
+      { code: "other", label: "Other (requires note)" },
+    ];
+
+    return (
+      <div style={{ fontFamily: ft, background: C.bg, minHeight: "100vh", color: C.tx }}>
+        <Toast /><style>{css}</style>
+        <div style={{ borderBottom: `1px solid ${C.bd}`, background: C.sf }}>
+          <div style={{ maxWidth: 1180, margin: "0 auto", padding: "16px 24px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <button
+              onClick={() => { setScreen("workspace"); updateWorkspaceUrl("", "", "", ""); }}
+              style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, fontFamily: ft, color: C.ac, fontWeight: 600 }}
+            >
+              ← {selectedWorkspace?.name || "Workspace"}
+            </button>
+            <DkBtn />
+          </div>
+        </div>
+
+        <div style={{ maxWidth: 1180, margin: "0 auto", padding: "24px" }}>
+          {/* Header */}
+          <div style={{ ...cS, padding: "22px 24px", marginBottom: 16 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 3, textTransform: "uppercase", color: C.bu, marginBottom: 8 }}>SCOUT</div>
+            <div style={{ fontSize: 30, fontWeight: 800, letterSpacing: "-0.04em", marginBottom: 8 }}>
+              {selectedWorkspace?.name || "Workspace"} · Scout
+            </div>
+            <div style={{ fontSize: 13, lineHeight: 1.6, color: C.ts, maxWidth: 560 }}>
+              Find new artists not yet in Kickoff or Live. Approve to graduate into Kickoff, reject to keep them out permanently.
+            </div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 14 }}>
+              <span style={{ ...mkP(true, C.bu, C.bb), cursor: "default" }}>{scoutV3Stats.pendingCount} pending</span>
+              <span style={{ ...mkP(true, C.rd, C.rb), cursor: "default" }}>{scoutV3Stats.rejectedCount} rejected</span>
+            </div>
+          </div>
+
+          {/* Actions */}
+          <div style={{ ...cS, padding: "18px 20px", marginBottom: 16 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 700 }}>Scout Actions</div>
+                <div style={{ fontSize: 12, color: C.ts }}>Add candidates manually or let agents fill the queue (S3+).</div>
+              </div>
+              <button onClick={() => setScoutV3AddModalOpen(true)} style={actionBtn(false, "accent")}>
+                + Add candidate
+              </button>
+            </div>
+          </div>
+
+          {/* Tabs */}
+          <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
+            {[{ id: "queue", label: `Queue · ${scoutV3Stats.pendingCount}` }, { id: "rejections", label: `Rejection log · ${scoutV3Stats.rejectedCount}` }].map(tab => (
+              <button key={tab.id} onClick={() => setScoutV3Tab(tab.id)} style={actionBtn(scoutV3Tab === tab.id, "accent")}>
+                {tab.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Queue tab */}
+          {scoutV3Tab === "queue" && (
+            !scoutV3Candidates.length ? (
+              <div style={{ ...cS, padding: "32px 28px", textAlign: "center" }}>
+                <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 6 }}>No candidates yet</div>
+                <div style={{ fontSize: 12, color: C.ts, maxWidth: 520, margin: "0 auto" }}>
+                  Add a candidate manually above, or wait for agents to fill the queue (S3+).
+                </div>
+              </div>
+            ) : (
+              <div style={{ display: "grid", gap: 12 }}>
+                {scoutV3Candidates.map(c => (
+                  <div key={`scoutv3-card-${c.id}`} style={{ ...cS, padding: "18px 20px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, flexWrap: "wrap", marginBottom: 12 }}>
+                      <div style={{ display: "grid", gap: 6 }}>
+                        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                          <span style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-0.03em" }}>{c.displayName}</span>
+                          {c.artistRole && <span style={{ ...mkP(true, C.bu, C.bb), cursor: "default" }}>{c.artistRole}</span>}
+                          <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{c.source}</span>
+                          {(c.score !== null && c.score !== undefined) ? (
+                            <span style={{ ...mkP(true, c.score > 70 ? C.gn : c.score > 40 ? C.ab : C.ts, c.score > 70 ? C.gb : c.score > 40 ? C.abb : C.sa), cursor: "default" }}>
+                              Score: {Math.round(c.score)}
+                            </span>
+                          ) : (
+                            <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>Unscored</span>
+                          )}
+                        </div>
+                        <div style={{ fontSize: 12, color: C.ts, lineHeight: 1.6 }}>
+                          {[
+                            c.instagramHandle && `IG: @${c.instagramHandle}${c.instagramFollowers ? ` · ${c.instagramFollowers.toLocaleString()}` : ""}`,
+                            c.tiktokHandle && `TikTok: @${c.tiktokHandle}${c.tiktokFollowers ? ` · ${c.tiktokFollowers.toLocaleString()}` : ""}`,
+                            c.spotifyMonthlyListeners && `Spotify: ${c.spotifyMonthlyListeners.toLocaleString()} monthly`,
+                            c.youtubeHandle && `YT: @${c.youtubeHandle}${c.youtubeSubscribers ? ` · ${c.youtubeSubscribers.toLocaleString()}` : ""}`,
+                          ].filter(Boolean).join("  ·  ")}
+                        </div>
+                        {c.primaryEmail && (
+                          <div style={{ fontSize: 12, color: C.ts }}>
+                            Contact: {c.primaryEmail} {c.contactType && `(${c.contactType})`}
+                            {c.locations?.[0] && ` · ${c.locations[0]}`}
+                          </div>
+                        )}
+                        {c.primaryGenre && (
+                          <div style={{ fontSize: 12, color: C.ts }}>
+                            Genre: {[c.primaryGenre, ...(c.genres || []).filter(g => g !== c.primaryGenre)].join(" · ")}
+                          </div>
+                        )}
+                        {c.aiSummary && (
+                          <div style={{ fontSize: 12, color: C.tt, lineHeight: 1.6 }}>{c.aiSummary}</div>
+                        )}
+                        <div style={{ fontSize: 11, color: C.tt }}>
+                          Added via {c.source} ({c.addedBy}) · enrichment: {c.enrichmentStatus}
+                        </div>
+                      </div>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        <button onClick={() => setScoutV3ApproveTarget(c)} style={actionBtn(false, "accent")}>✓ Approve</button>
+                        <button onClick={() => setScoutV3RejectTarget(c)} style={actionBtn(false, "danger")}>✗ Reject</button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )
+          )}
+
+          {/* Rejection log tab */}
+          {scoutV3Tab === "rejections" && (
+            !scoutV3Rejections.length ? (
+              <div style={{ ...cS, padding: "32px 28px", textAlign: "center" }}>
+                <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 6 }}>No rejections yet</div>
+                <div style={{ fontSize: 12, color: C.ts }}>Rejected candidates appear here permanently.</div>
+              </div>
+            ) : (
+              <div style={{ ...cS, overflow: "hidden" }}>
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                    <thead style={{ background: C.sa }}>
+                      <tr>
+                        {["Date", "Name", "Reason", "Note", "Rejected by"].map(h => (
+                          <th key={`scoutv3-rej-${h}`} style={{ textAlign: "left", padding: "10px 12px", color: C.ts, fontSize: 11, borderBottom: `1px solid ${C.bd}` }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {scoutV3Rejections.map(r => (
+                        <tr key={`scoutv3-rej-row-${r.id}`} style={{ borderBottom: `1px solid ${C.sa}` }}>
+                          <td style={{ padding: "10px 12px", color: C.ts }}>{new Date(r.rejectedAt).toLocaleDateString()}</td>
+                          <td style={{ padding: "10px 12px", fontWeight: 600 }}>{r.displayName}</td>
+                          <td style={{ padding: "10px 12px" }}>
+                            <span style={{ ...mkP(true, C.rd, C.rb), cursor: "default" }}>{r.reasonCode.replace(/_/g, " ")}</span>
+                          </td>
+                          <td style={{ padding: "10px 12px", color: C.ts, fontSize: 11 }}>{r.reasonNote || "—"}</td>
+                          <td style={{ padding: "10px 12px", color: C.ts, fontSize: 11 }}>{r.rejectedBy}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )
+          )}
+
+          {/* Add Candidate modal */}
+          {scoutV3AddModalOpen && (
+            <div onClick={() => setScoutV3AddModalOpen(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "flex-start", justifyContent: "center", zIndex: 1000, padding: 24, overflowY: "auto" }}>
+              <div onClick={e => e.stopPropagation()} style={{ ...cS, padding: 24, maxWidth: 720, width: "100%" }}>
+                <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 14 }}>Add candidate</div>
+
+                <div style={{ display: "grid", gap: 10 }}>
+                  <label style={{ display: "grid", gap: 4 }}>
+                    <span style={{ fontSize: 11, color: C.ts, fontWeight: 600 }}>Name *</span>
+                    <input value={scoutV3AddForm.displayName} onChange={e => setScoutV3AddForm(prev => ({ ...prev, displayName: e.target.value }))} style={iS} placeholder="Artist name" />
+                  </label>
+
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                    <label style={{ display: "grid", gap: 4 }}>
+                      <span style={{ fontSize: 11, color: C.ts }}>Artist role</span>
+                      <select value={scoutV3AddForm.artistRole} onChange={e => setScoutV3AddForm(prev => ({ ...prev, artistRole: e.target.value }))} style={iS}>
+                        <option value="">Unknown</option>
+                        <option value="performer">Performer</option>
+                        <option value="curator">Curator</option>
+                        <option value="both">Both</option>
+                      </select>
+                    </label>
+                    <label style={{ display: "grid", gap: 4 }}>
+                      <span style={{ fontSize: 11, color: C.ts }}>Primary genre</span>
+                      <input value={scoutV3AddForm.primaryGenre} onChange={e => setScoutV3AddForm(prev => ({ ...prev, primaryGenre: e.target.value }))} style={iS} placeholder="indie pop" />
+                    </label>
+                  </div>
+
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                    <label style={{ display: "grid", gap: 4 }}>
+                      <span style={{ fontSize: 11, color: C.ts }}>Spotify URL</span>
+                      <input value={scoutV3AddForm.spotifyUrl} onChange={e => setScoutV3AddForm(prev => ({ ...prev, spotifyUrl: e.target.value }))} style={iS} placeholder="https://open.spotify.com/artist/..." />
+                    </label>
+                    <label style={{ display: "grid", gap: 4 }}>
+                      <span style={{ fontSize: 11, color: C.ts }}>Instagram</span>
+                      <input value={scoutV3AddForm.instagramHandle} onChange={e => setScoutV3AddForm(prev => ({ ...prev, instagramHandle: e.target.value.replace(/^@/, "") }))} style={iS} placeholder="handle (without @)" />
+                    </label>
+                  </div>
+
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                    <label style={{ display: "grid", gap: 4 }}>
+                      <span style={{ fontSize: 11, color: C.ts }}>TikTok</span>
+                      <input value={scoutV3AddForm.tiktokHandle} onChange={e => setScoutV3AddForm(prev => ({ ...prev, tiktokHandle: e.target.value.replace(/^@/, "") }))} style={iS} placeholder="handle" />
+                    </label>
+                    <label style={{ display: "grid", gap: 4 }}>
+                      <span style={{ fontSize: 11, color: C.ts }}>YouTube</span>
+                      <input value={scoutV3AddForm.youtubeHandle} onChange={e => setScoutV3AddForm(prev => ({ ...prev, youtubeHandle: e.target.value.replace(/^@/, "") }))} style={iS} placeholder="handle" />
+                    </label>
+                  </div>
+
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                    <label style={{ display: "grid", gap: 4 }}>
+                      <span style={{ fontSize: 11, color: C.ts }}>SoundCloud URL</span>
+                      <input value={scoutV3AddForm.soundcloudUrl} onChange={e => setScoutV3AddForm(prev => ({ ...prev, soundcloudUrl: e.target.value }))} style={iS} />
+                    </label>
+                    <label style={{ display: "grid", gap: 4 }}>
+                      <span style={{ fontSize: 11, color: C.ts }}>Bandcamp URL</span>
+                      <input value={scoutV3AddForm.bandcampUrl} onChange={e => setScoutV3AddForm(prev => ({ ...prev, bandcampUrl: e.target.value }))} style={iS} />
+                    </label>
+                  </div>
+
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                    <label style={{ display: "grid", gap: 4 }}>
+                      <span style={{ fontSize: 11, color: C.ts }}>Primary email</span>
+                      <input value={scoutV3AddForm.primaryEmail} onChange={e => setScoutV3AddForm(prev => ({ ...prev, primaryEmail: e.target.value }))} style={iS} placeholder="artist@x.com" />
+                    </label>
+                    <label style={{ display: "grid", gap: 4 }}>
+                      <span style={{ fontSize: 11, color: C.ts }}>Contact type</span>
+                      <select value={scoutV3AddForm.contactType} onChange={e => setScoutV3AddForm(prev => ({ ...prev, contactType: e.target.value }))} style={iS}>
+                        <option value="">—</option>
+                        <option value="direct">Direct</option>
+                        <option value="manager">Manager</option>
+                        <option value="agency">Agency</option>
+                        <option value="booking">Booking</option>
+                      </select>
+                    </label>
+                  </div>
+
+                  <div style={{ display: "grid", gap: 6, marginTop: 6 }}>
+                    <span style={{ fontSize: 11, color: C.ts, fontWeight: 600 }}>Other links (Linktree, personal site, etc.)</span>
+                    {scoutV3AddForm.extraLinks.map((link, idx) => (
+                      <div key={`extra-${idx}`} style={{ display: "grid", gridTemplateColumns: "180px 1fr", gap: 6 }}>
+                        <input value={link.label} onChange={e => setScoutV3AddForm(prev => {
+                          const links = prev.extraLinks.slice();
+                          links[idx] = { ...links[idx], label: e.target.value };
+                          return { ...prev, extraLinks: links };
+                        })} style={iS} placeholder="Label" />
+                        <input value={link.url} onChange={e => setScoutV3AddForm(prev => {
+                          const links = prev.extraLinks.slice();
+                          links[idx] = { ...links[idx], url: e.target.value };
+                          return { ...prev, extraLinks: links };
+                        })} style={iS} placeholder="https://..." />
+                      </div>
+                    ))}
+                    <button onClick={() => setScoutV3AddForm(prev => ({ ...prev, extraLinks: [...prev.extraLinks, { label: "", url: "" }] }))} style={{ ...actionBtn(false, "neutral"), alignSelf: "flex-start" }}>+ Add link</button>
+                  </div>
+                </div>
+
+                <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 18 }}>
+                  <button onClick={() => setScoutV3AddModalOpen(false)} style={actionBtn(false, "neutral")}>Cancel</button>
+                  <button onClick={submitScoutV3Add} style={actionBtn(false, "accent")} disabled={!scoutV3AddForm.displayName.trim()}>Add to queue</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Approve modal */}
+          {scoutV3ApproveTarget && (() => {
+            const c = scoutV3ApproveTarget;
+            const projects = selectedWorkspace?.projects || proj?.workspaceProjects || [];
+            const defaultPid = scoutV3ApproveProjectId || scoutV3LastProjectId || projects[0]?.id || "";
+            return (
+              <div onClick={() => setScoutV3ApproveTarget(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "flex-start", justifyContent: "center", zIndex: 1000, padding: 24 }}>
+                <div onClick={e => e.stopPropagation()} style={{ ...cS, padding: 24, maxWidth: 480, width: "100%", marginTop: 80 }}>
+                  <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 8 }}>Approve {c.displayName}</div>
+                  <div style={{ fontSize: 12, color: C.ts, marginBottom: 16, lineHeight: 1.5 }}>
+                    Creates a Kickoff talent record at stage "prospect", pre-qualified, ready for active A&R. Removes from Scout queue.
+                  </div>
+                  <label style={{ display: "grid", gap: 4, marginBottom: 12 }}>
+                    <span style={{ fontSize: 11, color: C.ts, fontWeight: 600 }}>Land in project</span>
+                    <select value={scoutV3ApproveProjectId || defaultPid} onChange={e => setScoutV3ApproveProjectId(e.target.value)} style={iS}>
+                      {projects.length === 0 && <option value="">(no projects)</option>}
+                      {projects.map(p => <option key={p.id} value={p.id}>{p.name || p.id}</option>)}
+                    </select>
+                  </label>
+                  <label style={{ display: "grid", gap: 4, marginBottom: 16 }}>
+                    <span style={{ fontSize: 11, color: C.ts, fontWeight: 600 }}>Note (optional)</span>
+                    <textarea value={scoutV3ApproveNote} onChange={e => setScoutV3ApproveNote(e.target.value)} style={{ ...iS, minHeight: 60, resize: "vertical" }} placeholder="Carries into Kickoff as decision note" />
+                  </label>
+                  <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+                    <button onClick={() => setScoutV3ApproveTarget(null)} style={actionBtn(false, "neutral")}>Cancel</button>
+                    <button onClick={() => submitScoutV3Approve(c, scoutV3ApproveProjectId || defaultPid, scoutV3ApproveNote)} style={actionBtn(false, "accent")} disabled={!(scoutV3ApproveProjectId || defaultPid)}>
+                      ✓ Approve into Kickoff
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* Reject modal */}
+          {scoutV3RejectTarget && (() => {
+            const c = scoutV3RejectTarget;
+            const requiresNote = scoutV3RejectReason === "other";
+            const canSubmit = !requiresNote || scoutV3RejectNote.trim().length > 0;
+            return (
+              <div onClick={() => setScoutV3RejectTarget(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "flex-start", justifyContent: "center", zIndex: 1000, padding: 24 }}>
+                <div onClick={e => e.stopPropagation()} style={{ ...cS, padding: 24, maxWidth: 480, width: "100%", marginTop: 80 }}>
+                  <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 14 }}>Reject {c.displayName}</div>
+                  <label style={{ display: "grid", gap: 4, marginBottom: 12 }}>
+                    <span style={{ fontSize: 11, color: C.ts, fontWeight: 600 }}>Reason *</span>
+                    <select value={scoutV3RejectReason} onChange={e => setScoutV3RejectReason(e.target.value)} style={iS}>
+                      {SCOUT_V3_REJECT_REASONS.map(r => <option key={r.code} value={r.code}>{r.label}</option>)}
+                    </select>
+                  </label>
+                  <label style={{ display: "grid", gap: 4, marginBottom: 16 }}>
+                    <span style={{ fontSize: 11, color: C.ts, fontWeight: 600 }}>
+                      Note {requiresNote ? "*" : "(optional)"}
+                    </span>
+                    <textarea value={scoutV3RejectNote} onChange={e => setScoutV3RejectNote(e.target.value)} style={{ ...iS, minHeight: 60, resize: "vertical" }} placeholder="Visible in rejection log" />
+                  </label>
+                  <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+                    <button onClick={() => setScoutV3RejectTarget(null)} style={actionBtn(false, "neutral")}>Cancel</button>
+                    <button onClick={() => submitScoutV3Reject(c, scoutV3RejectReason, scoutV3RejectNote)} style={actionBtn(false, "danger")} disabled={!canSubmit}>
+                      ✗ Reject
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* Collision modal */}
+          {scoutV3CollisionTarget && (
+            <div onClick={() => setScoutV3CollisionTarget(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "flex-start", justifyContent: "center", zIndex: 1001, padding: 24 }}>
+              <div onClick={e => e.stopPropagation()} style={{ ...cS, padding: 24, maxWidth: 480, width: "100%", marginTop: 80 }}>
+                <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 8 }}>⚠ Already tracked</div>
+                <div style={{ fontSize: 13, color: C.ts, lineHeight: 1.6, marginBottom: 16 }}>
+                  "<strong>{scoutV3CollisionTarget.matchedRecord?.displayName}</strong>" matches a record in <strong>{scoutV3CollisionTarget.matchedRecord?.location}</strong>.
+                  <br />
+                  <span style={{ fontSize: 11, color: C.tt }}>Matched on: {scoutV3CollisionTarget.matchedOn?.replace(/_/g, " ")}</span>
+                </div>
+                <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+                  <button onClick={() => setScoutV3CollisionTarget(null)} style={actionBtn(false, "neutral")}>Cancel</button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   // ═══ WORKSPACE REPORTS ═══
   if (screen === "workspace-report") return (
     <div style={{ fontFamily: ft, background: C.bg, minHeight: "100vh", color: C.tx }}>
