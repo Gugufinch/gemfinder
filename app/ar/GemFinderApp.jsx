@@ -12299,6 +12299,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
               {(() => {
                 // Default-on rollout: Scout V3 enabled unless explicitly disabled.
                 const v3On = selectedWorkspace?.settings?.featureFlags?.scoutV3 !== false;
+                const existingLeads = scoutOverview.leads;
                 return (
                   <button
                     onClick={() => setScreen(v3On ? "scoutV3" : "scout")}
@@ -12315,14 +12316,14 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                     }}
                   >
                     <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
-                      <span style={{ fontSize: 16, fontWeight: 800, color: C.ab }}>Open Scout</span>
+                      <span style={{ fontSize: 16, fontWeight: 800, color: C.ab }}>Open Scout{v3On ? " · V3" : ""}</span>
                       <span style={{ ...mkP(true, C.ab, C.sf), cursor: "pointer" }}>
-                        {v3On ? `${scoutV3Stats?.pendingCount ?? 0} pending` : scoutOverview.leads}
+                        {v3On ? `${scoutV3Stats?.pendingCount ?? 0} pending` : existingLeads}
                       </span>
                     </div>
                     <div style={{ fontSize: 12, color: C.ts, lineHeight: 1.5 }}>
                       {v3On
-                        ? "Hunt new artists. Approve into Kickoff, reject to block forever."
+                        ? `New pre-engagement candidate queue. Existing ${existingLeads} talent records live in Kickoff.`
                         : "Discovery, filtering, and qualification before artists move into active kickoff work."}
                     </div>
                   </button>
