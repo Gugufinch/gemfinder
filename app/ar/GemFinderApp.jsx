@@ -4810,9 +4810,9 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     setScoutFollowerMin(prev => Math.min(prev, scoutFollowerSliderMax));
   }, [scoutFollowerSliderMax]);
 
-  // Scout V3: fetch stats when on workspace screen + flag is on
+  // Scout V3: fetch stats when on workspace screen (default-on)
   useEffect(() => {
-    if (!selectedWorkspace?.settings?.featureFlags?.scoutV3) return;
+    if (selectedWorkspace?.settings?.featureFlags?.scoutV3 === false) return;
     if (!selectedWorkspace?.id) return;
     fetch(`/api/ar/scout/stats?workspaceId=${selectedWorkspace.id}`)
       .then(r => r.json())
@@ -12297,7 +12297,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(180px, 1fr))", gap: 12, alignContent: "start" }}>
               {(() => {
-                const v3On = Boolean(selectedWorkspace?.settings?.featureFlags?.scoutV3);
+                // Default-on rollout: Scout V3 enabled unless explicitly disabled.
+                const v3On = selectedWorkspace?.settings?.featureFlags?.scoutV3 !== false;
                 return (
                   <button
                     onClick={() => setScreen(v3On ? "scoutV3" : "scout")}

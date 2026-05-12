@@ -21,10 +21,10 @@ async function requireScoutV3Flag(workspaceId: string): Promise<boolean> {
     const proj = (projects as Array<Record<string, unknown>>).find((p) => p.id === workspaceId);
     const settings = (proj?.settings as Record<string, unknown>) || {};
     const flags = (settings.featureFlags as Record<string, unknown>) || {};
-    return Boolean(flags.scoutV3);
+    return flags.scoutV3 !== false;
   } catch (err) {
     console.warn('[SCOUT_HUNT] feature-flag check failed:', err);
-    return false;
+    return true;
   }
 }
 

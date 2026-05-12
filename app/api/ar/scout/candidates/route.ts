@@ -27,15 +27,18 @@ async function requireEditorActor(req: NextRequest) {
 }
 
 async function requireScoutV3Flag(workspaceId: string): Promise<boolean> {
+  // Default-on rollout: Scout V3 is enabled unless explicitly disabled
+  // for the workspace via featureFlags.scoutV3 = false.
+  // Flip off per-workspace with: npx tsx scripts/enable-scout-v3.ts <workspaceId> --off
   try {
     const projects = await listWorkspaceProjects();
     const proj = (projects as Array<Record<string, unknown>>).find((p) => p.id === workspaceId);
     const settings = (proj?.settings as Record<string, unknown>) || {};
     const flags = (settings.featureFlags as Record<string, unknown>) || {};
-    return Boolean(flags.scoutV3);
+    return flags.scoutV3 !== false;   // undefined or true → on; explicit false → off
   } catch (err) {
     console.warn('[SCOUT_HUNT] feature-flag check failed:', err);
-    return false;
+    return true;  // fail open — if we can't check, assume on (still requires auth)
   }
 }
 
