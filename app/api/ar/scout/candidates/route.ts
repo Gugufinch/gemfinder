@@ -1,6 +1,7 @@
 // app/api/ar/scout/candidates/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { getAuthUserById } from '@/lib/gemfinder/auth-store';
+import { listWorkspaceProjects } from '@/lib/gemfinder/project-store';
 import { candidateCreateSchema } from '@/lib/gemfinder/scout/validation';
 import { buildIdentity } from '@/lib/gemfinder/scout/identity';
 import { isBlocked } from '@/lib/gemfinder/scout-blocklist';
@@ -25,6 +26,19 @@ async function requireEditorActor(req: NextRequest) {
   return { actor, response: null };
 }
 
+async function requireScoutV3Flag(workspaceId: string): Promise<boolean> {
+  try {
+    const projects = await listWorkspaceProjects();
+    const proj = (projects as Array<Record<string, unknown>>).find((p) => p.id === workspaceId);
+    const settings = (proj?.settings as Record<string, unknown>) || {};
+    const flags = (settings.featureFlags as Record<string, unknown>) || {};
+    return Boolean(flags.scoutV3);
+  } catch (err) {
+    console.warn('[SCOUT_HUNT] feature-flag check failed:', err);
+    return false;
+  }
+}
+
 export async function POST(req: NextRequest) {
   const { actor, response } = await requireEditorActor(req);
   if (response || !actor) return response;
@@ -32,6 +46,12 @@ export async function POST(req: NextRequest) {
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) {
     return NextResponse.json({ error: 'workspaceId query param is required' }, { status: 400 });
+  }
+
+  // Feature flag gate — return 404 (not 403) so the route appears non-existent
+  // when disabled for this workspace.
+  if (!(await requireScoutV3Flag(workspaceId))) {
+    return NextResponse.json({ error: 'Not found' }, { status: 404 });
   }
 
   const payload = await req.json().catch(() => null);
@@ -126,6 +146,10 @@ export async function GET(req: NextRequest) {
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) {
     return NextResponse.json({ error: 'workspaceId query param is required' }, { status: 400 });
+  }
+
+  if (!(await requireScoutV3Flag(workspaceId))) {
+    return NextResponse.json({ error: 'Not found' }, { status: 404 });
   }
 
   const limit = parseInt(req.nextUrl.searchParams.get('limit') || '50', 10);

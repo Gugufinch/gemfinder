@@ -37,6 +37,19 @@ async function requireEditorActor(req: NextRequest) {
   return { actor, response: null };
 }
 
+async function requireScoutV3Flag(workspaceId: string): Promise<boolean> {
+  try {
+    const projects = await listWorkspaceProjects();
+    const proj = (projects as Array<Record<string, unknown>>).find((p) => p.id === workspaceId);
+    const settings = (proj?.settings as Record<string, unknown>) || {};
+    const flags = (settings.featureFlags as Record<string, unknown>) || {};
+    return Boolean(flags.scoutV3);
+  } catch (err) {
+    console.warn('[SCOUT_HUNT] feature-flag check failed:', err);
+    return false;
+  }
+}
+
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { actor, response } = await requireEditorActor(req);
   if (response || !actor) return response;
@@ -44,6 +57,10 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   const { id } = await params;
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return NextResponse.json({ error: 'workspaceId required' }, { status: 400 });
+
+  if (!(await requireScoutV3Flag(workspaceId))) {
+    return NextResponse.json({ error: 'Not found' }, { status: 404 });
+  }
 
   const body = await req.json().catch(() => null);
   if (!body || typeof body !== 'object') {
