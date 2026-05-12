@@ -12424,6 +12424,22 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
         </div>
 
         <div style={{ maxWidth: 1180, margin: "0 auto", padding: "24px" }}>
+          {/* Legacy V2 banner — surfaces context if user arrives here via the V3 "Legacy view" button */}
+          <div style={{ ...cS, padding: "12px 16px", marginBottom: 12, background: C.abb, border: `1px solid ${C.ab}40`, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+            <div style={{ fontSize: 12, color: C.ts, lineHeight: 1.5 }}>
+              <strong style={{ color: C.ab }}>Scout V2 (legacy view).</strong> Shows {scoutOverview.leads} pre-Kickoff records.
+              The new Scout V3 is the pre-engagement candidate queue — these records will live in Kickoff
+              long-term per the V2→Kickoff migration plan (not yet executed).
+            </div>
+            <div style={{ display: "flex", gap: 6 }}>
+              <button onClick={() => setScreen("scoutV3")} style={{ ...actionBtn(false, "accent"), fontSize: 11 }}>
+                Scout V3 →
+              </button>
+              <button onClick={() => setScreen("kickoff")} style={{ ...actionBtn(false, "neutral"), fontSize: 11 }}>
+                Kickoff →
+              </button>
+            </div>
+          </div>
           <div style={{ ...cS, marginBottom: 18, padding: "22px 24px", background: dark ? "linear-gradient(135deg, #22170c 0%, #1b1a2d 100%)" : "linear-gradient(135deg, #fffdf7 0%, #fff1d7 100%)" }}>
             <div style={{ display: "grid", gridTemplateColumns: "minmax(320px, 1.3fr) minmax(280px, 1fr)", gap: 18, alignItems: "stretch" }}>
               <div>
