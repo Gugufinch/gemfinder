@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { Pool } from 'pg';
+import type { ScoutCandidate, AuthUserRecord } from './types';
 
 const LOCAL_PROJECTS_PATH =
   process.env.GEMFINDER_PROJECTS_PATH || path.join(process.cwd(), 'data', 'gemfinder-projects.local.json');
@@ -194,4 +195,44 @@ export async function listWorkspaceProjectSnapshots(limit = 10): Promise<Array<{
     reason: row.reason ?? null,
     projectCount: normalizeProjects((row.value as { projects?: unknown[] } | undefined)?.projects).length,
   }));
+}
+
+export async function addTalentToProject(
+  workspaceId: string,
+  projectId: string,
+  candidate: ScoutCandidate,
+  actor: AuthUserRecord
+): Promise<{ talentId: string; artistRecord: Record<string, unknown> }> {
+  const projects = await listWorkspaceProjects();
+  const project = projects.find((p: unknown) => (p as { id?: string }).id === projectId) as Record<string, unknown> | undefined;
+  if (!project) {
+    throw new Error(`Project ${projectId} not found in workspace ${workspaceId}`);
+  }
+
+  const artistRecord: Record<string, unknown> = {
+    n: candidate.displayName,
+    e: candidate.primaryEmail,
+    soc: candidate.instagramHandle,
+    spotify: candidate.spotifyUrl,
+    stage: 'prospect',
+    genre: candidate.primaryGenre,
+    locations: candidate.locations,
+    contactType: candidate.contactType,
+    contactName: candidate.contactName,
+    contactEmail: candidate.contactEmail,
+    discoveredVia: candidate.source,
+    addedBy: actor.email,
+    addedAt: new Date().toISOString(),
+  };
+
+  const artists = ((project.artists as Record<string, unknown>[]) || []).slice();
+  artists.push(artistRecord);
+  (project as Record<string, unknown>).artists = artists;
+
+  await saveWorkspaceProjects(projects);
+
+  return {
+    talentId: candidate.displayName,
+    artistRecord,
+  };
 }
