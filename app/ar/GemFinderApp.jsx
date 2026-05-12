@@ -12964,6 +12964,27 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
 
   // ═══ SCOUT V3 — PRE-ENGAGEMENT CANDIDATE QUEUE ═══
   if (screen === "scoutV3") {
+    // Inline URL parsers (mirror lib/gemfinder/scout/identity.ts for client-side auto-fill)
+    const parseScoutV3PastedUrl = (url) => {
+      if (!url) return {};
+      const trimmed = url.trim();
+      const spotify = /^https?:\/\/open\.spotify\.com\/artist\/([a-zA-Z0-9]+)(?:\?.*)?$/.exec(trimmed);
+      if (spotify) return { spotifyUrl: `https://open.spotify.com/artist/${spotify[1]}`, spotifyArtistId: spotify[1] };
+      const ig = /^https?:\/\/(?:www\.)?instagram\.com\/([a-zA-Z0-9._]+)\/?(?:\?.*)?$/.exec(trimmed);
+      if (ig) return { instagramHandle: ig[1] };
+      const tt = /^https?:\/\/(?:www\.)?tiktok\.com\/@([a-zA-Z0-9._]+)(?:\?.*)?$/.exec(trimmed);
+      if (tt) return { tiktokHandle: tt[1] };
+      const yt = /^https?:\/\/(?:www\.)?youtube\.com\/@([a-zA-Z0-9._-]+)(?:\?.*)?$/.exec(trimmed);
+      if (yt) return { youtubeHandle: yt[1] };
+      const sc = /^https?:\/\/(?:www\.)?soundcloud\.com\/([a-zA-Z0-9._-]+)\/?(?:\?.*)?$/.exec(trimmed);
+      if (sc) return { soundcloudHandle: sc[1], soundcloudUrl: `https://soundcloud.com/${sc[1]}` };
+      const bc = /^https?:\/\/[a-zA-Z0-9-]+\.bandcamp\.com\/?(?:\?.*)?$/.exec(trimmed);
+      if (bc) return { bandcampUrl: trimmed };
+      const mb = /^https?:\/\/musicbrainz\.org\/artist\/([a-f0-9-]{36})(?:\?.*)?$/.exec(trimmed);
+      if (mb) return { musicbrainzId: mb[1] };
+      return {};
+    };
+
     // Submit handlers — inline closures over state
     const submitScoutV3Add = async () => {
       const form = scoutV3AddForm;
@@ -13268,6 +13289,23 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                 <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 14 }}>Add candidate</div>
 
                 <div style={{ display: "grid", gap: 10 }}>
+                  <label style={{ display: "grid", gap: 4, padding: "10px 12px", background: C.al, borderRadius: 10, border: `1px solid ${C.ac}30` }}>
+                    <span style={{ fontSize: 11, color: C.ac, fontWeight: 700 }}>⚡ Paste any URL to auto-fill</span>
+                    <input
+                      style={{ ...iS, background: "transparent", border: "none" }}
+                      placeholder="https://open.spotify.com/artist/... or instagram.com/handle or tiktok.com/@handle"
+                      onChange={e => {
+                        const parsed = parseScoutV3PastedUrl(e.target.value);
+                        if (Object.keys(parsed).length > 0) {
+                          setScoutV3AddForm(prev => ({ ...prev, ...parsed }));
+                          e.target.value = "";
+                        }
+                      }}
+                    />
+                    <span style={{ fontSize: 10, color: C.tt }}>
+                      Recognizes: Spotify, Instagram, TikTok, YouTube (@handle), SoundCloud, Bandcamp, MusicBrainz
+                    </span>
+                  </label>
                   <label style={{ display: "grid", gap: 4 }}>
                     <span style={{ fontSize: 11, color: C.ts, fontWeight: 600 }}>Name *</span>
                     <input value={scoutV3AddForm.displayName} onChange={e => setScoutV3AddForm(prev => ({ ...prev, displayName: e.target.value }))} style={iS} placeholder="Artist name" />
