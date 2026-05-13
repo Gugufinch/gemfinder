@@ -262,3 +262,140 @@ export type BlocklistMatch = {
 };
 
 export type BlocklistResult = BlocklistMatch | { blocked: false };
+
+// ============================================================================
+// Hunter v1 — agent ingestion subsystem for Scout V3
+// See docs/superpowers/specs/2026-05-12-hunter-v1-design.md
+// ============================================================================
+
+export type HunterRoleTarget = 'performer' | 'curator' | 'both' | 'unknown';
+export type HunterRunStatus = 'running' | 'complete' | 'failed' | 'stale';
+export type HunterSource = 'musicbrainz' | 'spotify' | 'bandcamp';
+
+export type HunterCriteria = {
+  genres: string[];
+  regions: string[];
+  roleTarget: HunterRoleTarget;
+  sizeBracket?: { min?: number; max?: number };
+  recency?: { sinceYear?: number };
+  instrument?: string;
+  targetCount: number;
+  // source is set server-side; not user-selectable in v1.
+  source?: HunterSource;
+};
+
+export type HunterRunErrorEntry = {
+  candidateName?: string;
+  stage: string;
+  message: string;
+};
+
+export type HunterRunGatedReason = {
+  candidateName?: string;
+  reason: string;
+};
+
+export type HunterRunSummary = {
+  fetched: number;
+  skippedBlocked: number;
+  gatedOut: number;
+  scored: number;
+  added: number;
+  errors: HunterRunErrorEntry[];
+  gatedReasons: HunterRunGatedReason[];
+};
+
+export type HunterRun = {
+  id: string;
+  workspaceId: string;
+  criteria: HunterCriteria;
+  weightsSnapshot: HunterWeights;
+  status: HunterRunStatus;
+  startedAt: string;
+  completedAt?: string;
+  errorMessage?: string;
+  summary: HunterRunSummary;
+  startedBy: string;
+};
+
+export type HunterWeightLog = {
+  weight: number;
+  curve: 'log' | 'linear';
+  min: number;
+  max: number;
+  missing_baseline: number;
+  days_window?: number;
+};
+
+export type HunterWeightValueMap = {
+  weight: number;
+  values: Record<string, number>;
+  missing_baseline?: number;
+};
+
+export type HunterWeightGenre = {
+  weight: number;
+  targetGenres: string[];
+  exact: number;
+  related: number;
+  none: number;
+};
+
+export type HunterWeightGeography = {
+  weight: number;
+  targetRegions: string[];
+  match: number;
+  other: number;
+};
+
+export type HunterWeights = {
+  version: number;
+  updatedAt: string;
+  updatedBy: string;
+  weights: {
+    instagram_followers:    HunterWeightLog;
+    tiktok_followers:       HunterWeightLog;
+    youtube_subscribers:    HunterWeightLog;
+    soundcloud_followers:   HunterWeightLog;
+    spotify_followers:      HunterWeightLog;
+    spotify_popularity:     HunterWeightLog;
+    contact_readiness:      HunterWeightValueMap;
+    genre_fit:              HunterWeightGenre;
+    geography:              HunterWeightGeography;
+    role_match:             HunterWeightValueMap;
+    recency:                HunterWeightLog;
+  };
+  gates: {
+    require_genre_match: boolean;
+    require_living: boolean;
+    require_reachable: boolean;
+    require_not_blocked: boolean;
+  };
+  target_count_default: number;
+};
+
+export type EnrichedCandidate = {
+  displayName: string;
+  musicbrainzId: string;
+  country?: string;
+  genres: string[];
+  artistType?: string;
+  isLiving: boolean;
+  recentReleaseYear?: number;
+  spotifyUrl?: string;
+  spotifyArtistId?: string;
+  bandcampUrl?: string;
+  soundcloudHandle?: string;
+  instagramHandle?: string;
+  tiktokHandle?: string;
+  youtubeHandle?: string;
+  website?: string;
+  spotifyFollowers?: number;
+  spotifyPopularity?: number;
+  spotifyGenres?: string[];
+  scrapedContactEmail?: string;
+  scrapedManagerInfo?: string;
+  scrapedToursInfo?: string;
+  inferredRole: 'performer' | 'curator' | 'unknown';
+  contactReadiness: 'direct' | 'manager' | 'agency' | 'booking' | 'social_only' | 'none';
+};
