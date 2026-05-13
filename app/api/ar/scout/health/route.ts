@@ -7,6 +7,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { ensureSchema, getScoutPool, getStats } from '@/lib/gemfinder/scout-candidate-store';
 import { listWorkspaceProjects } from '@/lib/gemfinder/project-store';
+import { getWeights } from '@/lib/gemfinder/hunter/weights-store';
 
 type Check = { name: string; ok: boolean; detail?: string; error?: string };
 
@@ -91,7 +92,44 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  // 7. Hunter env vars (added pre-implementation so Greg can verify Render env is wired)
+  // 7. Hunter schema checks
+  try {
+    const pool = getScoutPool();
+    await pool.query('select 1 from hunter_runs limit 1');
+    pass('schema.hunter_runs', 'ready');
+  } catch (err) {
+    fail('schema.hunter_runs', err, 'table missing; run ensureSchema()');
+  }
+
+  try {
+    const pool = getScoutPool();
+    await pool.query('select 1 from hunter_scrape_cache limit 1');
+    pass('schema.hunter_scrape_cache', 'ready');
+  } catch (err) {
+    fail('schema.hunter_scrape_cache', err, 'table missing; run ensureSchema()');
+  }
+
+  // 7b. Optional Hunter weights check (gated on workspaceId)
+  if (workspaceId) {
+    try {
+      const weights = await getWeights(workspaceId);
+      if (weights.updatedBy === 'system:default') {
+        pass(
+          `workspace[${workspaceId}].hunterWeights`,
+          'using DEFAULT_HUNTER_WEIGHTS (no custom config saved)'
+        );
+      } else {
+        pass(
+          `workspace[${workspaceId}].hunterWeights`,
+          `custom weights configured (version=${weights.version}, target_count=${weights.target_count_default})`
+        );
+      }
+    } catch (err) {
+      fail(`workspace[${workspaceId}].hunterWeights`, err);
+    }
+  }
+
+  // 8. Spotify / Steel env vars
   const SPOTIFY_ID = process.env.SPOTIFY_CLIENT_ID;
   const SPOTIFY_SECRET = process.env.SPOTIFY_CLIENT_SECRET;
   const STEEL_KEY = process.env.STEEL_API_KEY;
@@ -112,7 +150,7 @@ export async function GET(req: NextRequest) {
     pass('env.STEEL_API_KEY', `set (${STEEL_KEY.slice(0, 8)}…${STEEL_KEY.slice(-4)})`);
   }
 
-  // 8. Spotify Client Credentials token exchange — proves Spotify creds actually work
+  // 9. Spotify Client Credentials token exchange — proves Spotify creds actually work
   if (SPOTIFY_ID && SPOTIFY_SECRET) {
     try {
       const basicAuth = Buffer.from(`${SPOTIFY_ID}:${SPOTIFY_SECRET}`).toString('base64');
@@ -148,7 +186,7 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  // 9. Build info
+  // 10. Build info
   pass('build.scout_v3', 'live');
 
   return NextResponse.json(
