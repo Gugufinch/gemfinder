@@ -13312,6 +13312,35 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                         <div style={{ fontSize: 11, color: C.tt }}>
                           Added via {c.source} ({c.addedBy}) · enrichment: {c.enrichmentStatus}
                         </div>
+                        {/* Chunk 6.5: Hunter provenance footer — for candidates that came from a hunter run */}
+                        {c.source && c.source.startsWith("agent:hunter:") && (
+                          <div style={{ fontSize: 11, color: C.tt, paddingTop: 4, marginTop: 4, borderTop: `1px dashed ${C.bd}` }}>
+                            {/* Top dims by score (descending), at most 3 — gives the operator the "why was this scored high" at a glance */}
+                            {c.weightSnapshot && typeof c.weightSnapshot === "object" && Object.keys(c.weightSnapshot).length > 0 && (
+                              <span>
+                                Top dims:{" "}
+                                {Object.entries(c.weightSnapshot)
+                                  .filter(([, v]) => typeof v === "number")
+                                  .sort(([, a], [, b]) => b - a)
+                                  .slice(0, 3)
+                                  .map(([k, v]) => `${k} (${Math.round(v)})`)
+                                  .join(" · ")}
+                              </span>
+                            )}
+                            {c.hunterRunId && (
+                              <>
+                                {" · "}
+                                <button
+                                  onClick={() => { setScoutV3Tab("runs"); setScoutV3HunterExpandedRunId(c.hunterRunId); }}
+                                  style={{ background: "transparent", border: "none", padding: 0, color: C.bu, cursor: "pointer", fontSize: 11, textDecoration: "underline" }}
+                                  title="Jump to this candidate's Hunter run"
+                                >
+                                  View run →
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        )}
                       </div>
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                         <button onClick={() => setScoutV3ApproveTarget(c)} style={actionBtn(false, "accent")}>✓ Approve</button>
