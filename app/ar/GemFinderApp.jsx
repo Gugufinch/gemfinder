@@ -13477,7 +13477,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
               </div>
 
               {/* Role target + target count (compact row) */}
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 20 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
                 <div>
                   <label style={{ fontSize: 12, fontWeight: 700, display: "block", marginBottom: 6 }}>Role target</label>
                   <select
@@ -13506,18 +13506,131 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                 </div>
               </div>
 
+              {/* Optional: Spotify followers bracket */}
+              <div style={{ marginBottom: 16 }}>
+                <label style={{ fontSize: 12, fontWeight: 700, display: "block", marginBottom: 6 }}>
+                  Spotify followers <span style={{ color: C.ts, fontWeight: 400 }}>(optional · min / max)</span>
+                </label>
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <input
+                    type="number"
+                    min={0}
+                    placeholder="min (e.g. 1000)"
+                    value={scoutV3HunterCriteria.sizeBracket?.min ?? ""}
+                    onChange={e => {
+                      const v = e.target.value === "" ? undefined : Math.max(0, parseInt(e.target.value) || 0);
+                      setScoutV3HunterCriteria(c => ({ ...c, sizeBracket: { ...(c.sizeBracket || {}), min: v } }));
+                    }}
+                    style={{ flex: 1, padding: "8px 12px", border: `1px solid ${C.bd}`, borderRadius: 6, fontSize: 13 }}
+                  />
+                  <span style={{ color: C.ts, fontSize: 12 }}>to</span>
+                  <input
+                    type="number"
+                    min={0}
+                    placeholder="max (e.g. 100000)"
+                    value={scoutV3HunterCriteria.sizeBracket?.max ?? ""}
+                    onChange={e => {
+                      const v = e.target.value === "" ? undefined : Math.max(0, parseInt(e.target.value) || 0);
+                      setScoutV3HunterCriteria(c => ({ ...c, sizeBracket: { ...(c.sizeBracket || {}), max: v } }));
+                    }}
+                    style={{ flex: 1, padding: "8px 12px", border: `1px solid ${C.bd}`, borderRadius: 6, fontSize: 13 }}
+                  />
+                </div>
+              </div>
+
+              {/* Optional: Recency + Instrument (compact row) */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
+                <div>
+                  <label style={{ fontSize: 12, fontWeight: 700, display: "block", marginBottom: 6 }}>
+                    Released since <span style={{ color: C.ts, fontWeight: 400 }}>(optional year)</span>
+                  </label>
+                  <input
+                    type="number"
+                    min={1900}
+                    max={2100}
+                    placeholder="e.g. 2022"
+                    value={scoutV3HunterCriteria.recency?.sinceYear ?? ""}
+                    onChange={e => {
+                      const v = e.target.value === "" ? undefined : Math.max(1900, Math.min(2100, parseInt(e.target.value) || 0));
+                      setScoutV3HunterCriteria(c => ({ ...c, recency: { sinceYear: v } }));
+                    }}
+                    style={{ width: "100%", padding: "8px 12px", border: `1px solid ${C.bd}`, borderRadius: 6, fontSize: 13 }}
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize: 12, fontWeight: 700, display: "block", marginBottom: 6 }}>
+                    Instrument <span style={{ color: C.ts, fontWeight: 400 }}>(optional)</span>
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. piano, guitar..."
+                    value={scoutV3HunterCriteria.instrument ?? ""}
+                    onChange={e => setScoutV3HunterCriteria(c => ({ ...c, instrument: e.target.value }))}
+                    style={{ width: "100%", padding: "8px 12px", border: `1px solid ${C.bd}`, borderRadius: 6, fontSize: 13 }}
+                  />
+                </div>
+              </div>
+
+              {/* Hint: scoring weights live on the Runs tab */}
+              <div style={{ fontSize: 11, color: C.ts, padding: "8px 12px", background: C.sa, borderRadius: 6, marginBottom: 16, lineHeight: 1.5 }}>
+                <strong>Looking for follower / monthly-listener weights?</strong> Those are
+                workspace-wide scoring config, not per-hunt criteria. Edit them via the
+                <strong> ⚙ Edit weights</strong> button on the Runs tab.
+              </div>
+
               {/* Submit */}
               <button
                 onClick={async () => {
                   if (!selectedWorkspace?.id) return;
-                  if (scoutV3HunterCriteria.genres.length === 0 && scoutV3HunterCriteria.regions.length === 0) return;
+
+                  // Auto-commit any pending text in the chip inputs (typed but not yet Added)
+                  const pendingGenre = scoutV3HunterGenreInput.trim().toLowerCase();
+                  const pendingRegion = scoutV3HunterRegionInput.trim().toUpperCase();
+                  const genres = pendingGenre && !scoutV3HunterCriteria.genres.includes(pendingGenre)
+                    ? [...scoutV3HunterCriteria.genres, pendingGenre]
+                    : scoutV3HunterCriteria.genres;
+                  const regions = pendingRegion && !scoutV3HunterCriteria.regions.includes(pendingRegion)
+                    ? [...scoutV3HunterCriteria.regions, pendingRegion]
+                    : scoutV3HunterCriteria.regions;
+
+                  if (genres.length === 0 && regions.length === 0) {
+                    window.alert("Add at least one genre or region. Type a value and press Enter or click Add to create a chip.");
+                    return;
+                  }
+
+                  // Reflect the auto-committed chips in UI state, clear pending inputs
+                  setScoutV3HunterCriteria(c => ({ ...c, genres, regions }));
+                  setScoutV3HunterGenreInput("");
+                  setScoutV3HunterRegionInput("");
+
+                  // Build clean payload: omit empty optional fields so zod's .optional() lands cleanly
+                  const payload = {
+                    genres,
+                    regions,
+                    roleTarget: scoutV3HunterCriteria.roleTarget,
+                    targetCount: scoutV3HunterCriteria.targetCount,
+                  };
+                  const sb = scoutV3HunterCriteria.sizeBracket;
+                  if (sb && (typeof sb.min === "number" || typeof sb.max === "number")) {
+                    payload.sizeBracket = {};
+                    if (typeof sb.min === "number") payload.sizeBracket.min = sb.min;
+                    if (typeof sb.max === "number") payload.sizeBracket.max = sb.max;
+                  }
+                  const rec = scoutV3HunterCriteria.recency;
+                  if (rec && typeof rec.sinceYear === "number") {
+                    payload.recency = { sinceYear: rec.sinceYear };
+                  }
+                  if (scoutV3HunterCriteria.instrument && scoutV3HunterCriteria.instrument.trim()) {
+                    payload.instrument = scoutV3HunterCriteria.instrument.trim();
+                  }
+
                   setScoutV3HunterSubmitting(true);
                   try {
                     const res = await fetch(`/api/ar/scout/hunter/run?workspaceId=${encodeURIComponent(selectedWorkspace.id)}`, {
                       method: "POST",
                       credentials: "include",
                       headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify(scoutV3HunterCriteria),
+                      body: JSON.stringify(payload),
                     });
                     const data = await res.json();
                     if (data.ok) {
@@ -13532,8 +13645,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                     setScoutV3HunterSubmitting(false);
                   }
                 }}
-                disabled={scoutV3HunterSubmitting || (scoutV3HunterCriteria.genres.length === 0 && scoutV3HunterCriteria.regions.length === 0)}
-                style={{ ...actionBtn(scoutV3HunterCriteria.genres.length > 0 || scoutV3HunterCriteria.regions.length > 0, "accent"), opacity: scoutV3HunterSubmitting ? 0.6 : 1 }}
+                disabled={scoutV3HunterSubmitting}
+                style={{ ...actionBtn(true, "accent"), opacity: scoutV3HunterSubmitting ? 0.6 : 1 }}
               >
                 {scoutV3HunterSubmitting ? "Submitting…" : "Run Hunter →"}
               </button>
