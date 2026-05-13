@@ -92,6 +92,62 @@ create index if not exists idx_scout_rej_youtube_handle on scout_rejections (wor
 create index if not exists idx_scout_rej_soundcloud_handle on scout_rejections (workspace_id, soundcloud_handle) where soundcloud_handle is not null;
 create index if not exists idx_scout_rej_musicbrainz_id on scout_rejections (workspace_id, musicbrainz_id) where musicbrainz_id is not null;
 create index if not exists idx_scout_rej_primary_email on scout_rejections (workspace_id, primary_email) where primary_email is not null;
+
+-- ============================================================================
+-- Hunter v1 schemas
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS hunter_runs (
+  id                  uuid primary key default gen_random_uuid(),
+  workspace_id        text not null,
+  criteria            jsonb not null,
+  weights_snapshot    jsonb not null,
+  status              text not null default 'running',
+  started_at          timestamptz not null default now(),
+  completed_at        timestamptz,
+  error_message       text,
+  summary             jsonb not null default '{}'::jsonb,
+  started_by          text not null
+);
+
+CREATE INDEX IF NOT EXISTS idx_hunter_runs_workspace_started
+  ON hunter_runs (workspace_id, started_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_hunter_runs_status_started
+  ON hunter_runs (status, started_at) WHERE status = 'running';
+
+CREATE TABLE IF NOT EXISTS hunter_scrape_cache (
+  id          uuid primary key default gen_random_uuid(),
+  cache_key   text not null unique,
+  scrape_url  text not null,
+  result      jsonb not null,
+  cached_at   timestamptz not null default now(),
+  expires_at  timestamptz not null
+);
+
+CREATE INDEX IF NOT EXISTS idx_scrape_cache_expires ON hunter_scrape_cache (expires_at);
+
+-- Idempotent column addition to existing scout_candidates table.
+-- CREATE TABLE IF NOT EXISTS above is no-op on existing DBs; this ALTER
+-- ensures the new column is added on production where the table predates Hunter.
+ALTER TABLE scout_candidates
+  ADD COLUMN IF NOT EXISTS hunter_run_id uuid;
+
+-- Foreign key constraint (no IF NOT EXISTS support pre-pg9.6, use DO block):
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'fk_scout_candidates_hunter_run'
+  ) THEN
+    ALTER TABLE scout_candidates
+      ADD CONSTRAINT fk_scout_candidates_hunter_run
+      FOREIGN KEY (hunter_run_id) REFERENCES hunter_runs(id) ON DELETE SET NULL;
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_scout_cand_hunter_run
+  ON scout_candidates (hunter_run_id) WHERE hunter_run_id IS NOT NULL;
 `;
 
 let pool: Pool | null = null;
