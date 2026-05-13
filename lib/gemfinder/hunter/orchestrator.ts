@@ -65,6 +65,19 @@ export async function runPipeline(input: RunPipelineInput): Promise<HunterRunSum
     summary.fetched = mbResults.length;
     await updateRunSummary(runId, { fetched: summary.fetched });
 
+    // Shuffle MB results before enrichment.
+    //
+    // MusicBrainz returns results in relevance/popularity order, so the first
+    // 100 hits for "rock" are megastars (Pearl Jam, Bob Dylan, etc.). With
+    // concurrency=8, that means our first 8 parallel enrichments are wasted
+    // on bands we can't engage. Shuffling spreads the candidate diversity
+    // across the run, so the early progress signals are more representative
+    // of what we'll actually surface. Fisher–Yates in place.
+    for (let i = mbResults.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [mbResults[i], mbResults[j]] = [mbResults[j], mbResults[i]];
+    }
+
     // Phases B + C + D: enrich each candidate with concurrency, then gate + score
     type ScoredCandidate = {
       enriched: EnrichedCandidate;
@@ -94,7 +107,7 @@ export async function runPipeline(input: RunPipelineInput): Promise<HunterRunSum
               summary.skippedBlocked++;
               return;
             }
-            const gate = evaluateGates(enriched, weights, blockResult);
+            const gate = evaluateGates(enriched, weights, blockResult, criteria);
             if (!gate.pass) {
               summary.gatedOut++;
               summary.gatedReasons.push({ candidateName: enriched.displayName, reason: gate.reason });

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { evaluateGates } from '@/lib/gemfinder/hunter/gates';
 import { DEFAULT_HUNTER_WEIGHTS } from '@/lib/gemfinder/hunter/weights-store';
-import type { EnrichedCandidate, BlocklistResult, HunterWeights } from '@/lib/gemfinder/types';
+import type { EnrichedCandidate, BlocklistResult, HunterWeights, HunterCriteria } from '@/lib/gemfinder/types';
 
 // ---------------------------------------------------------------------------
 // Minimal fixtures
@@ -288,5 +288,99 @@ describe('gate ordering', () => {
     };
     const result = evaluateGates(candidate, weights, notBlocked);
     expect(result).toEqual({ pass: false, reason: 'genre_mismatch' });
+  });
+
+  // ---------------------------------------------------------------------------
+  // criteria.genres takes precedence over weights.genre_fit.targetGenres
+  // ---------------------------------------------------------------------------
+  // The pre-fix behavior used workspace target genres for the gate, which broke
+  // searches where the user's criteria genres differed from the workspace
+  // defaults (e.g., "rock" search vs. "indie pop/folk/singer-songwriter" target).
+  describe('genre gate uses criteria.genres when provided', () => {
+    const baseCriteria: HunterCriteria = {
+      genres: ['rock', 'alternative'],
+      regions: [],
+      roleTarget: 'both',
+      targetCount: 25,
+    };
+
+    it('passes when candidate genres match criteria.genres (rock), even if workspace targets are indie pop', () => {
+      const weights = withGates({ require_genre_match: true });
+      // Workspace targetGenres is indie pop / folk / singer-songwriter, but
+      // user searched for rock — the rock-tagged candidate should PASS.
+      const rockCandidate: EnrichedCandidate = { ...baseCandidate, genres: ['rock', 'classic rock'] };
+      expect(evaluateGates(rockCandidate, weights, notBlocked, baseCriteria)).toEqual({ pass: true });
+    });
+
+    it('rejects when candidate genres DO NOT match criteria.genres', () => {
+      const weights = withGates({ require_genre_match: true });
+      const jazzCandidate: EnrichedCandidate = { ...baseCandidate, genres: ['jazz'] };
+      expect(evaluateGates(jazzCandidate, weights, notBlocked, baseCriteria)).toEqual({ pass: false, reason: 'genre_mismatch' });
+    });
+
+    it('falls back to weights.genre_fit.targetGenres when criteria.genres is empty (region-only search)', () => {
+      const weights = withGates({ require_genre_match: true });
+      const regionOnlyCriteria: HunterCriteria = { genres: [], regions: ['US'], roleTarget: 'both', targetCount: 25 };
+      const indieCandidate: EnrichedCandidate = { ...baseCandidate, genres: ['indie pop'] };  // matches workspace targets
+      expect(evaluateGates(indieCandidate, weights, notBlocked, regionOnlyCriteria)).toEqual({ pass: true });
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // size cap gate (NEW)
+  // ---------------------------------------------------------------------------
+  describe('size cap gate (sizeBracket.max)', () => {
+    const baseCriteria: HunterCriteria = { genres: ['rock'], regions: [], roleTarget: 'both', targetCount: 25 };
+
+    it('rejects candidate above the default cap (500K) when criteria.sizeBracket.max is not set', () => {
+      const weights = withGates({ require_genre_match: false });
+      // 5M followers — definitely a megastar
+      const megastar: EnrichedCandidate = { ...baseCandidate, genres: ['rock'], spotifyFollowers: 5_000_000 };
+      const result = evaluateGates(megastar, weights, notBlocked, baseCriteria);
+      expect(result.pass).toBe(false);
+      if (!result.pass) expect(result.reason).toMatch(/^too_big:/);
+    });
+
+    it('respects an explicit criteria.sizeBracket.max', () => {
+      const weights = withGates({ require_genre_match: false });
+      const criteria: HunterCriteria = { ...baseCriteria, sizeBracket: { max: 50_000 } };
+      const candidate: EnrichedCandidate = { ...baseCandidate, genres: ['rock'], spotifyFollowers: 100_000 };
+      const result = evaluateGates(candidate, weights, notBlocked, criteria);
+      expect(result.pass).toBe(false);
+      if (!result.pass) expect(result.reason).toMatch(/^too_big:/);
+    });
+
+    it('passes when candidate is below the cap', () => {
+      const weights = withGates({ require_genre_match: false });
+      const indie: EnrichedCandidate = { ...baseCandidate, genres: ['rock'], spotifyFollowers: 10_000 };
+      expect(evaluateGates(indie, weights, notBlocked, baseCriteria)).toEqual({ pass: true });
+    });
+
+    it('passes when spotifyFollowers is undefined (no data = benefit of the doubt)', () => {
+      const weights = withGates({ require_genre_match: false });
+      const unknownSize: EnrichedCandidate = { ...baseCandidate, genres: ['rock'] };  // no spotifyFollowers
+      expect(evaluateGates(unknownSize, weights, notBlocked, baseCriteria)).toEqual({ pass: true });
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // size floor gate (NEW)
+  // ---------------------------------------------------------------------------
+  describe('size floor gate (sizeBracket.min)', () => {
+    it('rejects candidate below the explicit floor', () => {
+      const weights = withGates({ require_genre_match: false });
+      const criteria: HunterCriteria = { genres: ['rock'], regions: [], roleTarget: 'both', targetCount: 25, sizeBracket: { min: 5000 } };
+      const tiny: EnrichedCandidate = { ...baseCandidate, genres: ['rock'], spotifyFollowers: 500 };
+      const result = evaluateGates(tiny, weights, notBlocked, criteria);
+      expect(result.pass).toBe(false);
+      if (!result.pass) expect(result.reason).toMatch(/^too_small:/);
+    });
+
+    it('does not fire when sizeBracket.min is not set (no default floor)', () => {
+      const weights = withGates({ require_genre_match: false });
+      const criteria: HunterCriteria = { genres: ['rock'], regions: [], roleTarget: 'both', targetCount: 25 };
+      const tiny: EnrichedCandidate = { ...baseCandidate, genres: ['rock'], spotifyFollowers: 100 };
+      expect(evaluateGates(tiny, weights, notBlocked, criteria)).toEqual({ pass: true });
+    });
   });
 });
