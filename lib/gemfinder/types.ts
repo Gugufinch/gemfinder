@@ -393,6 +393,10 @@ export type EnrichedCandidate = {
   spotifyFollowers?: number;
   spotifyPopularity?: number;
   spotifyGenres?: string[];
+  instagramFollowers?: number;
+  tiktokFollowers?: number;
+  youtubeSubscribers?: number;
+  soundcloudFollowers?: number;
   scrapedContactEmail?: string;
   scrapedManagerInfo?: string;
   scrapedToursInfo?: string;
