@@ -3721,6 +3721,11 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [scoutV3HunterExpandedRunId, setScoutV3HunterExpandedRunId] = useState(null);
   const [scoutV3HunterRunDetail, setScoutV3HunterRunDetail] = useState(null);
   const [scoutV3HunterPollTick, setScoutV3HunterPollTick] = useState(0);
+  const [scoutV3HunterWeightsOpen, setScoutV3HunterWeightsOpen] = useState(false);
+  const [scoutV3HunterWeightsLoading, setScoutV3HunterWeightsLoading] = useState(false);
+  const [scoutV3HunterWeightsJson, setScoutV3HunterWeightsJson] = useState("");
+  const [scoutV3HunterWeightsError, setScoutV3HunterWeightsError] = useState("");
+  const [scoutV3HunterWeightsSaving, setScoutV3HunterWeightsSaving] = useState(false);
   const [scoutV3LastProjectId, setScoutV3LastProjectId] = useState(() =>
     typeof window !== "undefined" ? localStorage.getItem("scoutV3LastProjectId") || "" : ""
   );
@@ -4890,6 +4895,24 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       .then(data => { if (data.ok) setScoutV3HunterRunDetail(data.run); })
       .catch(err => console.warn("[SCOUT_V3_HUNTER] run detail fetch failed:", err));
   }, [scoutV3HunterExpandedRunId, selectedWorkspace?.id, scoutV3HunterPollTick]);
+
+  // Scout V3 Hunter: fetch weights when modal opens
+  useEffect(() => {
+    if (!scoutV3HunterWeightsOpen || !selectedWorkspace?.id) return;
+    setScoutV3HunterWeightsLoading(true);
+    setScoutV3HunterWeightsError("");
+    fetch(`/api/ar/scout/hunter/weights?workspaceId=${encodeURIComponent(selectedWorkspace.id)}`, { credentials: "include" })
+      .then(r => r.json())
+      .then(data => {
+        if (data.ok) {
+          setScoutV3HunterWeightsJson(JSON.stringify(data.weights, null, 2));
+        } else {
+          setScoutV3HunterWeightsError(data.error || "Failed to load weights");
+        }
+      })
+      .catch(err => setScoutV3HunterWeightsError(err.message))
+      .finally(() => setScoutV3HunterWeightsLoading(false));
+  }, [scoutV3HunterWeightsOpen, selectedWorkspace?.id]);
 
   const resetScoutFilters = useCallback(() => {
     setScoutQuery("");
@@ -13504,10 +13527,19 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                   <button onClick={() => setScoutV3Tab("search")} style={actionBtn(false, "accent")}>
                     + Start a search →
                   </button>
+                  <button onClick={() => setScoutV3HunterWeightsOpen(true)} style={{ ...actionBtn(false, "neutral"), marginLeft: 8 }}>
+                    ⚙ Edit weights
+                  </button>
                 </div>
               </div>
             ) : (
-              <div style={{ display: "grid", gap: 10 }}>
+              <div>
+                <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}>
+                  <button onClick={() => setScoutV3HunterWeightsOpen(true)} style={actionBtn(false, "neutral")}>
+                    ⚙ Edit weights
+                  </button>
+                </div>
+                <div style={{ display: "grid", gap: 10 }}>
                 {scoutV3HunterRuns.map(run => {
                   const statusTone =
                     run.status === "complete" ? { ...mkP(true, C.gn, C.gb) }
@@ -13583,6 +13615,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                     </div>
                   );
                 })}
+                </div>
               </div>
             )
           )}
@@ -13789,6 +13822,98 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                 <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
                   <button onClick={() => setScoutV3CollisionTarget(null)} style={actionBtn(false, "neutral")}>Cancel</button>
                 </div>
+              </div>
+            </div>
+          )}
+
+          {/* Hunter weights JSON editor modal */}
+          {scoutV3HunterWeightsOpen && (
+            <div
+              onClick={() => setScoutV3HunterWeightsOpen(false)}
+              style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}
+            >
+              <div
+                onClick={e => e.stopPropagation()}
+                style={{ ...cS, width: "min(720px, 90vw)", maxHeight: "85vh", padding: "24px 28px", display: "flex", flexDirection: "column" }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                  <div style={{ fontSize: 18, fontWeight: 700 }}>Hunter Weights — JSON editor</div>
+                  <button onClick={() => setScoutV3HunterWeightsOpen(false)} style={{ background: "transparent", border: "none", fontSize: 20, cursor: "pointer", color: C.ts }}>×</button>
+                </div>
+                <div style={{ fontSize: 12, color: C.ts, marginBottom: 12, lineHeight: 1.6 }}>
+                  Raw JSON editor for the workspace's HunterWeights config. Affects scoring on subsequent
+                  runs only — prior runs keep their snapshot. v1.1 will replace this with sliders.
+                </div>
+
+                {scoutV3HunterWeightsLoading ? (
+                  <div style={{ padding: 32, textAlign: "center", color: C.ts, fontSize: 13 }}>Loading…</div>
+                ) : (
+                  <>
+                    <textarea
+                      value={scoutV3HunterWeightsJson}
+                      onChange={e => { setScoutV3HunterWeightsJson(e.target.value); setScoutV3HunterWeightsError(""); }}
+                      spellCheck={false}
+                      style={{
+                        flex: 1,
+                        minHeight: 360,
+                        fontFamily: "ui-monospace, SF Mono, Menlo, monospace",
+                        fontSize: 12,
+                        padding: 12,
+                        border: `1px solid ${C.bd}`,
+                        borderRadius: 6,
+                        resize: "vertical",
+                        lineHeight: 1.5,
+                      }}
+                    />
+                    {scoutV3HunterWeightsError && (
+                      <div style={{ fontSize: 12, color: C.rd, padding: "8px 12px", background: C.rb, borderRadius: 6, marginTop: 8, whiteSpace: "pre-wrap" }}>
+                        {scoutV3HunterWeightsError}
+                      </div>
+                    )}
+                    <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
+                      <button onClick={() => setScoutV3HunterWeightsOpen(false)} style={actionBtn(false, "neutral")}>Cancel</button>
+                      <button
+                        disabled={scoutV3HunterWeightsSaving}
+                        onClick={async () => {
+                          if (!selectedWorkspace?.id) return;
+                          setScoutV3HunterWeightsError("");
+                          // Parse JSON locally first to catch syntax errors
+                          let parsed;
+                          try {
+                            parsed = JSON.parse(scoutV3HunterWeightsJson);
+                          } catch (err) {
+                            setScoutV3HunterWeightsError(`Invalid JSON: ${err.message}`);
+                            return;
+                          }
+                          setScoutV3HunterWeightsSaving(true);
+                          try {
+                            const res = await fetch(`/api/ar/scout/hunter/weights?workspaceId=${encodeURIComponent(selectedWorkspace.id)}`, {
+                              method: "PUT",
+                              credentials: "include",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify(parsed),
+                            });
+                            const data = await res.json();
+                            if (data.ok) {
+                              setScoutV3HunterWeightsOpen(false);
+                            } else {
+                              // Surface zod issues if present
+                              const detail = (data.details || []).map(d => `${(d.path || []).join(".")}: ${d.message}`).join("\n");
+                              setScoutV3HunterWeightsError(`${data.error || "Save failed"}${detail ? `\n${detail}` : ""}`);
+                            }
+                          } catch (err) {
+                            setScoutV3HunterWeightsError(err.message);
+                          } finally {
+                            setScoutV3HunterWeightsSaving(false);
+                          }
+                        }}
+                        style={{ ...actionBtn(true, "accent"), opacity: scoutV3HunterWeightsSaving ? 0.6 : 1 }}
+                      >
+                        {scoutV3HunterWeightsSaving ? "Saving…" : "Save weights"}
+                      </button>
+                    </div>
+                  </>
+                )}
               </div>
             </div>
           )}
