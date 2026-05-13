@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('@/lib/gemfinder/hunter/spotify', () => ({
   getArtistById: vi.fn(),
@@ -38,10 +38,15 @@ function makeScrapeResult(overrides: Partial<SteelScrapeResult['extractedFields'
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.spyOn(console, 'warn').mockImplementation(() => {});
   vi.mocked(cache.getCached).mockResolvedValue(null);
   vi.mocked(cache.putCached).mockResolvedValue(undefined);
   vi.mocked(steel.scrapeWebsite).mockResolvedValue(null);
   vi.mocked(spotify.getArtistById).mockResolvedValue(null);
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 describe('enrichCandidate', () => {
@@ -385,5 +390,55 @@ describe('enrichCandidate', () => {
       relations: [{ type: 'official homepage', url: { resource: 'https://mysite.com' } }],
     }));
     expect(result.website).toBe('https://mysite.com');
+  });
+
+  // -------------------------------------------------------------------------
+  // Graceful failure — client throws (not returns null)
+  // -------------------------------------------------------------------------
+
+  it('spotify getArtistById throws — enrichment completes without spotify fields', async () => {
+    vi.mocked(spotify.getArtistById).mockRejectedValue(new Error('spotify down'));
+
+    const result = await enrichCandidate('ws-1', minimalArtist({
+      tags: [{ name: 'indie', count: 3 }],
+      relations: [
+        { type: 'spotify', url: { resource: 'https://open.spotify.com/artist/sp999' } },
+      ],
+    }));
+
+    expect(result.spotifyFollowers).toBeUndefined();
+    expect(result.spotifyPopularity).toBeUndefined();
+    // genres falls back to MB tags when spotify threw
+    expect(result.genres).toEqual(['indie']);
+  });
+
+  it('scrapeWebsite throws — enrichment completes without scraped fields, putCached not called', async () => {
+    vi.mocked(cache.getCached).mockResolvedValue(null);
+    vi.mocked(steel.scrapeWebsite).mockRejectedValue(new Error('steel timeout'));
+
+    const result = await enrichCandidate('ws-1', minimalArtist({
+      relations: [
+        { type: 'official homepage', url: { resource: 'https://example.com' } },
+      ],
+    }));
+
+    expect(result.scrapedContactEmail).toBeUndefined();
+    expect(result.scrapedManagerInfo).toBeUndefined();
+    expect(cache.putCached).not.toHaveBeenCalled();
+  });
+
+  it('getCached throws — falls back to live scrape and populates scraped fields', async () => {
+    vi.mocked(cache.getCached).mockRejectedValue(new Error('db down'));
+    const scrapeResult = makeScrapeResult({ contactEmail: 'live@example.com' });
+    vi.mocked(steel.scrapeWebsite).mockResolvedValue(scrapeResult);
+
+    const result = await enrichCandidate('ws-1', minimalArtist({
+      relations: [
+        { type: 'official homepage', url: { resource: 'https://example.com' } },
+      ],
+    }));
+
+    expect(steel.scrapeWebsite).toHaveBeenCalledWith('https://example.com');
+    expect(result.scrapedContactEmail).toBe('live@example.com');
   });
 });

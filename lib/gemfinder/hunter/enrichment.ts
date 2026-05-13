@@ -221,7 +221,12 @@ export async function enrichCandidate(
   if (extracted.spotifyUrl) {
     spotifyArtistId = parseSpotifyArtistId(extracted.spotifyUrl) ?? undefined;
     if (spotifyArtistId) {
-      const sp = await getArtistById(spotifyArtistId);
+      let sp = null;
+      try {
+        sp = await getArtistById(spotifyArtistId);
+      } catch (err) {
+        console.warn('[HUNTER_ENRICH] spotify lookup failed for', spotifyArtistId + ':', err);
+      }
       if (sp) {
         spotifyFollowers = sp.followers.total;
         spotifyPopularity = sp.popularity;
@@ -242,9 +247,18 @@ export async function enrichCandidate(
   let scrapedToursInfo: string | undefined;
 
   if (scrapeUrl) {
-    let scrapeResult = await getCached(workspaceId, scrapeUrl);
+    let scrapeResult = null;
+    try {
+      scrapeResult = await getCached(workspaceId, scrapeUrl);
+    } catch (err) {
+      console.warn('[HUNTER_ENRICH] cache lookup failed for', scrapeUrl + ':', err);
+    }
     if (!scrapeResult) {
-      scrapeResult = await scrapeWebsite(scrapeUrl);
+      try {
+        scrapeResult = await scrapeWebsite(scrapeUrl);
+      } catch (err) {
+        console.warn('[HUNTER_ENRICH] scrape failed for', scrapeUrl + ':', err);
+      }
       if (scrapeResult) {
         await putCached(workspaceId, scrapeUrl, scrapeResult).catch((err) =>
           console.warn('[HUNTER_ENRICHMENT] putCached failed:', err)
