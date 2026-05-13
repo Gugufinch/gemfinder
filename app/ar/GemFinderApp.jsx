@@ -3703,6 +3703,24 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [scoutV3ApproveProjectId, setScoutV3ApproveProjectId] = useState("");
   const [scoutV3RejectReason, setScoutV3RejectReason] = useState("already_signed");
   const [scoutV3RejectNote, setScoutV3RejectNote] = useState("");
+  // Scout V3 Hunter — agent-driven candidate ingestion (feature-flagged with Scout V3)
+  const [scoutV3HunterCriteria, setScoutV3HunterCriteria] = useState({
+    genres: [],
+    regions: [],
+    roleTarget: "both",
+    sizeBracket: { min: undefined, max: undefined },
+    recency: { sinceYear: undefined },
+    instrument: "",
+    targetCount: 25,
+  });
+  const [scoutV3HunterGenreInput, setScoutV3HunterGenreInput] = useState("");
+  const [scoutV3HunterRegionInput, setScoutV3HunterRegionInput] = useState("");
+  const [scoutV3HunterSubmitting, setScoutV3HunterSubmitting] = useState(false);
+  const [scoutV3HunterRuns, setScoutV3HunterRuns] = useState([]);
+  const [scoutV3HunterRunsLoading, setScoutV3HunterRunsLoading] = useState(false);
+  const [scoutV3HunterExpandedRunId, setScoutV3HunterExpandedRunId] = useState(null);
+  const [scoutV3HunterRunDetail, setScoutV3HunterRunDetail] = useState(null);
+  const [scoutV3HunterPollTick, setScoutV3HunterPollTick] = useState(0);
   const [scoutV3LastProjectId, setScoutV3LastProjectId] = useState(() =>
     typeof window !== "undefined" ? localStorage.getItem("scoutV3LastProjectId") || "" : ""
   );
@@ -4839,6 +4857,39 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       .then(data => { if (data.ok) setScoutV3Rejections(data.rejections); })
       .catch(err => console.warn("[SCOUT_V3_UI] rejections fetch failed:", err));
   }, [screen, scoutV3Tab, selectedWorkspace?.id]);
+
+  // Scout V3 Hunter: fetch runs when on Runs tab (or after a new run is submitted)
+  useEffect(() => {
+    if (screen !== "scoutV3" || scoutV3Tab !== "runs") return;
+    if (!selectedWorkspace?.id) return;
+    setScoutV3HunterRunsLoading(true);
+    fetch(`/api/ar/scout/hunter/run?workspaceId=${encodeURIComponent(selectedWorkspace.id)}`, { credentials: "include" })
+      .then(r => r.json())
+      .then(data => { if (data.ok) setScoutV3HunterRuns(data.runs || []); })
+      .catch(err => console.warn("[SCOUT_V3_HUNTER] runs fetch failed:", err))
+      .finally(() => setScoutV3HunterRunsLoading(false));
+  }, [screen, scoutV3Tab, selectedWorkspace?.id, scoutV3HunterPollTick]);
+
+  // Scout V3 Hunter: poll the runs list every 5s while ANY run is in 'running' status
+  useEffect(() => {
+    if (screen !== "scoutV3" || scoutV3Tab !== "runs") return;
+    const anyRunning = scoutV3HunterRuns.some(r => r.status === "running");
+    if (!anyRunning) return;
+    const t = setTimeout(() => setScoutV3HunterPollTick(n => n + 1), 5000);
+    return () => clearTimeout(t);
+  }, [screen, scoutV3Tab, scoutV3HunterRuns]);
+
+  // Scout V3 Hunter: fetch single-run detail when expanded
+  useEffect(() => {
+    if (!scoutV3HunterExpandedRunId || !selectedWorkspace?.id) {
+      setScoutV3HunterRunDetail(null);
+      return;
+    }
+    fetch(`/api/ar/scout/hunter/run/${encodeURIComponent(scoutV3HunterExpandedRunId)}?workspaceId=${encodeURIComponent(selectedWorkspace.id)}`, { credentials: "include" })
+      .then(r => r.json())
+      .then(data => { if (data.ok) setScoutV3HunterRunDetail(data.run); })
+      .catch(err => console.warn("[SCOUT_V3_HUNTER] run detail fetch failed:", err));
+  }, [scoutV3HunterExpandedRunId, selectedWorkspace?.id, scoutV3HunterPollTick]);
 
   const resetScoutFilters = useCallback(() => {
     setScoutQuery("");
@@ -13161,7 +13212,12 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
 
           {/* Tabs */}
           <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
-            {[{ id: "queue", label: `Queue · ${scoutV3Stats.pendingCount}` }, { id: "rejections", label: `Rejection log · ${scoutV3Stats.rejectedCount}` }].map(tab => (
+            {[
+              { id: "queue", label: `Queue · ${scoutV3Stats.pendingCount}` },
+              { id: "rejections", label: `Rejection log · ${scoutV3Stats.rejectedCount}` },
+              { id: "search", label: "Search" },
+              { id: "runs", label: `Runs${scoutV3HunterRuns.length ? ` · ${scoutV3HunterRuns.length}` : ""}` },
+            ].map(tab => (
               <button key={tab.id} onClick={() => setScoutV3Tab(tab.id)} style={actionBtn(scoutV3Tab === tab.id, "accent")}>
                 {tab.label}
               </button>
@@ -13278,6 +13334,255 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                     </tbody>
                   </table>
                 </div>
+              </div>
+            )
+          )}
+
+          {/* Search tab — Hunter criteria form */}
+          {scoutV3Tab === "search" && (
+            <div style={{ ...cS, padding: "24px 28px" }}>
+              <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 6 }}>Run a Hunter search</div>
+              <div style={{ fontSize: 12, color: C.ts, marginBottom: 20, lineHeight: 1.6 }}>
+                Searches MusicBrainz, enriches via Spotify + Steel scraping, scores candidates against
+                your saved weights, and adds the top {scoutV3HunterCriteria.targetCount} into the queue.
+              </div>
+
+              {/* Genres */}
+              <div style={{ marginBottom: 16 }}>
+                <label style={{ fontSize: 12, fontWeight: 700, display: "block", marginBottom: 6 }}>
+                  Genres <span style={{ color: C.ts, fontWeight: 400 }}>(at least one genre OR region required)</span>
+                </label>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 6 }}>
+                  {scoutV3HunterCriteria.genres.map(g => (
+                    <span key={g} style={{ ...mkP(true, C.bu, C.bb), cursor: "default" }}>
+                      {g}
+                      <button onClick={() => setScoutV3HunterCriteria(c => ({ ...c, genres: c.genres.filter(x => x !== g) }))} style={{ background: "transparent", border: "none", marginLeft: 4, cursor: "pointer", color: C.ts }}>×</button>
+                    </span>
+                  ))}
+                </div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <input
+                    value={scoutV3HunterGenreInput}
+                    onChange={e => setScoutV3HunterGenreInput(e.target.value)}
+                    onKeyDown={e => {
+                      if (e.key === "Enter" && scoutV3HunterGenreInput.trim()) {
+                        e.preventDefault();
+                        const g = scoutV3HunterGenreInput.trim().toLowerCase();
+                        setScoutV3HunterCriteria(c => c.genres.includes(g) ? c : { ...c, genres: [...c.genres, g] });
+                        setScoutV3HunterGenreInput("");
+                      }
+                    }}
+                    placeholder="indie pop, folk, singer-songwriter..."
+                    style={{ flex: 1, padding: "8px 12px", border: `1px solid ${C.bd}`, borderRadius: 6, fontSize: 13 }}
+                  />
+                  <button onClick={() => {
+                    if (scoutV3HunterGenreInput.trim()) {
+                      const g = scoutV3HunterGenreInput.trim().toLowerCase();
+                      setScoutV3HunterCriteria(c => c.genres.includes(g) ? c : { ...c, genres: [...c.genres, g] });
+                      setScoutV3HunterGenreInput("");
+                    }
+                  }} style={actionBtn(false, "neutral")}>Add</button>
+                </div>
+              </div>
+
+              {/* Regions */}
+              <div style={{ marginBottom: 16 }}>
+                <label style={{ fontSize: 12, fontWeight: 700, display: "block", marginBottom: 6 }}>
+                  Regions <span style={{ color: C.ts, fontWeight: 400 }}>(ISO country codes: US, CA, GB...)</span>
+                </label>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 6 }}>
+                  {scoutV3HunterCriteria.regions.map(r => (
+                    <span key={r} style={{ ...mkP(true, C.bu, C.bb), cursor: "default" }}>
+                      {r}
+                      <button onClick={() => setScoutV3HunterCriteria(c => ({ ...c, regions: c.regions.filter(x => x !== r) }))} style={{ background: "transparent", border: "none", marginLeft: 4, cursor: "pointer", color: C.ts }}>×</button>
+                    </span>
+                  ))}
+                </div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <input
+                    value={scoutV3HunterRegionInput}
+                    onChange={e => setScoutV3HunterRegionInput(e.target.value.toUpperCase())}
+                    onKeyDown={e => {
+                      if (e.key === "Enter" && scoutV3HunterRegionInput.trim()) {
+                        e.preventDefault();
+                        const r = scoutV3HunterRegionInput.trim().toUpperCase();
+                        setScoutV3HunterCriteria(c => c.regions.includes(r) ? c : { ...c, regions: [...c.regions, r] });
+                        setScoutV3HunterRegionInput("");
+                      }
+                    }}
+                    placeholder="US, CA, GB..."
+                    maxLength={2}
+                    style={{ width: 100, padding: "8px 12px", border: `1px solid ${C.bd}`, borderRadius: 6, fontSize: 13, textTransform: "uppercase" }}
+                  />
+                  <button onClick={() => {
+                    if (scoutV3HunterRegionInput.trim()) {
+                      const r = scoutV3HunterRegionInput.trim().toUpperCase();
+                      setScoutV3HunterCriteria(c => c.regions.includes(r) ? c : { ...c, regions: [...c.regions, r] });
+                      setScoutV3HunterRegionInput("");
+                    }
+                  }} style={actionBtn(false, "neutral")}>Add</button>
+                </div>
+              </div>
+
+              {/* Role target + target count (compact row) */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 20 }}>
+                <div>
+                  <label style={{ fontSize: 12, fontWeight: 700, display: "block", marginBottom: 6 }}>Role target</label>
+                  <select
+                    value={scoutV3HunterCriteria.roleTarget}
+                    onChange={e => setScoutV3HunterCriteria(c => ({ ...c, roleTarget: e.target.value }))}
+                    style={{ width: "100%", padding: "8px 12px", border: `1px solid ${C.bd}`, borderRadius: 6, fontSize: 13 }}
+                  >
+                    <option value="performer">Performer</option>
+                    <option value="curator">Curator</option>
+                    <option value="both">Both</option>
+                    <option value="unknown">Unknown ok</option>
+                  </select>
+                </div>
+                <div>
+                  <label style={{ fontSize: 12, fontWeight: 700, display: "block", marginBottom: 6 }}>
+                    Target count <span style={{ color: C.ts, fontWeight: 400 }}>(top N to add)</span>
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={100}
+                    value={scoutV3HunterCriteria.targetCount}
+                    onChange={e => setScoutV3HunterCriteria(c => ({ ...c, targetCount: Math.max(1, Math.min(100, parseInt(e.target.value) || 25)) }))}
+                    style={{ width: "100%", padding: "8px 12px", border: `1px solid ${C.bd}`, borderRadius: 6, fontSize: 13 }}
+                  />
+                </div>
+              </div>
+
+              {/* Submit */}
+              <button
+                onClick={async () => {
+                  if (!selectedWorkspace?.id) return;
+                  if (scoutV3HunterCriteria.genres.length === 0 && scoutV3HunterCriteria.regions.length === 0) return;
+                  setScoutV3HunterSubmitting(true);
+                  try {
+                    const res = await fetch(`/api/ar/scout/hunter/run?workspaceId=${encodeURIComponent(selectedWorkspace.id)}`, {
+                      method: "POST",
+                      credentials: "include",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify(scoutV3HunterCriteria),
+                    });
+                    const data = await res.json();
+                    if (data.ok) {
+                      setScoutV3Tab("runs");
+                      setScoutV3HunterPollTick(n => n + 1);
+                    } else {
+                      window.alert(`Hunter run failed: ${data.error || "unknown"}\n${(data.details || []).map(d => d.message).join("\n")}`);
+                    }
+                  } catch (err) {
+                    window.alert(`Hunter run failed: ${err.message}`);
+                  } finally {
+                    setScoutV3HunterSubmitting(false);
+                  }
+                }}
+                disabled={scoutV3HunterSubmitting || (scoutV3HunterCriteria.genres.length === 0 && scoutV3HunterCriteria.regions.length === 0)}
+                style={{ ...actionBtn(scoutV3HunterCriteria.genres.length > 0 || scoutV3HunterCriteria.regions.length > 0, "accent"), opacity: scoutV3HunterSubmitting ? 0.6 : 1 }}
+              >
+                {scoutV3HunterSubmitting ? "Submitting…" : "Run Hunter →"}
+              </button>
+            </div>
+          )}
+
+          {/* Runs tab — list of hunter runs + drill-down */}
+          {scoutV3Tab === "runs" && (
+            scoutV3HunterRunsLoading && scoutV3HunterRuns.length === 0 ? (
+              <div style={{ ...cS, padding: "32px 28px", textAlign: "center", fontSize: 13, color: C.ts }}>
+                Loading runs…
+              </div>
+            ) : scoutV3HunterRuns.length === 0 ? (
+              <div style={{ ...cS, padding: "32px 28px" }}>
+                <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 12 }}>No Hunter runs yet</div>
+                <div style={{ fontSize: 13, color: C.ts, lineHeight: 1.7, maxWidth: 640 }}>
+                  Hunter searches MusicBrainz, enriches via Spotify + Steel scraping, and adds the
+                  top-scored candidates to your Scout queue.
+                  <br /><br />
+                  <button onClick={() => setScoutV3Tab("search")} style={actionBtn(false, "accent")}>
+                    + Start a search →
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div style={{ display: "grid", gap: 10 }}>
+                {scoutV3HunterRuns.map(run => {
+                  const statusTone =
+                    run.status === "complete" ? { ...mkP(true, C.gn, C.gb) }
+                    : run.status === "running" ? { ...mkP(true, C.bu, C.bb) }
+                    : run.status === "failed" ? { ...mkP(true, C.rd, C.rb) }
+                    : { ...mkP(true, C.ts, C.sa) };
+                  const isExpanded = scoutV3HunterExpandedRunId === run.id;
+                  const detail = isExpanded ? (scoutV3HunterRunDetail || run) : run;
+                  return (
+                    <div key={run.id} style={{ ...cS, padding: "14px 18px" }}>
+                      <div onClick={() => setScoutV3HunterExpandedRunId(isExpanded ? null : run.id)} style={{ cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                            <span style={{ ...statusTone, cursor: "default" }}>{run.status}</span>
+                            <span style={{ fontSize: 13, fontWeight: 700 }}>
+                              {(run.criteria.genres || []).join(", ") || "—"}
+                              {run.criteria.regions?.length ? ` · ${run.criteria.regions.join(", ")}` : ""}
+                            </span>
+                          </div>
+                          <div style={{ fontSize: 11, color: C.ts }}>
+                            {new Date(run.startedAt).toLocaleString()} · by {run.startedBy} ·
+                            target {run.criteria.targetCount} ·
+                            fetched {run.summary.fetched} · scored {run.summary.scored} · added <strong>{run.summary.added}</strong>
+                          </div>
+                        </div>
+                        <button style={actionBtn(false, "neutral")}>{isExpanded ? "Collapse" : "Details"}</button>
+                      </div>
+
+                      {isExpanded && (
+                        <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${C.bd}`, display: "grid", gap: 10 }}>
+                          {/* Summary stats */}
+                          <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 8, fontSize: 12 }}>
+                            <div><div style={{ color: C.ts }}>Fetched</div><div style={{ fontWeight: 700, fontSize: 18 }}>{detail.summary.fetched}</div></div>
+                            <div><div style={{ color: C.ts }}>Blocked</div><div style={{ fontWeight: 700, fontSize: 18 }}>{detail.summary.skippedBlocked}</div></div>
+                            <div><div style={{ color: C.ts }}>Gated out</div><div style={{ fontWeight: 700, fontSize: 18 }}>{detail.summary.gatedOut}</div></div>
+                            <div><div style={{ color: C.ts }}>Scored</div><div style={{ fontWeight: 700, fontSize: 18 }}>{detail.summary.scored}</div></div>
+                            <div><div style={{ color: C.ts }}>Added</div><div style={{ fontWeight: 700, fontSize: 18, color: C.gn }}>{detail.summary.added}</div></div>
+                          </div>
+
+                          {/* Gated reasons (if any) */}
+                          {detail.summary.gatedReasons?.length > 0 && (
+                            <div>
+                              <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>Gated out ({detail.summary.gatedReasons.length}):</div>
+                              <div style={{ fontSize: 11, color: C.ts, lineHeight: 1.6, maxHeight: 120, overflowY: "auto" }}>
+                                {detail.summary.gatedReasons.slice(0, 50).map((g, i) => (
+                                  <div key={i}>{g.candidateName || "(unnamed)"} — {g.reason}</div>
+                                ))}
+                                {detail.summary.gatedReasons.length > 50 && <div>… and {detail.summary.gatedReasons.length - 50} more</div>}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Errors (if any) */}
+                          {detail.summary.errors?.length > 0 && (
+                            <div>
+                              <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4, color: C.rd }}>Errors ({detail.summary.errors.length}):</div>
+                              <div style={{ fontSize: 11, color: C.ts, lineHeight: 1.6, maxHeight: 120, overflowY: "auto" }}>
+                                {detail.summary.errors.slice(0, 50).map((e, i) => (
+                                  <div key={i}>[{e.stage}] {e.candidateName || "(no name)"}: {e.message}</div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Top-level failure */}
+                          {detail.status === "failed" && detail.errorMessage && (
+                            <div style={{ fontSize: 12, color: C.rd, padding: "8px 12px", background: C.rb, borderRadius: 6 }}>
+                              Pipeline crashed: {detail.errorMessage}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )
           )}
