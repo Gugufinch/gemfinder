@@ -102,6 +102,19 @@ describe('logScore', () => {
     expect(result).toBeGreaterThan(0);
     expect(result).toBeLessThan(100);
   });
+
+  it('returns missing_baseline for degenerate config (min === max)', () => {
+    // log10(min) === log10(max) → would produce NaN. Guard kicks in.
+    const degenerate: HunterWeightLog = { weight: 1, curve: 'log', min: 1000, max: 1000, missing_baseline: 50 };
+    expect(logScore(500, degenerate)).toBe(50);
+  });
+
+  it('returns missing_baseline when min or max is non-positive (Math.log10 undefined)', () => {
+    const zeroMin: HunterWeightLog = { weight: 1, curve: 'log', min: 0, max: 100, missing_baseline: 50 };
+    const negMax: HunterWeightLog = { weight: 1, curve: 'log', min: 1, max: -100, missing_baseline: 50 };
+    expect(logScore(50, zeroMin)).toBe(50);
+    expect(logScore(50, negMax)).toBe(50);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -129,6 +142,11 @@ describe('linearScore', () => {
 
   it('returns 25 for value one-quarter through range', () => {
     expect(linearScore(25, linearDim)).toBe(25);
+  });
+
+  it('returns missing_baseline for degenerate config (min === max)', () => {
+    const degenerate: HunterWeightLog = { weight: 1, curve: 'linear', min: 50, max: 50, missing_baseline: 50 };
+    expect(linearScore(25, degenerate)).toBe(50);
   });
 });
 
@@ -353,5 +371,22 @@ describe('computeScore — integration', () => {
     expect(result.final).toBe(33);
     expect(result.perDimension.spotify_followers).toBe(100);
     expect(result.perDimension.genre_fit).toBe(0);
+  });
+
+  it('throws on unknown dim key — fail loud on schema drift', () => {
+    // Simulate someone adding a new dim to HunterWeights.weights without wiring the dispatcher.
+    // The throw prevents silent-0 scoring from polluting weighted averages.
+    const driftedWeights = {
+      ...DEFAULT_HUNTER_WEIGHTS,
+      weights: {
+        ...DEFAULT_HUNTER_WEIGHTS.weights,
+        // Intentionally injecting an unrecognized key — the outer `as HunterWeights`
+        // cast keeps tsc happy; the runtime throw is what we're verifying.
+        new_unwired_dim: { weight: 5, curve: 'log', min: 1, max: 100, missing_baseline: 50 },
+      },
+    } as HunterWeights;
+
+    const candidate = makeMinimalCandidate();
+    expect(() => computeScore(candidate, driftedWeights)).toThrow(/unknown HunterWeights dim key: new_unwired_dim/);
   });
 });

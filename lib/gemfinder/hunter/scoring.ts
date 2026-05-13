@@ -14,6 +14,12 @@ import type {
 
 export function logScore(value: number | undefined, dim: HunterWeightLog): number {
   if (value === undefined || value === null) return dim.missing_baseline;
+  // Degenerate-config guards FIRST — a config we can't math against (min === max,
+  // or non-positive bounds that break Math.log10) should always return
+  // missing_baseline, regardless of where `value` falls. Otherwise the
+  // `value <= min` check would fire and return 0, masking the real problem.
+  if (dim.min <= 0 || dim.max <= 0) return dim.missing_baseline;
+  if (dim.min === dim.max) return dim.missing_baseline;
   if (value <= dim.min) return 0;
   if (value >= dim.max) return 100;
   const logMin = Math.log10(dim.min);
@@ -24,6 +30,8 @@ export function logScore(value: number | undefined, dim: HunterWeightLog): numbe
 
 export function linearScore(value: number | undefined, dim: HunterWeightLog): number {
   if (value === undefined || value === null) return dim.missing_baseline;
+  // Degenerate config — see logScore for reasoning. Guard before the boundary checks.
+  if (dim.min === dim.max) return dim.missing_baseline;
   if (value <= dim.min) return 0;
   if (value >= dim.max) return 100;
   return Math.round(((value - dim.min) / (dim.max - dim.min)) * 100);
@@ -64,6 +72,11 @@ type DimConfig =
   | HunterWeightGenre
   | HunterWeightGeography;
 
+// Each `dimConfig as <T>` cast below is structurally safe: the dimKey ↔ config
+// shape pairing is co-defined in HunterWeights (see types.ts), so an
+// `instagram_followers` key is always paired with a HunterWeightLog config.
+// If HunterWeights ever becomes polymorphic in shape, these casts need to
+// move to runtime tagged-union checks.
 function perDimensionScore(
   dimKey: string,
   candidate: EnrichedCandidate,
@@ -117,7 +130,9 @@ function perDimensionScore(
     case 'recency':
       return recencyScore(candidate.recentReleaseYear, dimConfig as HunterWeightLog);
     default:
-      return 0;
+      // Fail loud on schema drift — a silent 0 would pull final scores down
+      // without any signal that a new HunterWeights dim was added but not wired.
+      throw new Error(`[SCORING] unknown HunterWeights dim key: ${dimKey}`);
   }
 }
 
