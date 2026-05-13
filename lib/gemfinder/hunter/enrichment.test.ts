@@ -410,6 +410,12 @@ describe('enrichCandidate', () => {
     expect(result.spotifyPopularity).toBeUndefined();
     // genres falls back to MB tags when spotify threw
     expect(result.genres).toEqual(['indie']);
+    // The catch arm must log — silent swallowing violates CLAUDE.md fire-and-forget convention.
+    expect(console.warn).toHaveBeenCalledWith(
+      expect.stringContaining('[HUNTER_ENRICH] spotify lookup failed for'),
+      expect.anything(),
+      expect.any(Error)
+    );
   });
 
   it('scrapeWebsite throws — enrichment completes without scraped fields, putCached not called', async () => {
@@ -425,6 +431,11 @@ describe('enrichCandidate', () => {
     expect(result.scrapedContactEmail).toBeUndefined();
     expect(result.scrapedManagerInfo).toBeUndefined();
     expect(cache.putCached).not.toHaveBeenCalled();
+    expect(console.warn).toHaveBeenCalledWith(
+      expect.stringContaining('[HUNTER_ENRICH] scrape failed for'),
+      expect.anything(),
+      expect.any(Error)
+    );
   });
 
   it('getCached throws — falls back to live scrape and populates scraped fields', async () => {
@@ -440,5 +451,10 @@ describe('enrichCandidate', () => {
 
     expect(steel.scrapeWebsite).toHaveBeenCalledWith('https://example.com');
     expect(result.scrapedContactEmail).toBe('live@example.com');
+    expect(console.warn).toHaveBeenCalledWith(
+      expect.stringContaining('[HUNTER_ENRICH] cache lookup failed for'),
+      expect.anything(),
+      expect.any(Error)
+    );
   });
 });

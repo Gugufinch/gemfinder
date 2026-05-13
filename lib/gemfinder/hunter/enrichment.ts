@@ -102,33 +102,19 @@ function extractPlatformUrls(
 
 /**
  * Determine which URL to pass to Steel scraper, in priority order:
- * website > bandcamp > linktree > IG
+ * website > bandcamp > linktree > IG.
+ *
+ * In MB's data model, linktree URLs arrive via the `official homepage`
+ * relation and land in `extracted.website` — so they're already covered
+ * by the website branch above. Keeping the priority comment for spec
+ * traceability; no explicit linktree scan is needed.
  */
 function pickScrapeUrl(extracted: ExtractedUrls): string | undefined {
   if (extracted.website) return extracted.website;
   if (extracted.bandcampUrl) return extracted.bandcampUrl;
-
-  // linktree detection — check if any extracted URL has a linktree-style hostname
-  const allUrls = [
-    extracted.soundcloudUrl,
-    extracted.youtubeUrl,
-    extracted.spotifyUrl,
-  ].filter(Boolean) as string[];
-
-  const linktreeUrl = allUrls.find((url) => {
-    try {
-      return /^(linktr\.ee|linkin\.bio)$/.test(new URL(url).hostname);
-    } catch {
-      return false;
-    }
-  });
-  if (linktreeUrl) return linktreeUrl;
-
-  // IG
   if (extracted.instagramHandle) {
     return `https://instagram.com/${extracted.instagramHandle}`;
   }
-
   return undefined;
 }
 
@@ -261,7 +247,7 @@ export async function enrichCandidate(
       }
       if (scrapeResult) {
         await putCached(workspaceId, scrapeUrl, scrapeResult).catch((err) =>
-          console.warn('[HUNTER_ENRICHMENT] putCached failed:', err)
+          console.warn('[HUNTER_ENRICH] putCached failed:', err)
         );
       }
     }
