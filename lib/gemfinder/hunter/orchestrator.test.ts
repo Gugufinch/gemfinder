@@ -71,6 +71,7 @@ beforeEach(() => {
   vi.clearAllMocks();
 
   vi.spyOn(console, 'error').mockImplementation(() => {});
+  vi.spyOn(console, 'warn').mockImplementation(() => {});
 
   // Default: isBlocked returns not-blocked
   vi.mocked(blocklist.isBlocked).mockResolvedValue({ blocked: false });
@@ -314,5 +315,34 @@ describe('runPipeline', () => {
     const calls = vi.mocked(runsStore.setRunStatus).mock.calls;
     const failedCall = calls.find(c => c[1] === 'failed');
     expect(failedCall).toBeDefined();
+  });
+
+  it('cascading crash: pipeline AND setRunStatus both throw — original error still propagates', async () => {
+    // Realistic disaster: DB has a transient failure. The pipeline crashes, AND
+    // setRunStatus('failed') also throws. Without the nested try/catch in the outer
+    // catch, setRunStatus throwing would mask the original error and the run row
+    // would be stuck in 'running' state with no signal.
+    vi.mocked(mb.searchArtists).mockResolvedValue([makeMbArtist('Alice')]);
+    vi.mocked(enr.enrichCandidate).mockResolvedValue(makeEnriched('Alice') as any);
+
+    let updateCallCount = 0;
+    vi.mocked(runsStore.updateRunSummary).mockImplementation(async () => {
+      updateCallCount++;
+      if (updateCallCount === 2) throw new Error('original db crash');
+    });
+    // setRunStatus itself ALSO throws when called from the outer catch
+    vi.mocked(runsStore.setRunStatus).mockRejectedValue(new Error('setRunStatus also down'));
+
+    // The ORIGINAL error must propagate, not the setRunStatus error.
+    await expect(runPipeline(BASE_INPUT)).rejects.toThrow('original db crash');
+
+    // The setRunStatus('failed') attempt was made (even though it threw)
+    expect(runsStore.setRunStatus).toHaveBeenCalledWith('test-run-id', 'failed', expect.any(Object));
+
+    // The cascading-failure warn should have fired
+    expect(console.warn).toHaveBeenCalledWith(
+      '[HUNTER_RUN] failed to mark run as failed; run row may be stuck in running state',
+      expect.any(Object)
+    );
   });
 });

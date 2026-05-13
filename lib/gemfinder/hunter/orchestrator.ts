@@ -162,6 +162,7 @@ export async function runPipeline(input: RunPipelineInput): Promise<HunterRunSum
           musicbrainzId: sc.enriched.musicbrainzId,
           primaryGenre: sc.enriched.genres[0],
           primaryEmail: sc.enriched.scrapedContactEmail,
+          // 'social_only' and 'none' have no contactType analog in ScoutContactType — store undefined.
           contactType: sc.enriched.contactReadiness === 'direct' ? 'direct'
                       : sc.enriched.contactReadiness === 'manager' ? 'manager'
                       : sc.enriched.contactReadiness === 'agency' ? 'agency'
@@ -190,7 +191,15 @@ export async function runPipeline(input: RunPipelineInput): Promise<HunterRunSum
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error('[HUNTER_RUN] pipeline crashed', { runId, error: msg });
-    await setRunStatus(runId, 'failed', { errorMessage: msg });
+    // Nested guard: if the DB is hosed enough that even setRunStatus fails,
+    // we still want to surface the ORIGINAL crash to the caller. Without this
+    // guard, a setRunStatus throw would mask the real error and the run row
+    // would be stuck in 'running' state forever.
+    try {
+      await setRunStatus(runId, 'failed', { errorMessage: msg });
+    } catch (statusErr) {
+      console.warn('[HUNTER_RUN] failed to mark run as failed; run row may be stuck in running state', { runId, statusErr });
+    }
     throw err;
   }
 }
