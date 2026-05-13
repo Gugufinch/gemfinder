@@ -223,6 +223,7 @@ function rowToCandidate(row: Record<string, unknown>): ScoutCandidate {
     enrichmentError: row.enrichment_error as string | undefined,
     identityOverride: row.identity_override as boolean,
     identityOverrideNote: row.identity_override_note as string | undefined,
+    hunterRunId: row.hunter_run_id as string ?? undefined,
     createdAt: (row.created_at as Date).toISOString(),
     updatedAt: (row.updated_at as Date).toISOString(),
   };
@@ -263,7 +264,7 @@ export async function createCandidate(input: ScoutCandidate): Promise<ScoutCandi
       hit_tracks, curator_page_url, artist_role, ai_summary, living,
       source, source_url, source_external_id, added_by,
       score, weight_snapshot, enrichment_status, enrichment_error,
-      identity_override, identity_override_note,
+      identity_override, identity_override_note, hunter_run_id,
       created_at, updated_at
     ) values (
       $1, $2, $3, $4, $5::jsonb,
@@ -275,8 +276,8 @@ export async function createCandidate(input: ScoutCandidate): Promise<ScoutCandi
       $29::jsonb, $30, $31, $32, $33,
       $34, $35, $36, $37,
       $38, $39::jsonb, $40, $41,
-      $42, $43,
-      $44, $45
+      $42, $43, $44,
+      $45, $46
     ) returning *`,
     [
       input.id, input.workspaceId, input.displayName, input.canonicalName, JSON.stringify(input.aliases),
@@ -288,7 +289,7 @@ export async function createCandidate(input: ScoutCandidate): Promise<ScoutCandi
       JSON.stringify(input.hitTracks), input.curatorPageUrl, input.artistRole, input.aiSummary, input.living,
       input.source, input.sourceUrl, input.sourceExternalId, input.addedBy,
       input.score, input.weightSnapshot ? JSON.stringify(input.weightSnapshot) : null, input.enrichmentStatus, input.enrichmentError,
-      input.identityOverride, input.identityOverrideNote,
+      input.identityOverride, input.identityOverrideNote, input.hunterRunId ?? null,
       input.createdAt, input.updatedAt,
     ]
   );

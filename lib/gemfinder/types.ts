@@ -171,6 +171,7 @@ export type ScoutCandidate = {
   sourceUrl?: string;
   sourceExternalId?: string;
   addedBy: string;
+  hunterRunId?: string;  // FK to hunter_runs.id when this candidate originated from a hunter run
 
   // Scoring (S2 populates; null at S0)
   score?: number;
