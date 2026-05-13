@@ -13551,8 +13551,26 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                     placeholder="e.g. 2022"
                     value={scoutV3HunterCriteria.recency?.sinceYear ?? ""}
                     onChange={e => {
-                      const v = e.target.value === "" ? undefined : Math.max(1900, Math.min(2100, parseInt(e.target.value) || 0));
-                      setScoutV3HunterCriteria(c => ({ ...c, recency: { sinceYear: v } }));
+                      // Don't clamp during typing — that prevents the user from typing "2022"
+                      // (each keystroke would get clamped to 1900..2100 and replace the value).
+                      // Just store whatever they have so far; validate on blur + submit.
+                      const raw = e.target.value;
+                      if (raw === "") {
+                        setScoutV3HunterCriteria(c => ({ ...c, recency: { sinceYear: undefined } }));
+                      } else {
+                        const v = parseInt(raw);
+                        setScoutV3HunterCriteria(c => ({ ...c, recency: { sinceYear: Number.isFinite(v) ? v : undefined } }));
+                      }
+                    }}
+                    onBlur={e => {
+                      // On blur, snap the value into valid range if it's out of bounds.
+                      const v = parseInt(e.target.value);
+                      if (Number.isFinite(v)) {
+                        const clamped = Math.max(1900, Math.min(2100, v));
+                        if (clamped !== v) {
+                          setScoutV3HunterCriteria(c => ({ ...c, recency: { sinceYear: clamped } }));
+                        }
+                      }
                     }}
                     style={{ width: "100%", padding: "8px 12px", border: `1px solid ${C.bd}`, borderRadius: 6, fontSize: 13 }}
                   />
@@ -13712,6 +13730,24 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
 
                       {isExpanded && (
                         <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${C.bd}`, display: "grid", gap: 10 }}>
+                          {/* Live progress (only shown while running) */}
+                          {detail.status === "running" && (() => {
+                            const processed = (detail.summary.skippedBlocked || 0) + (detail.summary.gatedOut || 0) + (detail.summary.scored || 0);
+                            const total = detail.summary.fetched || 0;
+                            const pct = total > 0 ? Math.round((processed / total) * 100) : 0;
+                            return (
+                              <div>
+                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                                  <span style={{ fontSize: 12, fontWeight: 700 }}>Processing: {processed} / {total}</span>
+                                  <span style={{ fontSize: 11, color: C.ts }}>{pct}% · enrichment can take 5-20 min for 100 candidates (Steel scrapes are throttled to 3 concurrent)</span>
+                                </div>
+                                <div style={{ height: 6, background: C.sa, borderRadius: 3, overflow: "hidden" }}>
+                                  <div style={{ height: "100%", width: `${pct}%`, background: C.bu, transition: "width 0.5s ease" }} />
+                                </div>
+                              </div>
+                            );
+                          })()}
+
                           {/* Summary stats */}
                           <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 8, fontSize: 12 }}>
                             <div><div style={{ color: C.ts }}>Fetched</div><div style={{ fontWeight: 700, fontSize: 18 }}>{detail.summary.fetched}</div></div>

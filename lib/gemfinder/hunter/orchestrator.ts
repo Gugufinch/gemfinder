@@ -109,6 +109,18 @@ export async function runPipeline(input: RunPipelineInput): Promise<HunterRunSum
               stage: 'enrich_or_score',
               message: err instanceof Error ? err.message : String(err),
             });
+          } finally {
+            // Fire-and-forget incremental progress write so the UI poll shows
+            // live numbers instead of sitting on "fetched 100, scored 0" for the
+            // entire enrichment phase. Per-candidate write is 100 small JSONB
+            // patches over the run — cheap, and worth it for the UX.
+            void updateRunSummary(runId, {
+              skippedBlocked: summary.skippedBlocked,
+              gatedOut: summary.gatedOut,
+              gatedReasons: summary.gatedReasons,
+              scored: summary.scored,
+              errors: summary.errors,
+            }).catch((err) => console.warn('[HUNTER_RUN] incremental progress write failed:', err));
           }
         })();
         inFlight.push(task);

@@ -294,22 +294,22 @@ describe('runPipeline', () => {
     expect(vi.mocked(runsStore.setRunStatus).mock.calls.at(-1)?.[1]).toBe('complete');
   });
 
-  it('12. catastrophic crash (updateRunSummary throws outside inner try) → outer catch fires, setRunStatus(failed) called, error re-thrown', async () => {
+  it('12. catastrophic crash (setRunStatus(complete) throws) → outer catch fires, setRunStatus(failed) called, error re-thrown', async () => {
+    // The pipeline now writes incremental updateRunSummary patches inside each
+    // per-candidate task (fire-and-forget with .catch), so an updateRunSummary
+    // throw mid-loop is no longer a crash trigger. The most reliable trigger
+    // for the outer catch is setRunStatus('complete') itself failing — that's
+    // the very last operation, outside all per-candidate guards.
     const artists = ['Alice'].map(n => makeMbArtist(n));
     vi.mocked(mb.searchArtists).mockResolvedValue(artists);
     vi.mocked(enr.enrichCandidate).mockResolvedValue(makeEnriched('Alice') as any);
 
-    // The first updateRunSummary call (after MB fetch) succeeds.
-    // The second call (after enrichment loop) throws — this is OUTSIDE all per-candidate
-    // try/catches so it propagates to the outer catch.
-    let updateCallCount = 0;
-    vi.mocked(runsStore.updateRunSummary).mockImplementation(async () => {
-      updateCallCount++;
-      if (updateCallCount === 2) throw new Error('db crashed mid-pipeline');
+    vi.mocked(runsStore.setRunStatus).mockImplementation(async (_id, status) => {
+      if (status === 'complete') throw new Error('db crashed at completion');
     });
 
     // outer catch re-throws, so runPipeline rejects
-    await expect(runPipeline(BASE_INPUT)).rejects.toThrow('db crashed mid-pipeline');
+    await expect(runPipeline(BASE_INPUT)).rejects.toThrow('db crashed at completion');
 
     // setRunStatus('failed') must have been attempted by the outer catch
     const calls = vi.mocked(runsStore.setRunStatus).mock.calls;
@@ -317,23 +317,21 @@ describe('runPipeline', () => {
     expect(failedCall).toBeDefined();
   });
 
-  it('cascading crash: pipeline AND setRunStatus both throw — original error still propagates', async () => {
-    // Realistic disaster: DB has a transient failure. The pipeline crashes, AND
-    // setRunStatus('failed') also throws. Without the nested try/catch in the outer
-    // catch, setRunStatus throwing would mask the original error and the run row
-    // would be stuck in 'running' state with no signal.
+  it('cascading crash: pipeline AND setRunStatus(failed) both throw — original error still propagates', async () => {
+    // Realistic disaster: DB has a transient failure. setRunStatus('complete')
+    // crashes the pipeline, AND setRunStatus('failed') in the outer catch ALSO
+    // throws. Without the nested try/catch in the outer catch, setRunStatus('failed')
+    // throwing would mask the original error and the run row would be stuck in
+    // 'running' state with no signal.
     vi.mocked(mb.searchArtists).mockResolvedValue([makeMbArtist('Alice')]);
     vi.mocked(enr.enrichCandidate).mockResolvedValue(makeEnriched('Alice') as any);
 
-    let updateCallCount = 0;
-    vi.mocked(runsStore.updateRunSummary).mockImplementation(async () => {
-      updateCallCount++;
-      if (updateCallCount === 2) throw new Error('original db crash');
+    vi.mocked(runsStore.setRunStatus).mockImplementation(async (_id, status) => {
+      if (status === 'complete') throw new Error('original db crash');
+      if (status === 'failed') throw new Error('setRunStatus also down');
     });
-    // setRunStatus itself ALSO throws when called from the outer catch
-    vi.mocked(runsStore.setRunStatus).mockRejectedValue(new Error('setRunStatus also down'));
 
-    // The ORIGINAL error must propagate, not the setRunStatus error.
+    // The ORIGINAL error must propagate, not the setRunStatus('failed') error.
     await expect(runPipeline(BASE_INPUT)).rejects.toThrow('original db crash');
 
     // The setRunStatus('failed') attempt was made (even though it threw)
