@@ -13505,14 +13505,14 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                 <div>1. 🌐 <strong>Discovery agent</strong> — Gemini + Google Search browses Pitchfork, FADER, Stereogum, festival lineups</div>
                 <div>2. 🎵 <strong>Spotify agent</strong> — per-artist lookup for followers, top tracks, popularity</div>
                 <div>3. 📱 <strong>Social agent</strong> — Instagram + TikTok follower scraping via Steel browser</div>
-                <div>4. ⚖️ <strong>Score + gate</strong> — applies your weights, filters out megastars (&gt;100K) and deceased</div>
+                <div>4. ⚖️ <strong>Score + gate</strong> — applies your weights, filters out megastars (&gt;1M) and deceased</div>
               </div>
 
               {/* Forever parameters - readonly chips */}
               <div style={{ marginBottom: 18, display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
                 <span style={{ fontSize: 11, color: C.ts, fontWeight: 700, marginRight: 4 }}>ALWAYS:</span>
                 <span style={{ ...mkP(true, C.gn, C.gb), cursor: "default", fontSize: 11 }}>✓ Living artists</span>
-                <span style={{ ...mkP(true, C.gn, C.gb), cursor: "default", fontSize: 11 }}>✓ ≤100K Spotify listeners</span>
+                <span style={{ ...mkP(true, C.gn, C.gb), cursor: "default", fontSize: 11 }}>✓ ≤1M Spotify listeners</span>
                 <span style={{ ...mkP(true, C.gn, C.gb), cursor: "default", fontSize: 11 }}>✓ Released since 2022</span>
                 <span style={{ ...mkP(true, C.gn, C.gb), cursor: "default", fontSize: 11 }}>✓ Not in Kickoff/Live/Rejected</span>
               </div>

@@ -38,59 +38,63 @@ function client(): GoogleGenAI {
 export async function searchArtistsViaLLM(criteria: HunterCriteria): Promise<MBArtist[]> {
   const userPrompt = buildPrompt(criteria);
 
+  // Infrastructure errors (auth failure, quota exceeded, model unavailable)
+  // THROW so the orchestrator catches them and pushes a visible 'mb_fetch'
+  // error to the run summary. The previous "return [] on error" was silent —
+  // operators saw runs complete with fetched=0 and had no idea why.
   let responseText: string | undefined;
   try {
     const result = await client().models.generateContent({
       // gemini-2.5-flash-lite has the most generous free-tier quota and handles
-      // grounding+structured-output cleanly with a sub-2s response time. The
-      // larger gemini-2.5-flash also works but is slower and more prone to
-      // timeout when prompt size + grounding load both grow.
+      // grounding+structured-output cleanly with a sub-2s response time.
       model: 'gemini-2.5-flash-lite',
       contents: [{ role: 'user', parts: [{ text: SYSTEM_PROMPT + '\n\n' + userPrompt }] }],
       config: {
-        // Google Search grounding — Gemini browses the web during the call.
-        // The model returns artists informed by current music journalism,
-        // festival announcements, etc. Free with the Gemini free tier.
         tools: [{ googleSearch: {} }],
-        // Some variety run-to-run, but not chaotic.
         temperature: 0.7,
-        // 30 artists × ~250 tokens each (Gemini's rationales run long when
-        // grounded in real press) = ~7500 tokens. 12K is comfortable headroom.
-        // Free tier supports up to 65K output tokens on this model.
+        // 30 artists × ~250 tokens each = ~7500 tokens. 12K is headroom.
         maxOutputTokens: 12000,
       },
     });
     responseText = result.text;
   } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
     console.warn('[HUNTER_LLM] Gemini call failed:', err);
-    return [];
+    // Surface specific failure modes with actionable messages.
+    if (/API key not valid|API_KEY_INVALID/i.test(msg)) {
+      throw new Error('[HUNTER_LLM] GEMINI_API_KEY is invalid — get a fresh key at https://aistudio.google.com/apikey');
+    }
+    if (/quota|RESOURCE_EXHAUSTED/i.test(msg)) {
+      throw new Error('[HUNTER_LLM] Gemini quota exceeded — free tier is 1500 req/day. Wait or rotate the key.');
+    }
+    if (/not found|404/i.test(msg) && /model/i.test(msg)) {
+      throw new Error('[HUNTER_LLM] Gemini model not available — Google may have rotated. Update the model name in llm-agent.ts.');
+    }
+    throw new Error(`[HUNTER_LLM] Gemini call failed: ${msg}`);
   }
 
   if (!responseText) {
-    console.warn('[HUNTER_LLM] empty response from Gemini');
-    return [];
+    throw new Error('[HUNTER_LLM] Gemini returned empty response (model may have been filtered or rate-limited)');
   }
 
   // Gemini doesn't always return clean JSON when google-search is enabled —
   // it may wrap the JSON in markdown code fences or add commentary. Extract.
   const jsonStr = extractJsonObject(responseText);
   if (!jsonStr) {
-    console.warn('[HUNTER_LLM] could not find JSON in Gemini response (first 200 chars):', responseText.slice(0, 200));
-    return [];
+    throw new Error(`[HUNTER_LLM] could not extract JSON from Gemini response (first 200 chars: ${responseText.slice(0, 200).replace(/\n/g, ' ')})`);
   }
 
   let parsed: { artists?: Array<{ name: string; genres?: string[]; rationale?: string }> };
   try {
     parsed = JSON.parse(jsonStr);
   } catch (err) {
-    console.warn('[HUNTER_LLM] failed to parse Gemini JSON:', err);
-    return [];
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`[HUNTER_LLM] Gemini JSON parse failed: ${msg}`);
   }
 
   const items = parsed.artists ?? [];
   if (!Array.isArray(items)) {
-    console.warn('[HUNTER_LLM] artists field is not an array');
-    return [];
+    throw new Error('[HUNTER_LLM] Gemini response missing artists array');
   }
 
   // Map LLM output → MBArtist shape. id is empty (no MB lookup), name comes
@@ -169,7 +173,7 @@ const SYSTEM_PROMPT = `You are an A&R scout for Songfinch. Use Google Search to 
 MUST be:
 - A living music recording artist (NOT novelists, voice actors, classical composers)
 - Active with releases since 2022
-- 1,000 to 100,000 Spotify monthly listeners (above 100K is too established for our queue)
+- 1,000 to 1,000,000 Spotify monthly listeners (we want emerging-to-mid-tier; megastars >1M are agency-locked)
 
 Variety: don't repeat the same indie-buzz names. Mix career stages in the 1K-100K range. For broad genres, span subgenres.
 
@@ -186,7 +190,7 @@ function buildPrompt(criteria: HunterCriteria): string {
   if (criteria.regions.length > 0) parts.push(`- Regions (ISO codes): ${criteria.regions.join(', ')}`);
   if (criteria.roleTarget !== 'both') parts.push(`- Role target: ${criteria.roleTarget}`);
   const minListeners = criteria.sizeBracket?.min ?? 1000;
-  const maxListeners = criteria.sizeBracket?.max ?? 100_000;
+  const maxListeners = criteria.sizeBracket?.max ?? 1_000_000;
   parts.push(`- Min Spotify monthly listeners: ${minListeners.toLocaleString()}`);
   parts.push(`- Max Spotify monthly listeners: ${maxListeners.toLocaleString()} (HARD LIMIT — do not exceed)`);
   if (criteria.recency?.sinceYear) parts.push(`- Active since: ${criteria.recency.sinceYear}`);

@@ -38,23 +38,34 @@ describe('searchArtistsViaLLM', () => {
     expect((result[0] as { _aiHint?: string })._aiHint).toBe('Pitchfork year-end pick');
   });
 
-  it('returns empty array when Gemini throws', async () => {
+  it('throws when Gemini call fails (infrastructure error)', async () => {
     mockGenerateContent.mockRejectedValue(new Error('network'));
-    const result = await searchArtistsViaLLM({ genres: ['indie'], regions: ['US'], roleTarget: 'performer', targetCount: 25 });
-    expect(result).toEqual([]);
-    expect(console.warn).toHaveBeenCalledWith('[HUNTER_LLM] Gemini call failed:', expect.any(Error));
+    await expect(searchArtistsViaLLM({ genres: ['indie'], regions: ['US'], roleTarget: 'performer', targetCount: 25 }))
+      .rejects.toThrow(/Gemini call failed/);
   });
 
-  it('returns empty array when Gemini returns empty content', async () => {
+  it('throws a clearer message on invalid API key', async () => {
+    mockGenerateContent.mockRejectedValue(new Error('API key not valid. Please pass a valid API key.'));
+    await expect(searchArtistsViaLLM({ genres: ['indie'], regions: ['US'], roleTarget: 'performer', targetCount: 25 }))
+      .rejects.toThrow(/GEMINI_API_KEY is invalid/);
+  });
+
+  it('throws a clearer message on quota exceeded', async () => {
+    mockGenerateContent.mockRejectedValue(new Error('RESOURCE_EXHAUSTED: quota exceeded'));
+    await expect(searchArtistsViaLLM({ genres: ['indie'], regions: ['US'], roleTarget: 'performer', targetCount: 25 }))
+      .rejects.toThrow(/quota exceeded/);
+  });
+
+  it('throws when Gemini returns empty content', async () => {
     mockGenerateContent.mockResolvedValue(geminiResponse(''));
-    const result = await searchArtistsViaLLM({ genres: ['indie'], regions: ['US'], roleTarget: 'performer', targetCount: 25 });
-    expect(result).toEqual([]);
+    await expect(searchArtistsViaLLM({ genres: ['indie'], regions: ['US'], roleTarget: 'performer', targetCount: 25 }))
+      .rejects.toThrow(/empty response/);
   });
 
-  it('returns empty array when response contains no JSON object', async () => {
+  it('throws when response contains no JSON object', async () => {
     mockGenerateContent.mockResolvedValue(geminiResponse('No JSON here, just prose.'));
-    const result = await searchArtistsViaLLM({ genres: ['indie'], regions: ['US'], roleTarget: 'performer', targetCount: 25 });
-    expect(result).toEqual([]);
+    await expect(searchArtistsViaLLM({ genres: ['indie'], regions: ['US'], roleTarget: 'performer', targetCount: 25 }))
+      .rejects.toThrow(/could not extract JSON/);
   });
 
   it('extracts JSON when wrapped in markdown code fences', async () => {
@@ -122,22 +133,18 @@ describe('searchArtistsViaLLM', () => {
   });
 
   it('throws a helpful error when GEMINI_API_KEY is unset', async () => {
-    // Reset module state by directly clearing the env var (the client is a
-    // module-level singleton, so we re-import the module fresh).
     delete process.env.GEMINI_API_KEY;
     vi.resetModules();
     const { searchArtistsViaLLM: fresh } = await import('@/lib/gemfinder/hunter/llm-agent');
-    const result = await fresh({ genres: ['indie'], regions: ['US'], roleTarget: 'performer', targetCount: 25 });
-    expect(result).toEqual([]);
-    // The warn includes the original Error which contains the helpful message
-    expect(console.warn).toHaveBeenCalledWith('[HUNTER_LLM] Gemini call failed:', expect.objectContaining({ message: expect.stringContaining('GEMINI_API_KEY') }));
+    await expect(fresh({ genres: ['indie'], regions: ['US'], roleTarget: 'performer', targetCount: 25 }))
+      .rejects.toThrow(/GEMINI_API_KEY/);
   });
 
   it('throws helpful error when key is still placeholder', async () => {
     process.env.GEMINI_API_KEY = 'PLACEHOLDER_API_KEY';
     vi.resetModules();
     const { searchArtistsViaLLM: fresh } = await import('@/lib/gemfinder/hunter/llm-agent');
-    const result = await fresh({ genres: ['indie'], regions: ['US'], roleTarget: 'performer', targetCount: 25 });
-    expect(result).toEqual([]);
+    await expect(fresh({ genres: ['indie'], regions: ['US'], roleTarget: 'performer', targetCount: 25 }))
+      .rejects.toThrow(/GEMINI_API_KEY/);
   });
 });
