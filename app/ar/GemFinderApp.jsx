@@ -13491,10 +13491,30 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
           {/* Search tab — Hunter criteria form */}
           {scoutV3Tab === "search" && (
             <div style={{ ...cS, padding: "24px 28px" }}>
-              <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 6 }}>Run a Hunter search</div>
-              <div style={{ fontSize: 12, color: C.ts, marginBottom: 20, lineHeight: 1.6 }}>
-                Searches MusicBrainz, enriches via Spotify + Steel scraping, scores candidates against
-                your saved weights, and adds the top {scoutV3HunterCriteria.targetCount} into the queue.
+              <div style={{ fontSize: 20, fontWeight: 800, marginBottom: 4, letterSpacing: "-0.02em" }}>
+                🤖 Hunt for new artists
+              </div>
+              <div style={{ fontSize: 12, color: C.ts, marginBottom: 16, lineHeight: 1.6 }}>
+                A multi-agent pipeline finds emerging artists matching your criteria, scores them, and
+                adds the top {scoutV3HunterCriteria.targetCount} to your queue.
+              </div>
+
+              {/* Agent infrastructure visualization */}
+              <div style={{ background: C.sa, borderRadius: 8, padding: "10px 12px", marginBottom: 14, fontSize: 11, color: C.ts, lineHeight: 1.5 }}>
+                <div style={{ marginBottom: 4 }}><strong style={{ color: C.tt }}>How it works:</strong></div>
+                <div>1. 🌐 <strong>Discovery agent</strong> — Gemini + Google Search browses Pitchfork, FADER, Stereogum, festival lineups</div>
+                <div>2. 🎵 <strong>Spotify agent</strong> — per-artist lookup for followers, top tracks, popularity</div>
+                <div>3. 📱 <strong>Social agent</strong> — Instagram + TikTok follower scraping via Steel browser</div>
+                <div>4. ⚖️ <strong>Score + gate</strong> — applies your weights, filters out megastars (&gt;100K) and deceased</div>
+              </div>
+
+              {/* Forever parameters - readonly chips */}
+              <div style={{ marginBottom: 18, display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+                <span style={{ fontSize: 11, color: C.ts, fontWeight: 700, marginRight: 4 }}>ALWAYS:</span>
+                <span style={{ ...mkP(true, C.gn, C.gb), cursor: "default", fontSize: 11 }}>✓ Living artists</span>
+                <span style={{ ...mkP(true, C.gn, C.gb), cursor: "default", fontSize: 11 }}>✓ ≤100K Spotify listeners</span>
+                <span style={{ ...mkP(true, C.gn, C.gb), cursor: "default", fontSize: 11 }}>✓ Released since 2022</span>
+                <span style={{ ...mkP(true, C.gn, C.gb), cursor: "default", fontSize: 11 }}>✓ Not in Kickoff/Live/Rejected</span>
               </div>
 
               {/* Genres */}
@@ -13764,7 +13784,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                 disabled={scoutV3HunterSubmitting}
                 style={{ ...actionBtn(true, "accent"), opacity: scoutV3HunterSubmitting ? 0.6 : 1 }}
               >
-                {scoutV3HunterSubmitting ? "Submitting…" : "Run Hunter →"}
+                {scoutV3HunterSubmitting ? "Launching agents…" : "🚀 Launch agents →"}
               </button>
             </div>
           )}
