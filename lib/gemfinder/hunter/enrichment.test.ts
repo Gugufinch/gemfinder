@@ -10,6 +10,14 @@ vi.mock('@/lib/gemfinder/hunter/spotify', () => ({
 vi.mock('@/lib/gemfinder/hunter/steel', () => ({
   scrapeWebsite: vi.fn(),
 }));
+vi.mock('@/lib/gemfinder/hunter/musicbrainz', () => ({
+  // fetchArtistDetails is called by enrichCandidate at Step 0 to enrich MB
+  // search results with relations + release-groups. Tests pass a complete
+  // mbArtist fixture so the fetch isn't strictly needed — we return null
+  // by default so enrichCandidate falls through to using the fixture as-is.
+  // Tests that exercise the fetch path override this via mockResolvedValueOnce.
+  fetchArtistDetails: vi.fn(async () => null),
+}));
 vi.mock('@/lib/gemfinder/hunter/scrape-cache', () => ({
   getCached: vi.fn(),
   putCached: vi.fn(),
@@ -19,6 +27,7 @@ import { enrichCandidate } from '@/lib/gemfinder/hunter/enrichment';
 import * as spotify from '@/lib/gemfinder/hunter/spotify';
 import * as steel from '@/lib/gemfinder/hunter/steel';
 import * as cache from '@/lib/gemfinder/hunter/scrape-cache';
+import * as mb from '@/lib/gemfinder/hunter/musicbrainz';
 import type { MBArtist } from '@/lib/gemfinder/hunter/musicbrainz';
 import type { SpotifyArtist } from '@/lib/gemfinder/hunter/spotify';
 import type { SteelScrapeResult } from '@/lib/gemfinder/hunter/steel';
@@ -456,5 +465,83 @@ describe('enrichCandidate', () => {
       expect.anything(),
       expect.any(Error)
     );
+  });
+
+  // ---------------------------------------------------------------------------
+  // MB fetchArtistDetails fallback — when search results lack relations
+  // ---------------------------------------------------------------------------
+  // BUG that this regression-guards: searchArtists returns BASIC artist data
+  // (no relations, no release-groups). Without the Step 0 fetchArtistDetails
+  // call, enrichment was running on empty extracted URLs → no Spotify lookup
+  // → no follower data → size_cap gate never fired → megastars surfaced
+  // wrong-reason gate-outs (Taylor Swift got "no_contact" instead of "too_big").
+  describe('Step 0: fetchArtistDetails fallback when MB search omits relations', () => {
+    it('calls fetchArtistDetails when input mbArtist lacks relations + release-groups', async () => {
+      vi.mocked(mb.fetchArtistDetails).mockResolvedValue({
+        id: 'mb-001',
+        name: 'Test Artist',
+        relations: [{ type: 'spotify', url: { resource: 'https://open.spotify.com/artist/sp123' } }],
+        'release-groups': [{ id: 'rg-1', title: 'Album One', 'first-release-date': '2023-06-01' }],
+        tags: [{ name: 'indie pop', count: 5 }],
+      });
+      vi.mocked(spotify.getArtistById).mockResolvedValue({
+        id: 'sp123',
+        name: 'Test Artist',
+        followers: { total: 1234 },
+        popularity: 50,
+        genres: ['indie pop'],
+      });
+
+      // Pass a minimal MB artist (no relations, no release-groups — same as searchArtists returns)
+      const result = await enrichCandidate('ws-1', minimalArtist());
+
+      expect(mb.fetchArtistDetails).toHaveBeenCalledWith('mb-001');
+      expect(spotify.getArtistById).toHaveBeenCalledWith('sp123');
+      expect(result.spotifyFollowers).toBe(1234);
+      expect(result.spotifyPopularity).toBe(50);
+      expect(result.recentReleaseYear).toBe(2023);
+    });
+
+    it('skips fetchArtistDetails when input mbArtist already has relations + release-groups', async () => {
+      // Orchestrator passes pre-fetched data → no need to re-fetch.
+      const result = await enrichCandidate('ws-1', minimalArtist({
+        relations: [{ type: 'spotify', url: { resource: 'https://open.spotify.com/artist/sp123' } }],
+        'release-groups': [{ id: 'rg-1', title: 'Album One', 'first-release-date': '2023-01-01' }],
+      }));
+
+      expect(mb.fetchArtistDetails).not.toHaveBeenCalled();
+      expect(result.spotifyArtistId).toBe('sp123');
+    });
+
+    it('continues degraded when fetchArtistDetails throws', async () => {
+      vi.mocked(mb.fetchArtistDetails).mockRejectedValue(new Error('MB 503'));
+
+      // No throw, enrichment falls through with the minimal data we have.
+      const result = await enrichCandidate('ws-1', minimalArtist({ name: 'Bare Bones' }));
+
+      expect(result.displayName).toBe('Bare Bones');
+      expect(result.spotifyFollowers).toBeUndefined();
+      // The warn must fire — silently swallowing would violate CLAUDE.md convention.
+      expect(console.warn).toHaveBeenCalledWith(
+        '[HUNTER_ENRICH] fetchArtistDetails failed for',
+        'mb-001',
+        expect.any(Error)
+      );
+    });
+
+    it('continues with original data when fetchArtistDetails returns null', async () => {
+      vi.mocked(mb.fetchArtistDetails).mockResolvedValue(null);
+
+      const result = await enrichCandidate('ws-1', minimalArtist({ name: 'Unknown' }));
+
+      expect(result.displayName).toBe('Unknown');
+      expect(result.spotifyFollowers).toBeUndefined();
+      // No warn — null is a clean fallback, not an error.
+      expect(console.warn).not.toHaveBeenCalledWith(
+        '[HUNTER_ENRICH] fetchArtistDetails failed for',
+        expect.anything(),
+        expect.anything()
+      );
+    });
   });
 });

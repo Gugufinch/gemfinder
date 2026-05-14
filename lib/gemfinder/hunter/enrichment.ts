@@ -1,4 +1,5 @@
 import type { MBArtist } from '@/lib/gemfinder/hunter/musicbrainz';
+import { fetchArtistDetails } from '@/lib/gemfinder/hunter/musicbrainz';
 import { getArtistById, parseSpotifyArtistId } from '@/lib/gemfinder/hunter/spotify';
 import { scrapeWebsite } from '@/lib/gemfinder/hunter/steel';
 import { getCached, putCached } from '@/lib/gemfinder/hunter/scrape-cache';
@@ -174,6 +175,30 @@ export async function enrichCandidate(
   workspaceId: string,
   mbArtist: MBArtist,
 ): Promise<EnrichedCandidate> {
+  // Step 0: MB search results don't include relations / release-groups / extended tags —
+  // those only come from `fetchArtistDetails`. Without it, we have no Spotify URL to
+  // extract → no Spotify follower data → size_cap gate can never fire → megastars
+  // make it all the way through to scoring. Fetch the full record now.
+  //
+  // Costs ~1 sec per candidate (MB token bucket is 1 req/sec process-wide), but
+  // unlocks the entire Spotify + Steel + relation-based contact pipeline.
+  let fullArtist: MBArtist = mbArtist;
+  if (!mbArtist.relations || !mbArtist['release-groups']) {
+    try {
+      const detailed = await fetchArtistDetails(mbArtist.id);
+      if (detailed) {
+        // Merge: keep the search-result data as a baseline, layer detailed fields on top.
+        fullArtist = { ...mbArtist, ...detailed };
+      }
+    } catch (err) {
+      console.warn('[HUNTER_ENRICH] fetchArtistDetails failed for', mbArtist.id, err);
+      // Continue with whatever we have — degraded but not broken.
+    }
+  }
+
+  // From here on, use fullArtist (which has relations + release-groups).
+  mbArtist = fullArtist;
+
   // Step 1 & 2: core MB fields + isLiving
   const isLiving = !mbArtist['life-span']?.end;
 

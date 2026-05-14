@@ -19,9 +19,17 @@ export const DEFAULT_HUNTER_WEIGHTS: HunterWeights = {
     recency:                { weight: 6,  curve: 'linear', min: 0, max: 100, missing_baseline: 50, days_window: 730 },
   },
   gates: {
-    require_genre_match: true,
+    // Default gates are intentionally MINIMAL — soft preferences (genre fit,
+    // contact readiness) are handled by SCORING (which uses workspace target
+    // genres + contact_readiness weights to rank candidates), not by hard
+    // filtering. The hard filters here only reject candidates we definitively
+    // can't use: blocked, deceased.
+    //
+    // Operators can re-enable require_genre_match / require_reachable per
+    // workspace via the ⚙ Edit weights modal if their use case warrants it.
+    require_genre_match: false,
     require_living: true,
-    require_reachable: true,
+    require_reachable: false,
     require_not_blocked: true,
   },
   target_count_default: 25,

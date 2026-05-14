@@ -6,8 +6,10 @@ export type GateResult = { pass: true } | { pass: false; reason: string };
 
 // Hard upper-bound on Spotify followers when criteria.sizeBracket.max is not set.
 // Above this, the artist is too big for A&R discovery — we'd waste time
-// pretending we could engage them. Tuned for Songfinch's pre-engagement queue.
-const DEFAULT_MAX_SPOTIFY_FOLLOWERS = 500_000;
+// pretending we could engage them. Tuned for Songfinch's pre-engagement queue:
+// 250K is roughly where Spotify monthly listeners flip from "interested in any
+// commission" to "represented by an agency that won't return your email."
+const DEFAULT_MAX_SPOTIFY_FOLLOWERS = 250_000;
 
 export function evaluateGates(
   candidate: EnrichedCandidate,
