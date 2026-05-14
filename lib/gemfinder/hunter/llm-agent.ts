@@ -70,6 +70,9 @@ export async function searchArtistsViaLLM(criteria: HunterCriteria): Promise<MBA
       name: a.name.trim(),
       type: 'Person' as const,  // best guess; enrichment will overwrite if Spotify finds different
       tags: (a.genres ?? []).slice(0, 5).map((name) => ({ name: name.toLowerCase(), count: 1 })),
+      // Pass the LLM's rationale through as an aiHint so the candidate gets a
+      // "why this artist?" line on the review card.
+      _aiHint: typeof a.rationale === 'string' ? a.rationale : undefined,
       // 'life-span' omitted — LLM agent assumes living artists (this is the whole point)
       // relations + release-groups omitted — Step 0 in enrichment is a no-op for empty id
     }));

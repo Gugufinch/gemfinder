@@ -342,6 +342,10 @@ export async function enrichCandidate(
     scrapedToursInfo,
     inferredRole,
     contactReadiness,
+    // Pass the LLM rationale through (if any) so the review card has a
+    // "why this artist?" line. MB-sourced candidates don't have a hint
+    // and end up undefined.
+    aiSummary: mbArtist._aiHint,
   };
 
   return candidate;

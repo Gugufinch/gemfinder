@@ -12,6 +12,10 @@ export type MBArtist = {
   tags?: Array<{ name: string; count: number }>;
   'release-groups'?: Array<{ id: string; title: string; 'first-release-date'?: string }>;
   relations?: Array<{ type: string; url?: { resource: string } }>;
+  // Internal: LLM-generated rationale, populated by llm-agent. Carried through
+  // enrichment to become the candidate's aiSummary (the "why this artist?"
+  // line on the review card). Empty for MB-sourced candidates.
+  _aiHint?: string;
 };
 
 // Process-wide token bucket: 1 req/sec.

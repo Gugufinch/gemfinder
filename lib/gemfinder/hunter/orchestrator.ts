@@ -223,6 +223,17 @@ export async function runPipeline(input: RunPipelineInput): Promise<HunterRunSum
                       : sc.enriched.contactReadiness === 'booking' ? 'booking'
                       : undefined,
           artistRole: sc.enriched.inferredRole === 'curator' ? 'curator' : 'performer',
+          aiSummary: sc.enriched.aiSummary,  // "why this artist?" line from LLM rationale
+          // Surface enrichment metrics for the review card. Note: we put
+          // spotifyFollowers into spotifyMonthlyListeners as the closest
+          // existing column — Spotify Web API exposes followers, not monthly
+          // listeners (that requires scraping the artist page). Future v1.3
+          // may split into dedicated columns.
+          spotifyMonthlyListeners: sc.enriched.spotifyFollowers,
+          instagramFollowers: sc.enriched.instagramFollowers,
+          tiktokFollowers: sc.enriched.tiktokFollowers,
+          youtubeSubscribers: sc.enriched.youtubeSubscribers,
+          soundcloudFollowers: sc.enriched.soundcloudFollowers,
           score: sc.finalScore,
           weightSnapshot: sc.perDimension,
           hunterRunId: runId,

@@ -404,4 +404,5 @@ export type EnrichedCandidate = {
   scrapedToursInfo?: string;
   inferredRole: 'performer' | 'curator' | 'unknown';
   contactReadiness: 'direct' | 'manager' | 'agency' | 'booking' | 'social_only' | 'none';
+  aiSummary?: string;  // Short "why this artist?" line (LLM rationale or operator-added note)
 };

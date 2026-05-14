@@ -13271,139 +13271,152 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
               </div>
             ) : (
               <div style={{ display: "grid", gap: 12 }}>
-                {scoutV3Candidates.map(c => (
-                  <div key={`scoutv3-card-${c.id}`} style={{ ...cS, padding: "18px 20px" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, flexWrap: "wrap", marginBottom: 12 }}>
-                      <div style={{ display: "grid", gap: 6 }}>
-                        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                          <span style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-0.03em" }}>{c.displayName}</span>
-                          {c.artistRole && <span style={{ ...mkP(true, C.bu, C.bb), cursor: "default" }}>{c.artistRole}</span>}
-                          <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>{c.source}</span>
-                          {(c.score !== null && c.score !== undefined) ? (
-                            <span style={{ ...mkP(true, c.score > 70 ? C.gn : c.score > 40 ? C.ab : C.ts, c.score > 70 ? C.gb : c.score > 40 ? C.abb : C.sa), cursor: "default" }}>
-                              Score: {Math.round(c.score)}
-                            </span>
-                          ) : (
-                            <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default" }}>Unscored</span>
-                          )}
-                        </div>
-                        <div style={{ fontSize: 12, color: C.ts, lineHeight: 1.6 }}>
-                          {[
-                            c.instagramHandle && `IG: @${c.instagramHandle}${c.instagramFollowers ? ` · ${c.instagramFollowers.toLocaleString()}` : ""}`,
-                            c.tiktokHandle && `TikTok: @${c.tiktokHandle}${c.tiktokFollowers ? ` · ${c.tiktokFollowers.toLocaleString()}` : ""}`,
-                            c.spotifyMonthlyListeners && `Spotify: ${c.spotifyMonthlyListeners.toLocaleString()} monthly`,
-                            c.youtubeHandle && `YT: @${c.youtubeHandle}${c.youtubeSubscribers ? ` · ${c.youtubeSubscribers.toLocaleString()}` : ""}`,
-                          ].filter(Boolean).join("  ·  ")}
-                        </div>
-                        {c.primaryEmail && (
-                          <div style={{ fontSize: 12, color: C.ts }}>
-                            Contact: {c.primaryEmail} {c.contactType && `(${c.contactType})`}
-                            {c.locations?.[0] && ` · ${c.locations[0]}`}
-                          </div>
-                        )}
-                        {c.primaryGenre && (
-                          <div style={{ fontSize: 12, color: C.ts }}>
-                            Genre: {[c.primaryGenre, ...(c.genres || []).filter(g => g !== c.primaryGenre)].join(" · ")}
-                          </div>
-                        )}
-                        {c.aiSummary && (
-                          <div style={{ fontSize: 12, color: C.tt, lineHeight: 1.6 }}>{c.aiSummary}</div>
-                        )}
-                        <div style={{ fontSize: 11, color: C.tt }}>
-                          Added via {c.source} ({c.addedBy}) · enrichment: {c.enrichmentStatus}
-                        </div>
-                        {/* Chunk 6.5: Hunter provenance footer — for candidates that came from a hunter run */}
-                        {c.source && c.source.startsWith("agent:hunter:") && (
-                          <div style={{ fontSize: 11, color: C.tt, paddingTop: 4, marginTop: 4, borderTop: `1px dashed ${C.bd}` }}>
-                            {/* Top dims by score (descending), at most 3 — gives the operator the "why was this scored high" at a glance */}
-                            {c.weightSnapshot && typeof c.weightSnapshot === "object" && Object.keys(c.weightSnapshot).length > 0 && (
-                              <span>
-                                Top dims:{" "}
-                                {Object.entries(c.weightSnapshot)
-                                  .filter(([, v]) => typeof v === "number")
-                                  .sort(([, a], [, b]) => b - a)
-                                  .slice(0, 3)
-                                  .map(([k, v]) => `${k} (${Math.round(v)})`)
-                                  .join(" · ")}
-                              </span>
-                            )}
-                            {c.hunterRunId && (
-                              <>
-                                {" · "}
-                                <button
-                                  onClick={() => { setScoutV3Tab("runs"); setScoutV3HunterExpandedRunId(c.hunterRunId); }}
-                                  style={{ background: "transparent", border: "none", padding: 0, color: C.bu, cursor: "pointer", fontSize: 11, textDecoration: "underline" }}
-                                  title="Jump to this candidate's Hunter run"
-                                >
-                                  View run →
-                                </button>
-                              </>
-                            )}
-                          </div>
-                        )}
+                {/* + Hunt for more — start a new agent run without leaving the queue. */}
+                <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: -4 }}>
+                  <button onClick={() => setScoutV3Tab("search")} style={actionBtn(true, "accent")}>
+                    + Hunt for more candidates →
+                  </button>
+                </div>
+                {scoutV3Candidates.map(c => {
+                  const scoreTone = c.score == null ? { fg: C.ts, bg: C.sa } : c.score >= 75 ? { fg: C.gn, bg: C.gb } : c.score >= 60 ? { fg: C.bu, bg: C.bb } : { fg: C.ts, bg: C.sa };
+                  const followerRows = [
+                    c.spotifyMonthlyListeners && { label: "Spotify followers", value: c.spotifyMonthlyListeners.toLocaleString() },
+                    c.instagramFollowers && { label: "Instagram", value: c.instagramFollowers.toLocaleString() },
+                    c.tiktokFollowers && { label: "TikTok", value: c.tiktokFollowers.toLocaleString() },
+                    c.youtubeSubscribers && { label: "YouTube", value: c.youtubeSubscribers.toLocaleString() },
+                    c.soundcloudFollowers && { label: "SoundCloud", value: c.soundcloudFollowers.toLocaleString() },
+                  ].filter(Boolean);
+                  const topDims = c.weightSnapshot && typeof c.weightSnapshot === "object"
+                    ? Object.entries(c.weightSnapshot)
+                        .filter(([, v]) => typeof v === "number")
+                        .sort(([, a], [, b]) => b - a)
+                        .slice(0, 3)
+                    : [];
+                  return (
+                  <div key={`scoutv3-card-${c.id}`} style={{ ...cS, padding: "20px 22px" }}>
+                    {/* Header row: name, role, source, score */}
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
+                      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                        <span style={{ fontSize: 24, fontWeight: 800, letterSpacing: "-0.03em" }}>{c.displayName}</span>
+                        {c.artistRole && <span style={{ ...mkP(true, C.bu, C.bb), cursor: "default" }}>{c.artistRole}</span>}
+                        <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default", fontSize: 10 }} title={`Added by ${c.addedBy}`}>{c.source}</span>
                       </div>
-                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                        <button onClick={() => setScoutV3ApproveTarget(c)} style={actionBtn(false, "accent")}>✓ Approve</button>
-                        <button onClick={() => setScoutV3RejectTarget(c)} style={actionBtn(false, "danger")}>✗ Reject</button>
+                      {(c.score !== null && c.score !== undefined) && (
+                        <span style={{ background: scoreTone.bg, color: scoreTone.fg, padding: "6px 14px", borderRadius: 999, fontSize: 14, fontWeight: 800 }}>
+                          {Math.round(c.score)}
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Body: 2-column — audio left, info right */}
+                    <div style={{ display: "grid", gridTemplateColumns: c.spotifyArtistId ? "minmax(280px, 1fr) 1fr" : "1fr", gap: 16, marginBottom: 14 }}>
+                      {c.spotifyArtistId && (
+                        <iframe
+                          src={`https://open.spotify.com/embed/artist/${c.spotifyArtistId}?utm_source=gemfinder`}
+                          height={232}
+                          frameBorder="0"
+                          allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
+                          loading="lazy"
+                          style={{ borderRadius: 12, border: "none", width: "100%", minHeight: 232 }}
+                          title={`${c.displayName} on Spotify`}
+                        />
+                      )}
+
+                      <div style={{ display: "grid", gap: 10, alignContent: "start" }}>
+                        {c.aiSummary && (
+                          <div style={{ fontSize: 13, color: C.tt, lineHeight: 1.6, padding: "10px 12px", background: C.sa, borderRadius: 8, borderLeft: `3px solid ${C.bu}` }}>
+                            💬 {c.aiSummary}
+                          </div>
+                        )}
+
+                        {(c.primaryGenre || c.genres?.length > 0) && (
+                          <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                            {[c.primaryGenre, ...(c.genres || []).filter(g => g !== c.primaryGenre)].filter(Boolean).slice(0, 5).map(g => (
+                              <span key={g} style={{ ...mkP(false, C.ts, C.sa), fontSize: 11, cursor: "default" }}>{g}</span>
+                            ))}
+                          </div>
+                        )}
+
+                        {followerRows.length > 0 && (
+                          <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "4px 12px", fontSize: 12, padding: "8px 10px", background: C.sa, borderRadius: 6 }}>
+                            {followerRows.map(r => (
+                              <div key={r.label} style={{ display: "contents" }}>
+                                <span style={{ color: C.ts }}>{r.label}</span>
+                                <span style={{ fontWeight: 700, textAlign: "right" }}>{r.value}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
+                        {(c.primaryEmail || c.contactType) && (
+                          <div style={{ fontSize: 12, color: C.ts }}>
+                            {c.primaryEmail ? (
+                              <span>📧 <a href={`mailto:${c.primaryEmail}`} style={{ color: C.bu, textDecoration: "none" }}>{c.primaryEmail}</a></span>
+                            ) : (
+                              <span>📧 No direct email</span>
+                            )}
+                            {c.contactType && <span style={{ marginLeft: 8 }}>({c.contactType})</span>}
+                            {c.locations?.[0] && <span style={{ marginLeft: 8 }}>· {c.locations[0]}</span>}
+                          </div>
+                        )}
+
+                        {topDims.length > 0 && (
+                          <div style={{ fontSize: 11, color: C.tt }}>
+                            Top scoring: {topDims.map(([k, v]) => `${k.replace(/_/g, " ")} (${Math.round(v)})`).join(" · ")}
+                          </div>
+                        )}
                       </div>
                     </div>
-                    {/* Inline listen + links panel — gives the operator everything they need
-                        to evaluate without leaving the page. */}
-                    {(c.spotifyArtistId || c.spotifyUrl || c.instagramHandle || c.tiktokHandle || c.youtubeHandle || c.bandcampUrl) && (
-                      <div style={{ marginTop: 14, paddingTop: 14, borderTop: `1px solid ${C.bd}`, display: "grid", gap: 10 }}>
-                        {c.spotifyArtistId && (
-                          <iframe
-                            src={`https://open.spotify.com/embed/artist/${c.spotifyArtistId}?utm_source=gemfinder&theme=0`}
-                            width="100%"
-                            height="152"
-                            frameBorder="0"
-                            allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
-                            loading="lazy"
-                            style={{ borderRadius: 8, border: "none" }}
-                            title={`Spotify preview for ${c.displayName}`}
-                          />
-                        )}
-                        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                          {c.spotifyUrl && (
-                            <a href={c.spotifyUrl} target="_blank" rel="noopener noreferrer" style={{ ...actionBtn(false, "neutral"), textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 4 }}>
-                              Spotify ↗
-                            </a>
-                          )}
-                          {c.instagramHandle && (
-                            <a href={`https://instagram.com/${c.instagramHandle}`} target="_blank" rel="noopener noreferrer" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>
-                              IG @{c.instagramHandle} ↗
-                            </a>
-                          )}
-                          {c.tiktokHandle && (
-                            <a href={`https://tiktok.com/@${c.tiktokHandle}`} target="_blank" rel="noopener noreferrer" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>
-                              TikTok @{c.tiktokHandle} ↗
-                            </a>
-                          )}
-                          {c.youtubeHandle && (
-                            <a href={`https://youtube.com/@${c.youtubeHandle}`} target="_blank" rel="noopener noreferrer" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>
-                              YouTube ↗
-                            </a>
-                          )}
-                          {c.bandcampUrl && (
-                            <a href={c.bandcampUrl} target="_blank" rel="noopener noreferrer" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>
-                              Bandcamp ↗
-                            </a>
-                          )}
-                          {c.musicbrainzId && (
-                            <a href={`https://musicbrainz.org/artist/${c.musicbrainzId}`} target="_blank" rel="noopener noreferrer" style={{ ...actionBtn(false, "neutral"), textDecoration: "none", fontSize: 11, opacity: 0.7 }}>
-                              MB
-                            </a>
-                          )}
-                          {!c.spotifyArtistId && c.displayName && (
-                            <a href={`https://open.spotify.com/search/${encodeURIComponent(c.displayName)}`} target="_blank" rel="noopener noreferrer" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>
-                              🔍 Search Spotify
-                            </a>
-                          )}
-                        </div>
-                      </div>
-                    )}
+
+                    {/* Links row */}
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 14 }}>
+                      {c.spotifyUrl && (
+                        <a href={c.spotifyUrl} target="_blank" rel="noopener noreferrer" style={{ ...actionBtn(false, "neutral"), textDecoration: "none", fontSize: 12 }}>Spotify ↗</a>
+                      )}
+                      {!c.spotifyArtistId && (
+                        <a href={`https://open.spotify.com/search/${encodeURIComponent(c.displayName)}`} target="_blank" rel="noopener noreferrer" style={{ ...actionBtn(false, "neutral"), textDecoration: "none", fontSize: 12 }}>🔍 Search Spotify ↗</a>
+                      )}
+                      {c.instagramHandle && (
+                        <a href={`https://instagram.com/${c.instagramHandle}`} target="_blank" rel="noopener noreferrer" style={{ ...actionBtn(false, "neutral"), textDecoration: "none", fontSize: 12 }}>IG @{c.instagramHandle} ↗</a>
+                      )}
+                      {c.tiktokHandle && (
+                        <a href={`https://tiktok.com/@${c.tiktokHandle}`} target="_blank" rel="noopener noreferrer" style={{ ...actionBtn(false, "neutral"), textDecoration: "none", fontSize: 12 }}>TikTok ↗</a>
+                      )}
+                      {c.youtubeHandle && (
+                        <a href={`https://youtube.com/@${c.youtubeHandle}`} target="_blank" rel="noopener noreferrer" style={{ ...actionBtn(false, "neutral"), textDecoration: "none", fontSize: 12 }}>YouTube ↗</a>
+                      )}
+                      {c.bandcampUrl && (
+                        <a href={c.bandcampUrl} target="_blank" rel="noopener noreferrer" style={{ ...actionBtn(false, "neutral"), textDecoration: "none", fontSize: 12 }}>Bandcamp ↗</a>
+                      )}
+                      {c.soundcloudHandle && (
+                        <a href={`https://soundcloud.com/${c.soundcloudHandle}`} target="_blank" rel="noopener noreferrer" style={{ ...actionBtn(false, "neutral"), textDecoration: "none", fontSize: 12 }}>SoundCloud ↗</a>
+                      )}
+                      {c.musicbrainzId && (
+                        <a href={`https://musicbrainz.org/artist/${c.musicbrainzId}`} target="_blank" rel="noopener noreferrer" style={{ ...actionBtn(false, "neutral"), textDecoration: "none", fontSize: 11, opacity: 0.6 }}>MB</a>
+                      )}
+                      {c.hunterRunId && (
+                        <button
+                          onClick={() => { setScoutV3Tab("runs"); setScoutV3HunterExpandedRunId(c.hunterRunId); }}
+                          style={{ ...actionBtn(false, "neutral"), fontSize: 11, opacity: 0.7 }}
+                          title="Jump to this candidate's Hunter run"
+                        >
+                          View run
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Action footer — prominent approve / reject */}
+                    <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", paddingTop: 12, borderTop: `1px solid ${C.bd}` }}>
+                      <button onClick={() => setScoutV3RejectTarget(c)} style={{ ...actionBtn(false, "danger"), fontSize: 14, padding: "10px 18px" }}>
+                        ✗ Reject
+                      </button>
+                      <button onClick={() => setScoutV3ApproveTarget(c)} style={{ ...actionBtn(true, "accent"), fontSize: 14, padding: "10px 18px" }}>
+                        ✓ Approve into Kickoff
+                      </button>
+                    </div>
                   </div>
-                ))}
+                );
+                })}
               </div>
             )
           )}
