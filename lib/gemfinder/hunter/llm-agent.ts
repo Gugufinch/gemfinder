@@ -41,7 +41,11 @@ export async function searchArtistsViaLLM(criteria: HunterCriteria): Promise<MBA
   let responseText: string | undefined;
   try {
     const result = await client().models.generateContent({
-      model: 'gemini-2.0-flash',
+      // gemini-2.5-flash-lite has the most generous free-tier quota and handles
+      // grounding+structured-output cleanly with a sub-2s response time. The
+      // larger gemini-2.5-flash also works but is slower and more prone to
+      // timeout when prompt size + grounding load both grow.
+      model: 'gemini-2.5-flash-lite',
       contents: [{ role: 'user', parts: [{ text: SYSTEM_PROMPT + '\n\n' + userPrompt }] }],
       config: {
         // Google Search grounding — Gemini browses the web during the call.
@@ -50,9 +54,10 @@ export async function searchArtistsViaLLM(criteria: HunterCriteria): Promise<MBA
         tools: [{ googleSearch: {} }],
         // Some variety run-to-run, but not chaotic.
         temperature: 0.7,
-        // 50 artists × ~50 tokens each = ~2500 tokens for the list, plus
-        // grounding overhead. 8K is comfortable headroom.
-        maxOutputTokens: 8000,
+        // 30 artists × ~250 tokens each (Gemini's rationales run long when
+        // grounded in real press) = ~7500 tokens. 12K is comfortable headroom.
+        // Free tier supports up to 65K output tokens on this model.
+        maxOutputTokens: 12000,
       },
     });
     responseText = result.text;
@@ -106,8 +111,15 @@ export async function searchArtistsViaLLM(criteria: HunterCriteria): Promise<MBA
 
 /**
  * Extract the first {...} object from a string, even if it's wrapped in markdown
- * fences, has commentary around it, or has trailing text. Walks bracket depth
- * to find the matching close-brace.
+ * fences, has commentary around it, has trailing text, OR is truncated mid-stream
+ * (which happens when Gemini hits maxOutputTokens before finishing its JSON).
+ *
+ * Strategy:
+ * 1. Look for a fenced ```json block first
+ * 2. Otherwise find first { and walk to matching }
+ * 3. If we reach EOF before the JSON closes, RECONSTRUCT: snip back to the last
+ *    complete `}` in the artists array and append `]}` to close the structure.
+ *    This recovers ~95% of a truncated response instead of failing entirely.
  */
 function extractJsonObject(text: string): string | null {
   // Strip markdown code fences if present.
@@ -132,48 +144,43 @@ function extractJsonObject(text: string): string | null {
       if (depth === 0) return text.slice(start, i + 1);
     }
   }
+
+  // Truncation recovery: response got cut off mid-JSON. Walk backward from EOF
+  // looking for the last clean `},` (end of a complete artist entry), then
+  // close the array and outer object. We lose the last (partial) artist but
+  // keep all the complete ones before it.
+  const partial = text.slice(start);
+  const lastCloseObj = partial.lastIndexOf('},');
+  if (lastCloseObj > 0) {
+    const recovered = partial.slice(0, lastCloseObj + 1) + ']}';
+    // Quick validation: try parsing and bail if it's still broken.
+    try {
+      JSON.parse(recovered);
+      return recovered;
+    } catch {
+      // Could not recover — fall through to null.
+    }
+  }
   return null;
 }
 
-const SYSTEM_PROMPT = `You are an A&R discovery assistant for Songfinch, a personalized song service. Given criteria (genre, region, role target, follower range), use Google Search to find emerging-but-active MUSIC RECORDING ARTISTS who match.
+const SYSTEM_PROMPT = `You are an A&R scout for Songfinch. Use Google Search to find emerging recording artists matching the criteria. Search Pitchfork, FADER, Stereogum, NPR Music, Brooklyn Vegan year-end and "best new" lists from 2024-2025; festival lineups; Bandcamp editorial picks.
 
-You have access to Google Search. USE IT — search for current articles, year-end lists, festival lineups, and "best new artists" coverage from 2024-2025. Don't rely on training-data memory; ground your suggestions in real, current sources.
+MUST be:
+- A living music recording artist (NOT novelists, voice actors, classical composers)
+- Active with releases since 2022
+- 1,000 to 100,000 Spotify monthly listeners (above 100K is too established for our queue)
 
-HARD CONSTRAINTS (a candidate that violates any of these is WRONG):
-- MUST be a music recording artist. NEVER suggest novelists, authors, audiobook narrators, voice actors, podcasters, classical composers, film score composers, or anyone whose primary work isn't recorded music for streaming/release.
-- MUST be living. No deceased artists.
-- MUST have released original music since 2022 (not just compilation re-releases, not just a 2024 deluxe edition of an old album).
-- MUST have between 1,000 and 100,000 Spotify monthly listeners. This is the Songfinch A&R sweet spot. Above 100K listeners, artists are agency-managed and don't take direct outreach — that's outside our range. Below 1K is below A&R-viable.
-- MUST be a contemporary artist with active streaming presence — not a legacy/heritage act, not a session musician, not a "rock band from the 1960s" being marketed as catalog.
+Variety: don't repeat the same indie-buzz names. Mix career stages in the 1K-100K range. For broad genres, span subgenres.
 
-SEARCH STRATEGY:
-- Search Pitchfork, FADER, NPR Music, Stereogum, Brooklyn Vegan, Paste, Consequence, Resident Advisor (for electronic) for "best new artists 2024" / "rising artists 2025" / "ones to watch" coverage.
-- Search festival lineups for the requested region/genre — early-stage artists get unannounced or smaller-bill slots.
-- Search Bandcamp's daily / weekly editorial picks for genre-specific emerging acts.
-- For each artist you list, you should have actually seen them mentioned in a real article.
+Per artist, rationale should reference what you actually found in search (a 2024 review, a festival slot, a recent EP). Generic "rising act" filler is rejected. KEEP RATIONALES UNDER 40 WORDS — one tight sentence, not a paragraph.
 
-QUALITY:
-- VARIETY: don't list the same 25 "indie buzz" names everyone knows. Mix career stages within the 1K-100K listener band.
-- If a criteria genre is broad ("rock"), include subgenres (indie rock, post-punk, shoegaze, garage rock, etc.) and split your suggestions across them.
-- Rationale per artist should reference SOMETHING SPECIFIC you found — a recent release, a press mention, a festival slot — not generic "rising indie act" filler.
-
-OUTPUT:
-- After your search, return ONLY a JSON object in the exact shape below. No prose outside the JSON, no markdown fences (or if you must use fences, use \`\`\`json).
-- List ~50 artists.
-
-{
-  "artists": [
-    {
-      "name": "Artist Name",
-      "genres": ["indie pop", "folk"],
-      "rationale": "Specific reason grounded in real press/release info"
-    }
-  ]
-}`;
+Output ONLY this JSON, no prose, no markdown fences:
+{"artists":[{"name":"...","genres":["..."],"rationale":"specific real reason"}]}`;
 
 function buildPrompt(criteria: HunterCriteria): string {
   const parts: string[] = [];
-  parts.push('Find ~50 emerging artists for Songfinch\'s A&R queue.');
+  parts.push('Find ~30 emerging artists for Songfinch\'s A&R queue.');
   parts.push('\nCriteria:');
   if (criteria.genres.length > 0) parts.push(`- Genres: ${criteria.genres.join(', ')}`);
   if (criteria.regions.length > 0) parts.push(`- Regions (ISO codes): ${criteria.regions.join(', ')}`);
