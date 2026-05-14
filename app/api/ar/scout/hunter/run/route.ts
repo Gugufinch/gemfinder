@@ -42,6 +42,7 @@ const criteriaSchema = z.object({
   recency: z.object({ sinceYear: z.number().optional() }).optional(),
   instrument: z.string().optional(),
   targetCount: z.number().int().min(1).max(100).default(25),
+  source: z.enum(['musicbrainz', 'llm']).optional(),
 }).refine((c) => c.genres.length > 0 || c.regions.length > 0, {
   message: 'At least one genre or region must be specified',
 });
@@ -65,7 +66,10 @@ export async function POST(req: NextRequest) {
   }
 
   const weights = await getWeights(workspaceId);
-  const criteria = { ...parsed.data, source: 'musicbrainz' as const };
+  // Default to LLM-driven discovery — MusicBrainz returns megastars and
+  // wrong-category entries (novelists, audiobook narrators) for broad
+  // queries. Respects an explicit source if the caller set one.
+  const criteria = { ...parsed.data, source: (parsed.data.source ?? 'llm') as 'llm' | 'musicbrainz' };
   const run = await createRun({
     workspaceId,
     criteria,

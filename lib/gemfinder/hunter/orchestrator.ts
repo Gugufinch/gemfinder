@@ -52,6 +52,11 @@ export async function runPipeline(input: RunPipelineInput): Promise<HunterRunSum
     gatedReasons: [],
   };
 
+  // Resolved source — referenced in both Phase A (dispatch) and Phase F
+  // (candidate provenance label). Lifted outside the inner try so both scopes
+  // can see it.
+  const source = criteria.source ?? 'llm';
+
   try {
     // Phase A: MusicBrainz fetch
     let mbResults: MBArtist[];
@@ -60,7 +65,6 @@ export async function runPipeline(input: RunPipelineInput): Promise<HunterRunSum
       // return megastars regardless of offset tier; LLM-driven discovery uses
       // the model's implicit knowledge of music journalism to surface emerging
       // artists much more reliably.
-      const source = criteria.source ?? 'llm';
       if (source === 'llm') {
         mbResults = await searchArtistsViaLLM(criteria);
       } else {
@@ -124,6 +128,18 @@ export async function runPipeline(input: RunPipelineInput): Promise<HunterRunSum
               return;
             }
             const score = computeScore(enriched, weights);
+            // Hard score floor: reject candidates that score under 50. Below
+            // this they're noise (genre mismatch + missing data + low followers).
+            // Surface the score in the gated_reasons so the operator can see WHY.
+            const MIN_SCORE_FLOOR = 50;
+            if (score.final < MIN_SCORE_FLOOR) {
+              summary.gatedOut++;
+              summary.gatedReasons.push({
+                candidateName: enriched.displayName,
+                reason: `low_score:${score.final}`,
+              });
+              return;
+            }
             scored.push({ enriched, finalScore: score.final, perDimension: score.perDimension });
             summary.scored++;
           } catch (err) {
@@ -184,7 +200,10 @@ export async function runPipeline(input: RunPipelineInput): Promise<HunterRunSum
           enrichmentStatus: sc.enriched.scrapedContactEmail ? 'complete' : 'partial',
           identityOverride: false,
           addedBy: actorEmail,
-          source: 'agent:hunter:musicbrainz',
+          // Tag with the actual source that produced this candidate.
+          // Was hardcoded to 'musicbrainz' which made LLM-sourced candidates
+          // look like MB candidates in the UI — a confusing labeling lie.
+          source: source === 'llm' ? 'agent:hunter:llm' : 'agent:hunter:musicbrainz',
           createdAt: now,
           updatedAt: now,
           spotifyUrl: sc.enriched.spotifyUrl,

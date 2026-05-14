@@ -179,7 +179,7 @@ describe('POST /api/ar/scout/hunter/run', () => {
 
     expect(runsStore.createRun).toHaveBeenCalledWith({
       workspaceId: 'ws-1',
-      criteria: expect.objectContaining({ genres: ['indie pop'], source: 'musicbrainz' }),
+      criteria: expect.objectContaining({ genres: ['indie pop'], source: 'llm' }),
       weightsSnapshot: FAKE_WEIGHTS,
       startedBy: 'editor@example.com',
     });
@@ -190,7 +190,7 @@ describe('POST /api/ar/scout/hunter/run', () => {
     expect(orchestrator.runPipeline).toHaveBeenCalledWith({
       runId: 'run-1',
       workspaceId: 'ws-1',
-      criteria: expect.objectContaining({ genres: ['indie pop'], source: 'musicbrainz' }),
+      criteria: expect.objectContaining({ genres: ['indie pop'], source: 'llm' }),
       weights: FAKE_WEIGHTS,
       actorEmail: 'editor@example.com',
     });

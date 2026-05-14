@@ -13347,6 +13347,61 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                         <button onClick={() => setScoutV3RejectTarget(c)} style={actionBtn(false, "danger")}>✗ Reject</button>
                       </div>
                     </div>
+                    {/* Inline listen + links panel — gives the operator everything they need
+                        to evaluate without leaving the page. */}
+                    {(c.spotifyArtistId || c.spotifyUrl || c.instagramHandle || c.tiktokHandle || c.youtubeHandle || c.bandcampUrl) && (
+                      <div style={{ marginTop: 14, paddingTop: 14, borderTop: `1px solid ${C.bd}`, display: "grid", gap: 10 }}>
+                        {c.spotifyArtistId && (
+                          <iframe
+                            src={`https://open.spotify.com/embed/artist/${c.spotifyArtistId}?utm_source=gemfinder&theme=0`}
+                            width="100%"
+                            height="152"
+                            frameBorder="0"
+                            allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
+                            loading="lazy"
+                            style={{ borderRadius: 8, border: "none" }}
+                            title={`Spotify preview for ${c.displayName}`}
+                          />
+                        )}
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                          {c.spotifyUrl && (
+                            <a href={c.spotifyUrl} target="_blank" rel="noopener noreferrer" style={{ ...actionBtn(false, "neutral"), textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 4 }}>
+                              Spotify ↗
+                            </a>
+                          )}
+                          {c.instagramHandle && (
+                            <a href={`https://instagram.com/${c.instagramHandle}`} target="_blank" rel="noopener noreferrer" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>
+                              IG @{c.instagramHandle} ↗
+                            </a>
+                          )}
+                          {c.tiktokHandle && (
+                            <a href={`https://tiktok.com/@${c.tiktokHandle}`} target="_blank" rel="noopener noreferrer" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>
+                              TikTok @{c.tiktokHandle} ↗
+                            </a>
+                          )}
+                          {c.youtubeHandle && (
+                            <a href={`https://youtube.com/@${c.youtubeHandle}`} target="_blank" rel="noopener noreferrer" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>
+                              YouTube ↗
+                            </a>
+                          )}
+                          {c.bandcampUrl && (
+                            <a href={c.bandcampUrl} target="_blank" rel="noopener noreferrer" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>
+                              Bandcamp ↗
+                            </a>
+                          )}
+                          {c.musicbrainzId && (
+                            <a href={`https://musicbrainz.org/artist/${c.musicbrainzId}`} target="_blank" rel="noopener noreferrer" style={{ ...actionBtn(false, "neutral"), textDecoration: "none", fontSize: 11, opacity: 0.7 }}>
+                              MB
+                            </a>
+                          )}
+                          {!c.spotifyArtistId && c.displayName && (
+                            <a href={`https://open.spotify.com/search/${encodeURIComponent(c.displayName)}`} target="_blank" rel="noopener noreferrer" style={{ ...actionBtn(false, "neutral"), textDecoration: "none" }}>
+                              🔍 Search Spotify
+                            </a>
+                          )}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
