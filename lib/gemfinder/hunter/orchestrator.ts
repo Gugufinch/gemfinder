@@ -5,6 +5,7 @@ import type {
 } from '@/lib/gemfinder/types';
 import { v4 as uuidv4 } from 'uuid';
 import { searchArtists, type MBArtist } from './musicbrainz';
+import { searchArtistsViaLLM } from './llm-agent';
 import { enrichCandidate } from './enrichment';
 import { evaluateGates } from './gates';
 import { computeScore } from './scoring';
@@ -55,7 +56,16 @@ export async function runPipeline(input: RunPipelineInput): Promise<HunterRunSum
     // Phase A: MusicBrainz fetch
     let mbResults: MBArtist[];
     try {
-      mbResults = await searchArtists(criteria);
+      // Dispatch by source. 'llm' is the default in v1.1 — MusicBrainz tends to
+      // return megastars regardless of offset tier; LLM-driven discovery uses
+      // the model's implicit knowledge of music journalism to surface emerging
+      // artists much more reliably.
+      const source = criteria.source ?? 'llm';
+      if (source === 'llm') {
+        mbResults = await searchArtistsViaLLM(criteria);
+      } else {
+        mbResults = await searchArtists(criteria);
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       summary.errors.push({ stage: 'mb_fetch', message: msg });

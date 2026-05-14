@@ -184,15 +184,17 @@ export async function enrichCandidate(
   // unlocks the entire Spotify + Steel + relation-based contact pipeline.
   let fullArtist: MBArtist = mbArtist;
   if (!mbArtist.relations || !mbArtist['release-groups']) {
-    try {
-      const detailed = await fetchArtistDetails(mbArtist.id);
-      if (detailed) {
-        // Merge: keep the search-result data as a baseline, layer detailed fields on top.
-        fullArtist = { ...mbArtist, ...detailed };
+    if (mbArtist.id) {  // skip MB lookup for LLM-sourced candidates (empty id)
+      try {
+        const detailed = await fetchArtistDetails(mbArtist.id);
+        if (detailed) {
+          // Merge: keep the search-result data as a baseline, layer detailed fields on top.
+          fullArtist = { ...mbArtist, ...detailed };
+        }
+      } catch (err) {
+        console.warn('[HUNTER_ENRICH] fetchArtistDetails failed for', mbArtist.id, err);
+        // Continue with whatever we have — degraded but not broken.
       }
-    } catch (err) {
-      console.warn('[HUNTER_ENRICH] fetchArtistDetails failed for', mbArtist.id, err);
-      // Continue with whatever we have — degraded but not broken.
     }
   }
 

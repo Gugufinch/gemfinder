@@ -271,7 +271,7 @@ export type BlocklistResult = BlocklistMatch | { blocked: false };
 
 export type HunterRoleTarget = 'performer' | 'curator' | 'both' | 'unknown';
 export type HunterRunStatus = 'running' | 'complete' | 'failed' | 'stale';
-export type HunterSource = 'musicbrainz' | 'spotify' | 'bandcamp';
+export type HunterSource = 'musicbrainz' | 'spotify' | 'bandcamp' | 'llm';
 
 export type HunterCriteria = {
   genres: string[];

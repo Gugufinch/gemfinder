@@ -4,6 +4,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('./musicbrainz', () => ({
   searchArtists: vi.fn(),
 }));
+vi.mock('./llm-agent', () => ({
+  searchArtistsViaLLM: vi.fn(),
+}));
 vi.mock('./enrichment', () => ({
   enrichCandidate: vi.fn(),
 }));
@@ -30,6 +33,7 @@ vi.mock('@/lib/gemfinder/scout-candidate-store', () => ({
 
 import { runPipeline } from './orchestrator';
 import * as mb from './musicbrainz';
+import * as llmAgent from './llm-agent';
 import * as enr from './enrichment';
 import * as gates from './gates';
 import * as scoring from './scoring';
@@ -88,6 +92,14 @@ beforeEach(() => {
 
   // Default: createCandidate echoes input
   vi.mocked(candStore.createCandidate).mockImplementation(async (c: any) => c);
+
+  // Default: searchArtistsViaLLM delegates to the MB mock so existing tests
+  // can set up artists via vi.mocked(mb.searchArtists) without caring which
+  // source path is active. Tests that explicitly set criteria.source can
+  // override this.
+  vi.mocked(llmAgent.searchArtistsViaLLM).mockImplementation((criteria) =>
+    vi.mocked(mb.searchArtists)(criteria),
+  );
 });
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
