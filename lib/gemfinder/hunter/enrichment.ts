@@ -391,6 +391,8 @@ export async function enrichCandidate(
     spotifyGenres,
     topTracks,
     spotifyImageUrl,
+    instagramFollowers: igFollowers,
+    tiktokFollowers: ttFollowers,
     scrapedContactEmail,
     scrapedManagerInfo,
     scrapedToursInfo,

@@ -23,12 +23,17 @@ vi.mock('@/lib/gemfinder/hunter/scrape-cache', () => ({
   getCached: vi.fn(),
   putCached: vi.fn(),
 }));
+vi.mock('@/lib/gemfinder/hunter/social-scraping', () => ({
+  fetchInstagramFollowers: vi.fn(async () => null),
+  fetchTiktokFollowers: vi.fn(async () => null),
+}));
 
 import { enrichCandidate } from '@/lib/gemfinder/hunter/enrichment';
 import * as spotify from '@/lib/gemfinder/hunter/spotify';
 import * as steel from '@/lib/gemfinder/hunter/steel';
 import * as cache from '@/lib/gemfinder/hunter/scrape-cache';
 import * as mb from '@/lib/gemfinder/hunter/musicbrainz';
+import * as social from '@/lib/gemfinder/hunter/social-scraping';
 import type { MBArtist } from '@/lib/gemfinder/hunter/musicbrainz';
 import type { SpotifyArtist } from '@/lib/gemfinder/hunter/spotify';
 import type { SteelScrapeResult } from '@/lib/gemfinder/hunter/steel';
@@ -543,6 +548,93 @@ describe('enrichCandidate', () => {
         expect.anything(),
         expect.anything()
       );
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Social scraping integration (Step 7b)
+  // ---------------------------------------------------------------------------
+
+  describe('Step 7b: social follower scraping', () => {
+    it('IG handle present → calls fetchInstagramFollowers, populates instagramFollowers on result', async () => {
+      vi.mocked(social.fetchInstagramFollowers).mockResolvedValue(12400);
+
+      const result = await enrichCandidate('ws-1', minimalArtist({
+        relations: [
+          { type: 'instagram', url: { resource: 'https://www.instagram.com/igartist' } },
+        ],
+      }));
+
+      expect(social.fetchInstagramFollowers).toHaveBeenCalledWith('igartist');
+      expect(result.instagramFollowers).toBe(12400);
+    });
+
+    it('TikTok handle present → calls fetchTiktokFollowers, populates tiktokFollowers on result', async () => {
+      vi.mocked(social.fetchTiktokFollowers).mockResolvedValue(87500);
+
+      const result = await enrichCandidate('ws-1', minimalArtist({
+        relations: [
+          { type: 'tiktok', url: { resource: 'https://www.tiktok.com/@ttartist' } },
+        ],
+      }));
+
+      expect(social.fetchTiktokFollowers).toHaveBeenCalledWith('ttartist');
+      expect(result.tiktokFollowers).toBe(87500);
+    });
+
+    it('both handles present → both followers populated', async () => {
+      vi.mocked(social.fetchInstagramFollowers).mockResolvedValue(5000);
+      vi.mocked(social.fetchTiktokFollowers).mockResolvedValue(9999);
+
+      const result = await enrichCandidate('ws-1', minimalArtist({
+        relations: [
+          { type: 'instagram', url: { resource: 'https://instagram.com/dualartist' } },
+          { type: 'tiktok', url: { resource: 'https://www.tiktok.com/@dualartist' } },
+        ],
+      }));
+
+      expect(result.instagramFollowers).toBe(5000);
+      expect(result.tiktokFollowers).toBe(9999);
+    });
+
+    it('social scrape returns null → instagramFollowers undefined on result', async () => {
+      vi.mocked(social.fetchInstagramFollowers).mockResolvedValue(null);
+
+      const result = await enrichCandidate('ws-1', minimalArtist({
+        relations: [
+          { type: 'instagram', url: { resource: 'https://instagram.com/nullartist' } },
+        ],
+      }));
+
+      expect(result.instagramFollowers).toBeUndefined();
+    });
+
+    it('social scrape throws → enrichment completes, instagramFollowers undefined', async () => {
+      vi.mocked(social.fetchInstagramFollowers).mockRejectedValue(new Error('scrape exploded'));
+
+      const result = await enrichCandidate('ws-1', minimalArtist({
+        relations: [
+          { type: 'instagram', url: { resource: 'https://instagram.com/throwartist' } },
+        ],
+      }));
+
+      // Enrichment must not throw
+      expect(result.displayName).toBe('Test Artist');
+      expect(result.instagramFollowers).toBeUndefined();
+      expect(console.warn).toHaveBeenCalledWith(
+        '[HUNTER_ENRICH] IG fetch failed:',
+        expect.any(Error)
+      );
+    });
+
+    it('no IG handle → fetchInstagramFollowers not called', async () => {
+      await enrichCandidate('ws-1', minimalArtist({
+        relations: [
+          { type: 'tiktok', url: { resource: 'https://www.tiktok.com/@ttonly' } },
+        ],
+      }));
+
+      expect(social.fetchInstagramFollowers).not.toHaveBeenCalled();
     });
   });
 });
