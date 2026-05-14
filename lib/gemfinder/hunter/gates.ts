@@ -11,6 +11,13 @@ export type GateResult = { pass: true } | { pass: false; reason: string };
 // commission" to "represented by an agency that won't return your email."
 const DEFAULT_MAX_SPOTIFY_FOLLOWERS = 250_000;
 
+// Backup megastar signal: MusicBrainz caps release-groups at 25 in the standard
+// ?inc query. An artist with 20+ release groups is overwhelmingly likely to be
+// established (Bruce Springsteen, Pearl Jam) — beyond A&R discovery range.
+// This fires when we lack Spotify follower data (which happens often because
+// MB doesn't reliably store Spotify relations). Crude but effective.
+const MAX_RELEASE_GROUPS_FOR_DISCOVERY = 20;
+
 export function evaluateGates(
   candidate: EnrichedCandidate,
   weights: HunterWeights,
@@ -37,13 +44,19 @@ export function evaluateGates(
     const matched = candidate.genres.some((c) => targets.includes(c.toLowerCase()));
     if (!matched) return { pass: false, reason: 'genre_mismatch' };
   }
-  // Size cap: reject megastars. Uses criteria.sizeBracket.max if set, else
-  // a global default. Only fires when we have confirmed follower data —
-  // missing data passes (no benefit of doubt for an unknown ⇒ enriched
-  // candidates that lack Spotify data won't be size-gated).
+  // Size gates: Spotify follower count is the AUTHORITATIVE signal when we
+  // have it. The release-groups count is a FALLBACK proxy that only fires
+  // when Spotify data is missing — otherwise we'd reject indie acts with
+  // long catalogs (e.g., Pedro the Lion: 25 release groups but only ~30K
+  // Spotify followers, very engageable).
   const sizeCap = criteria?.sizeBracket?.max ?? DEFAULT_MAX_SPOTIFY_FOLLOWERS;
-  if (typeof candidate.spotifyFollowers === 'number' && candidate.spotifyFollowers > sizeCap) {
-    return { pass: false, reason: `too_big:${candidate.spotifyFollowers.toLocaleString()}_followers` };
+  if (typeof candidate.spotifyFollowers === 'number') {
+    if (candidate.spotifyFollowers > sizeCap) {
+      return { pass: false, reason: `too_big:${candidate.spotifyFollowers.toLocaleString()}_followers` };
+    }
+    // We have authoritative size data — trust it. Skip the release-groups proxy.
+  } else if (typeof candidate.releaseGroupCount === 'number' && candidate.releaseGroupCount >= MAX_RELEASE_GROUPS_FOR_DISCOVERY) {
+    return { pass: false, reason: `too_established:${candidate.releaseGroupCount}_release_groups` };
   }
   // Size floor: reject too-small artists. Only fires when sizeBracket.min is
   // explicitly set (no default — most workspaces want to see emerging artists).

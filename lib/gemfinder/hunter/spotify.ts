@@ -97,3 +97,55 @@ export function parseSpotifyArtistId(url: string): string | null {
   const m = /^https?:\/\/open\.spotify\.com\/artist\/([a-zA-Z0-9]+)(?:\?.*)?$/.exec(url);
   return m ? m[1] : null;
 }
+
+/**
+ * Search Spotify by artist name and return the highest-popularity match.
+ *
+ * Used as a fallback in enrichment when MusicBrainz doesn't have a Spotify
+ * relation for the candidate (which is common — MB's relation data is
+ * volunteer-curated and patchy). Without this, the size_cap gate can't fire
+ * for any artist whose MB record lacks a Spotify URL.
+ *
+ * Match strategy: take the result with the most followers. Spotify's search
+ * relevance often returns covers/remix artists with the same name above the
+ * canonical artist; sorting by followers is a much better signal of "the
+ * artist the user means."
+ *
+ * Returns null on no-match or any error (network, auth, etc.) — caller
+ * continues with the original (undefined) follower data.
+ */
+export async function searchArtistByName(name: string): Promise<SpotifyArtist | null> {
+  if (!name || !name.trim()) return null;
+  let token: string;
+  try {
+    token = await getAccessToken();
+  } catch (err) {
+    console.warn('[HUNTER_SPOTIFY] token fetch failed; skipping name search:', err);
+    return null;
+  }
+  const q = encodeURIComponent(name.trim());
+  const url = `https://api.spotify.com/v1/search?q=${q}&type=artist&limit=20`;
+  let res: Response;
+  try {
+    res = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
+  } catch (err) {
+    console.warn('[HUNTER_SPOTIFY] searchArtistByName network error:', err);
+    return null;
+  }
+  if (res.status === 401) {
+    _resetTokenCache();
+    return searchArtistByName(name);  // one retry
+  }
+  if (!res.ok) {
+    console.warn(`[HUNTER_SPOTIFY] searchArtistByName HTTP ${res.status} for "${name}"`);
+    return null;
+  }
+  const body = await res.json() as { artists?: { items?: SpotifyArtist[] } };
+  const items = body.artists?.items ?? [];
+  if (items.length === 0) return null;
+  // Sort by followers desc; return the top — best heuristic for "the canonical
+  // artist Spotify has for this name" when relevance scoring puts cover/remix
+  // accounts above the actual artist.
+  items.sort((a, b) => (b.followers?.total ?? 0) - (a.followers?.total ?? 0));
+  return items[0];
+}

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('@/lib/gemfinder/hunter/spotify', () => ({
   getArtistById: vi.fn(),
+  searchArtistByName: vi.fn(async () => null),
   parseSpotifyArtistId: vi.fn((url: string) => {
     const m = url.match(/\/artist\/([a-zA-Z0-9]+)/);
     return m ? m[1] : null;

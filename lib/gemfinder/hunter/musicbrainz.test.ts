@@ -62,7 +62,7 @@ describe('searchArtists', () => {
         { id: 'mbid-2', name: 'Artist Two', country: 'CA', tags: [{ name: 'folk', count: 3 }] },
       ],
     };
-    (fetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+    (fetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
       ok: true,
       json: async () => mockResponse,
     } as Response);
@@ -79,7 +79,7 @@ describe('searchArtists', () => {
 
   it('sends User-Agent header', async () => {
     const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
-    fetchMock.mockResolvedValueOnce({
+    fetchMock.mockResolvedValue({
       ok: true,
       json: async () => ({ artists: [] }),
     } as Response);

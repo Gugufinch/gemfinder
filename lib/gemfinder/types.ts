@@ -383,6 +383,7 @@ export type EnrichedCandidate = {
   artistType?: string;
   isLiving: boolean;
   recentReleaseYear?: number;
+  releaseGroupCount?: number;  // Backup megastar signal for gates when Spotify follower data is missing.
   spotifyUrl?: string;
   spotifyArtistId?: string;
   bandcampUrl?: string;

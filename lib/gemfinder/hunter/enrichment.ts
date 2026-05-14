@@ -1,6 +1,6 @@
 import type { MBArtist } from '@/lib/gemfinder/hunter/musicbrainz';
 import { fetchArtistDetails } from '@/lib/gemfinder/hunter/musicbrainz';
-import { getArtistById, parseSpotifyArtistId } from '@/lib/gemfinder/hunter/spotify';
+import { getArtistById, parseSpotifyArtistId, searchArtistByName } from '@/lib/gemfinder/hunter/spotify';
 import { scrapeWebsite } from '@/lib/gemfinder/hunter/steel';
 import { getCached, putCached } from '@/lib/gemfinder/hunter/scrape-cache';
 import type { EnrichedCandidate } from '@/lib/gemfinder/types';
@@ -246,6 +246,27 @@ export async function enrichCandidate(
     }
   }
 
+  // Fallback: MB doesn't reliably store Spotify relations (~half of MB artist
+  // records lack a spotify URL even for very popular artists like Bruce
+  // Springsteen). When we have no Spotify ID from MB, search by name as a
+  // best-effort match. Without this, the size_cap gate can't fire for any
+  // artist whose MB entry is incomplete — exactly the failure mode that
+  // surfaced megastars to Greg's first hunt.
+  if (spotifyFollowers === undefined) {
+    let sp = null;
+    try {
+      sp = await searchArtistByName(mbArtist.name);
+    } catch (err) {
+      console.warn('[HUNTER_ENRICH] spotify name search failed for', mbArtist.name + ':', err);
+    }
+    if (sp) {
+      spotifyFollowers = sp.followers.total;
+      spotifyPopularity = sp.popularity;
+      spotifyGenres = sp.genres;
+      spotifyArtistId = sp.id;
+    }
+  }
+
   // Genres: spotify takes precedence
   const genres: string[] = spotifyGenres ?? mbGenres;
 
@@ -302,6 +323,7 @@ export async function enrichCandidate(
     artistType: mbArtist.type,
     isLiving,
     recentReleaseYear,
+    releaseGroupCount: mbArtist['release-groups']?.length,
     spotifyUrl: extracted.spotifyUrl,
     spotifyArtistId,
     bandcampUrl: extracted.bandcampUrl,

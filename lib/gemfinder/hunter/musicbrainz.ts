@@ -51,12 +51,45 @@ export function buildSearchQuery(criteria: HunterCriteria): string {
     parts.push('type:Other');
   }
 
+  // Filter out disbanded groups and deceased performers at the MB-query level.
+  // Without this, ~half of "rock + US" results are historical acts (Grateful
+  // Dead, Miles Davis, etc.). The `ended` field is a boolean MB exposes on
+  // artist records. Default to excluding them — Hunter is for live/active
+  // artists. (Operators can drop this in v1.1 by adding a criteria flag.)
+  parts.push('ended:false');
+
   return parts.length > 0 ? parts.join(' AND ') : '*';
 }
 
-export async function searchArtists(criteria: HunterCriteria): Promise<MBArtist[]> {
+/**
+ * Search MB with TIERED offset — start deep (skip past megastars) and step
+ * back if the result set is sparse.
+ *
+ * Empirical probe (rock + US): mid-tier candidates don't appear until offset
+ * 1000+, hit 90% mid-tier at offset 3000. For broad genres we want to start
+ * deep. For niche queries (where MB has few total results), we step back.
+ */
+const TIERED_OFFSETS = [2000, 500, 0];
+const MIN_RESULTS_PER_TIER = 30;
+
+export async function searchArtists(criteria: HunterCriteria, fixedOffset?: number): Promise<MBArtist[]> {
+  if (fixedOffset !== undefined) {
+    return searchArtistsAtOffset(criteria, fixedOffset);
+  }
+  for (const offset of TIERED_OFFSETS) {
+    const results = await searchArtistsAtOffset(criteria, offset);
+    if (results.length >= MIN_RESULTS_PER_TIER) {
+      return results;
+    }
+    // Sparse result set — try a shallower offset.
+  }
+  // All tiers exhausted; return whatever the last (offset=0) tier produced.
+  return searchArtistsAtOffset(criteria, 0);
+}
+
+async function searchArtistsAtOffset(criteria: HunterCriteria, offset: number): Promise<MBArtist[]> {
   const query = buildSearchQuery(criteria);
-  const url = `${BASE}/artist?query=${encodeURIComponent(query)}&fmt=json&limit=100`;
+  const url = `${BASE}/artist?query=${encodeURIComponent(query)}&fmt=json&limit=100&offset=${offset}`;
 
   let retries = 0;
   const maxRetries = 3;
