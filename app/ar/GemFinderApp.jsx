@@ -13725,7 +13725,37 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                             fetched {run.summary.fetched} · scored {run.summary.scored} · added <strong>{run.summary.added}</strong>
                           </div>
                         </div>
-                        <button style={actionBtn(false, "neutral")}>{isExpanded ? "Collapse" : "Details"}</button>
+                        <div style={{ display: "flex", gap: 6 }}>
+                          <button style={actionBtn(false, "neutral")}>{isExpanded ? "Collapse" : "Details"}</button>
+                          <button
+                            onClick={async (e) => {
+                              e.stopPropagation();  // don't toggle expand
+                              if (!selectedWorkspace?.id) return;
+                              const summary = `${run.criteria.genres?.join(", ") || "—"} · ${run.criteria.regions?.join(", ") || "—"}`;
+                              if (!window.confirm(`Delete this run?\n\n${summary}\nStarted ${new Date(run.startedAt).toLocaleString()}\n\nCandidates added by this run will stay in the Scout queue.`)) return;
+                              try {
+                                const res = await fetch(`/api/ar/scout/hunter/run/${encodeURIComponent(run.id)}?workspaceId=${encodeURIComponent(selectedWorkspace.id)}`, {
+                                  method: "DELETE",
+                                  credentials: "include",
+                                });
+                                const data = await res.json();
+                                if (data.ok) {
+                                  // Drop from local list + collapse if we were viewing it
+                                  setScoutV3HunterRuns(rs => rs.filter(r => r.id !== run.id));
+                                  if (scoutV3HunterExpandedRunId === run.id) setScoutV3HunterExpandedRunId(null);
+                                } else {
+                                  window.alert(`Delete failed: ${data.error || "unknown"}`);
+                                }
+                              } catch (err) {
+                                window.alert(`Delete failed: ${err.message}`);
+                              }
+                            }}
+                            style={actionBtn(false, "danger")}
+                            title="Delete this run (candidates inserted by it stay in the queue)"
+                          >
+                            🗑
+                          </button>
+                        </div>
                       </div>
 
                       {isExpanded && (

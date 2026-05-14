@@ -2,7 +2,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAuthUserById } from '@/lib/gemfinder/auth-store';
 import { listWorkspaceProjects } from '@/lib/gemfinder/project-store';
-import { getRun, sweepStaleRuns } from '@/lib/gemfinder/hunter-runs-store';
+import { getRun, sweepStaleRuns, deleteRun } from '@/lib/gemfinder/hunter-runs-store';
 
 // Inline auth helper — duplicated per existing scout route convention.
 async function requireEditorActor(req: NextRequest) {
@@ -65,4 +65,34 @@ export async function GET(
   }
 
   return NextResponse.json({ ok: true, run });
+}
+
+export async function DELETE(
+  req: NextRequest,
+  ctx: { params: Promise<{ id: string }> }
+) {
+  const { actor, response } = await requireEditorActor(req);
+  if (response || !actor) return response;
+
+  const workspaceId = req.nextUrl.searchParams.get('workspaceId');
+  if (!workspaceId) {
+    return NextResponse.json({ error: 'workspaceId query param is required' }, { status: 400 });
+  }
+  if (!(await requireScoutV3Flag(workspaceId))) {
+    return NextResponse.json({ error: 'Not found' }, { status: 404 });
+  }
+
+  const { id: runId } = await ctx.params;
+  if (!runId) {
+    return NextResponse.json({ error: 'Run id is required' }, { status: 400 });
+  }
+
+  // deleteRun is workspace-scoped — returns false if the run doesn't exist
+  // OR belongs to a different workspace. Both cases collapse to 404 to
+  // avoid leaking existence info across workspaces.
+  const deleted = await deleteRun(runId, workspaceId);
+  if (!deleted) {
+    return NextResponse.json({ error: 'Run not found' }, { status: 404 });
+  }
+  return NextResponse.json({ ok: true });
 }

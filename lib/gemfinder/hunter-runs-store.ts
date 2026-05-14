@@ -71,6 +71,22 @@ export async function sweepStaleRuns(): Promise<number> {
   return res.rowCount ?? 0;
 }
 
+/**
+ * Delete a single hunter_runs row, workspace-scoped for safety.
+ * Returns true if a row was deleted, false if not found (or wrong workspace).
+ * Candidates inserted by this run keep their hunter_run_id reference
+ * (FK is ON DELETE SET NULL per the schema), so deleting a run doesn't
+ * cascade-delete its outputs from the Scout queue.
+ */
+export async function deleteRun(id: string, workspaceId: string): Promise<boolean> {
+  await ensureSchema();
+  const res = await getScoutPool().query(
+    `DELETE FROM hunter_runs WHERE id = $1 AND workspace_id = $2 RETURNING id`,
+    [id, workspaceId]
+  );
+  return (res.rowCount ?? 0) > 0;
+}
+
 function rowToRun(row: Record<string, unknown>): HunterRun {
   return {
     id: row.id as string,

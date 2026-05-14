@@ -8,9 +8,10 @@ vi.mock('@/lib/gemfinder/project-store', () => ({ listWorkspaceProjects: vi.fn()
 vi.mock('@/lib/gemfinder/hunter-runs-store', () => ({
   getRun: vi.fn(),
   sweepStaleRuns: vi.fn(),
+  deleteRun: vi.fn(),
 }));
 
-import { GET } from './route';
+import { GET, DELETE } from './route';
 import * as authStore from '@/lib/gemfinder/auth-store';
 import * as projectStore from '@/lib/gemfinder/project-store';
 import * as runsStore from '@/lib/gemfinder/hunter-runs-store';
@@ -167,5 +168,66 @@ describe('GET /api/ar/scout/hunter/run/[id]', () => {
       '[HUNTER_RUN_DETAIL] sweepStaleRuns failed:',
       sweepError
     );
+  });
+});
+
+describe('DELETE /api/ar/scout/hunter/run/[id]', () => {
+  function makeDelReq(opts: { runId?: string; workspaceId?: string | null; userId?: string | null } = {}): [NextRequest, { params: Promise<{ id: string }> }] {
+    const runId = opts.runId ?? 'run-1';
+    const workspaceId = opts.workspaceId === null ? null : (opts.workspaceId ?? 'ws-1');
+    const userId = opts.userId === null ? null : (opts.userId ?? 'user-123');
+    const url = new URL(`http://localhost/api/ar/scout/hunter/run/${runId}`);
+    if (workspaceId) url.searchParams.set('workspaceId', workspaceId);
+    const req = new NextRequest(url, { method: 'DELETE' });
+    if (userId) req.cookies.set('ar_user', userId);
+    return [req, { params: Promise.resolve({ id: runId }) }];
+  }
+
+  it('returns 401 when not authenticated', async () => {
+    const [req, ctx] = makeDelReq({ userId: null });
+    const res = await DELETE(req, ctx);
+    expect(res.status).toBe(401);
+  });
+
+  it('returns 403 when actor is a viewer', async () => {
+    vi.mocked(authStore.getAuthUserById).mockResolvedValue({
+      id: 'user-123', email: 'v@example.com', role: 'viewer', active: true,
+    } as never);
+    const [req, ctx] = makeDelReq();
+    const res = await DELETE(req, ctx);
+    expect(res.status).toBe(403);
+  });
+
+  it('returns 400 when workspaceId is missing', async () => {
+    const [req, ctx] = makeDelReq({ workspaceId: null });
+    const res = await DELETE(req, ctx);
+    expect(res.status).toBe(400);
+  });
+
+  it('returns 404 when feature flag is disabled', async () => {
+    vi.mocked(projectStore.listWorkspaceProjects).mockResolvedValue([
+      { id: 'ws-1', settings: { featureFlags: { scoutV3: false } } },
+    ] as never);
+    const [req, ctx] = makeDelReq();
+    const res = await DELETE(req, ctx);
+    expect(res.status).toBe(404);
+  });
+
+  it('returns 404 when deleteRun reports the row was not deleted', async () => {
+    vi.mocked(runsStore.deleteRun).mockResolvedValue(false as never);
+    const [req, ctx] = makeDelReq();
+    const res = await DELETE(req, ctx);
+    expect(res.status).toBe(404);
+    expect(runsStore.deleteRun).toHaveBeenCalledWith('run-1', 'ws-1');
+  });
+
+  it('returns 200 {ok: true} on successful delete', async () => {
+    vi.mocked(runsStore.deleteRun).mockResolvedValue(true as never);
+    const [req, ctx] = makeDelReq();
+    const res = await DELETE(req, ctx);
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.ok).toBe(true);
+    expect(runsStore.deleteRun).toHaveBeenCalledWith('run-1', 'ws-1');
   });
 });
