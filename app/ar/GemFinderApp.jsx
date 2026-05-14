@@ -3723,7 +3723,9 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [scoutV3HunterPollTick, setScoutV3HunterPollTick] = useState(0);
   const [scoutV3HunterWeightsOpen, setScoutV3HunterWeightsOpen] = useState(false);
   const [scoutV3HunterWeightsLoading, setScoutV3HunterWeightsLoading] = useState(false);
-  const [scoutV3HunterWeightsJson, setScoutV3HunterWeightsJson] = useState("");
+  const [scoutV3HunterWeightsObj, setScoutV3HunterWeightsObj] = useState(null);
+  const [scoutV3HunterWeightsGenreInput, setScoutV3HunterWeightsGenreInput] = useState("");
+  const [scoutV3HunterWeightsRegionInput, setScoutV3HunterWeightsRegionInput] = useState("");
   const [scoutV3HunterWeightsError, setScoutV3HunterWeightsError] = useState("");
   const [scoutV3HunterWeightsSaving, setScoutV3HunterWeightsSaving] = useState(false);
   const [scoutV3LastProjectId, setScoutV3LastProjectId] = useState(() =>
@@ -4905,7 +4907,9 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       .then(r => r.json())
       .then(data => {
         if (data.ok) {
-          setScoutV3HunterWeightsJson(JSON.stringify(data.weights, null, 2));
+          setScoutV3HunterWeightsObj(data.weights);
+          setScoutV3HunterWeightsGenreInput("");
+          setScoutV3HunterWeightsRegionInput("");
         } else {
           setScoutV3HunterWeightsError(data.error || "Failed to load weights");
         }
@@ -14128,97 +14132,310 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
             </div>
           )}
 
-          {/* Hunter weights JSON editor modal */}
-          {scoutV3HunterWeightsOpen && (
-            <div
-              onClick={() => setScoutV3HunterWeightsOpen(false)}
-              style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}
-            >
+          {/* Hunter weights slider modal */}
+          {scoutV3HunterWeightsOpen && (() => {
+            const HUNTER_WEIGHT_DIMS = [
+              "spotify_followers", "genre_fit", "instagram_followers", "tiktok_followers",
+              "contact_readiness", "youtube_subscribers", "spotify_popularity", "role_match",
+              "recency", "soundcloud_followers", "geography",
+            ];
+            const HUNTER_WEIGHT_PRETTY = {
+              instagram_followers: "Instagram followers",
+              tiktok_followers: "TikTok followers",
+              youtube_subscribers: "YouTube subscribers",
+              soundcloud_followers: "SoundCloud followers",
+              spotify_followers: "Spotify followers",
+              spotify_popularity: "Spotify popularity",
+              contact_readiness: "Contact readiness",
+              genre_fit: "Genre fit",
+              geography: "Geography",
+              role_match: "Role match",
+              recency: "Recency",
+            };
+            const HUNTER_WEIGHT_DEFAULTS = {
+              version: 1,
+              updatedAt: new Date().toISOString(),
+              updatedBy: "system:default",
+              weights: {
+                instagram_followers:  { weight: 12, curve: "log",    min: 1000, max: 500000,  missing_baseline: 50 },
+                tiktok_followers:     { weight: 12, curve: "log",    min: 1000, max: 1000000, missing_baseline: 50 },
+                youtube_subscribers:  { weight: 8,  curve: "log",    min: 1000, max: 1000000, missing_baseline: 50 },
+                soundcloud_followers: { weight: 5,  curve: "log",    min: 500,  max: 100000,  missing_baseline: 50 },
+                spotify_followers:    { weight: 18, curve: "log",    min: 1000, max: 100000,  missing_baseline: 50 },
+                spotify_popularity:   { weight: 8,  curve: "linear", min: 0,    max: 100,     missing_baseline: 50 },
+                contact_readiness:    { weight: 12, values: { direct: 100, manager: 80, agency: 70, booking: 60, social_only: 40, none: 0 }, missing_baseline: 30 },
+                genre_fit:            { weight: 15, targetGenres: ["indie pop", "folk", "singer-songwriter"], exact: 100, related: 60, none: 0 },
+                geography:            { weight: 5,  targetRegions: ["US", "CA", "GB"], match: 100, other: 50 },
+                role_match:           { weight: 8,  values: { performer: 100, curator: 100, both: 100, unknown: 60 } },
+                recency:              { weight: 6,  curve: "linear", min: 0, max: 100, missing_baseline: 50, days_window: 730 },
+              },
+              gates: {
+                require_genre_match: false,
+                require_living: true,
+                require_reachable: false,
+                require_not_blocked: true,
+              },
+              target_count_default: 25,
+            };
+            const sectionLabel = (text) => (
+              <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "1.5px", textTransform: "uppercase", color: C.ts, marginTop: 20, marginBottom: 10, borderBottom: `1px solid ${C.bd}`, paddingBottom: 6 }}>{text}</div>
+            );
+            return (
               <div
-                onClick={e => e.stopPropagation()}
-                style={{ ...cS, width: "min(720px, 90vw)", maxHeight: "85vh", padding: "24px 28px", display: "flex", flexDirection: "column" }}
+                onClick={() => setScoutV3HunterWeightsOpen(false)}
+                style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}
               >
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-                  <div style={{ fontSize: 18, fontWeight: 700 }}>Hunter Weights — JSON editor</div>
-                  <button onClick={() => setScoutV3HunterWeightsOpen(false)} style={{ background: "transparent", border: "none", fontSize: 20, cursor: "pointer", color: C.ts }}>×</button>
-                </div>
-                <div style={{ fontSize: 12, color: C.ts, marginBottom: 12, lineHeight: 1.6 }}>
-                  Raw JSON editor for the workspace's HunterWeights config. Affects scoring on subsequent
-                  runs only — prior runs keep their snapshot. v1.1 will replace this with sliders.
-                </div>
+                <div
+                  onClick={e => e.stopPropagation()}
+                  style={{ ...cS, width: "min(720px, 90vw)", maxHeight: "85vh", padding: "24px 28px", display: "flex", flexDirection: "column", overflow: "hidden" }}
+                >
+                  {/* Header */}
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4, flexShrink: 0 }}>
+                    <div style={{ fontSize: 18, fontWeight: 700 }}>Hunter Weights</div>
+                    <button onClick={() => setScoutV3HunterWeightsOpen(false)} style={{ background: "transparent", border: "none", fontSize: 20, cursor: "pointer", color: C.ts }}>×</button>
+                  </div>
+                  <div style={{ fontSize: 12, color: C.ts, marginBottom: 4, lineHeight: 1.6, flexShrink: 0 }}>
+                    Adjust how much each signal matters when scoring candidates. Default weights are tuned for Songfinch's emerging-artist A&R queue.
+                  </div>
 
-                {scoutV3HunterWeightsLoading ? (
-                  <div style={{ padding: 32, textAlign: "center", color: C.ts, fontSize: 13 }}>Loading…</div>
-                ) : (
-                  <>
-                    <textarea
-                      value={scoutV3HunterWeightsJson}
-                      onChange={e => { setScoutV3HunterWeightsJson(e.target.value); setScoutV3HunterWeightsError(""); }}
-                      spellCheck={false}
-                      style={{
-                        flex: 1,
-                        minHeight: 360,
-                        fontFamily: "ui-monospace, SF Mono, Menlo, monospace",
-                        fontSize: 12,
-                        padding: 12,
-                        border: `1px solid ${C.bd}`,
-                        borderRadius: 6,
-                        resize: "vertical",
-                        lineHeight: 1.5,
-                      }}
-                    />
-                    {scoutV3HunterWeightsError && (
-                      <div style={{ fontSize: 12, color: C.rd, padding: "8px 12px", background: C.rb, borderRadius: 6, marginTop: 8, whiteSpace: "pre-wrap" }}>
-                        {scoutV3HunterWeightsError}
-                      </div>
-                    )}
-                    <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
-                      <button onClick={() => setScoutV3HunterWeightsOpen(false)} style={actionBtn(false, "neutral")}>Cancel</button>
-                      <button
-                        disabled={scoutV3HunterWeightsSaving}
-                        onClick={async () => {
-                          if (!selectedWorkspace?.id) return;
-                          setScoutV3HunterWeightsError("");
-                          // Parse JSON locally first to catch syntax errors
-                          let parsed;
-                          try {
-                            parsed = JSON.parse(scoutV3HunterWeightsJson);
-                          } catch (err) {
-                            setScoutV3HunterWeightsError(`Invalid JSON: ${err.message}`);
-                            return;
-                          }
-                          setScoutV3HunterWeightsSaving(true);
-                          try {
-                            const res = await fetch(`/api/ar/scout/hunter/weights?workspaceId=${encodeURIComponent(selectedWorkspace.id)}`, {
-                              method: "PUT",
-                              credentials: "include",
-                              headers: { "Content-Type": "application/json" },
-                              body: JSON.stringify(parsed),
-                            });
-                            const data = await res.json();
-                            if (data.ok) {
-                              setScoutV3HunterWeightsOpen(false);
-                            } else {
-                              // Surface zod issues if present
-                              const detail = (data.details || []).map(d => `${(d.path || []).join(".")}: ${d.message}`).join("\n");
-                              setScoutV3HunterWeightsError(`${data.error || "Save failed"}${detail ? `\n${detail}` : ""}`);
+                  {scoutV3HunterWeightsLoading || !scoutV3HunterWeightsObj ? (
+                    <div style={{ padding: 32, textAlign: "center", color: C.ts, fontSize: 13 }}>Loading…</div>
+                  ) : (
+                    <>
+                      {/* Scrollable body */}
+                      <div style={{ overflowY: "auto", flex: 1, marginRight: -4, paddingRight: 4 }}>
+
+                        {sectionLabel("Dimension Weights")}
+                        {HUNTER_WEIGHT_DIMS.map(dimKey => (
+                          <div key={dimKey} style={{ display: "grid", gridTemplateColumns: "180px 1fr 36px", gap: 12, alignItems: "center", fontSize: 13, marginBottom: 8 }}>
+                            <label style={{ color: C.tx, fontWeight: 500 }}>{HUNTER_WEIGHT_PRETTY[dimKey]}</label>
+                            <input
+                              type="range"
+                              min={0}
+                              max={25}
+                              value={scoutV3HunterWeightsObj.weights[dimKey].weight}
+                              onChange={e => {
+                                const v = parseInt(e.target.value, 10);
+                                setScoutV3HunterWeightsObj(prev => ({
+                                  ...prev,
+                                  weights: {
+                                    ...prev.weights,
+                                    [dimKey]: { ...prev.weights[dimKey], weight: v },
+                                  },
+                                }));
+                              }}
+                              style={{ width: "100%", accentColor: C.bu, cursor: "pointer" }}
+                            />
+                            <span style={{ fontWeight: 700, textAlign: "right", color: C.tx, fontVariantNumeric: "tabular-nums" }}>
+                              {scoutV3HunterWeightsObj.weights[dimKey].weight}
+                            </span>
+                          </div>
+                        ))}
+
+                        {sectionLabel("Hard Gates")}
+                        {[
+                          { key: "require_living",       label: "Require living artist",      hint: "no deceased" },
+                          { key: "require_not_blocked",  label: "Require not-blocked",         hint: "no kickoff/live duplicates" },
+                          { key: "require_genre_match",  label: "Require genre match",         hint: "soft preference; recommend off" },
+                          { key: "require_reachable",    label: "Require reachable",           hint: "soft preference; recommend off" },
+                        ].map(({ key, label, hint }) => (
+                          <label key={key} style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", marginBottom: 10, fontSize: 13 }}>
+                            <input
+                              type="checkbox"
+                              checked={!!scoutV3HunterWeightsObj.gates[key]}
+                              onChange={e => {
+                                setScoutV3HunterWeightsObj(prev => ({
+                                  ...prev,
+                                  gates: { ...prev.gates, [key]: e.target.checked },
+                                }));
+                              }}
+                              style={{ accentColor: C.bu, width: 15, height: 15, cursor: "pointer", flexShrink: 0 }}
+                            />
+                            <span style={{ color: C.tx, fontWeight: 500 }}>{label}</span>
+                            <span style={{ color: C.ts, fontSize: 11 }}>({hint})</span>
+                          </label>
+                        ))}
+
+                        {sectionLabel("Target Genres (for scoring)")}
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+                          {(scoutV3HunterWeightsObj.weights.genre_fit.targetGenres || []).map(g => (
+                            <span key={g} style={{ ...mkP(true, C.bu, C.bb), cursor: "default" }}>
+                              {g}
+                              <button
+                                onClick={() => setScoutV3HunterWeightsObj(prev => ({
+                                  ...prev,
+                                  weights: {
+                                    ...prev.weights,
+                                    genre_fit: {
+                                      ...prev.weights.genre_fit,
+                                      targetGenres: prev.weights.genre_fit.targetGenres.filter(x => x !== g),
+                                    },
+                                  },
+                                }))}
+                                style={{ background: "transparent", border: "none", marginLeft: 4, cursor: "pointer", color: C.ts }}
+                              >×</button>
+                            </span>
+                          ))}
+                        </div>
+                        <div style={{ display: "flex", gap: 6 }}>
+                          <input
+                            value={scoutV3HunterWeightsGenreInput}
+                            onChange={e => setScoutV3HunterWeightsGenreInput(e.target.value)}
+                            onKeyDown={e => {
+                              if (e.key === "Enter" && scoutV3HunterWeightsGenreInput.trim()) {
+                                e.preventDefault();
+                                const g = scoutV3HunterWeightsGenreInput.trim().toLowerCase();
+                                setScoutV3HunterWeightsObj(prev => {
+                                  const existing = prev.weights.genre_fit.targetGenres || [];
+                                  if (existing.includes(g)) return prev;
+                                  return { ...prev, weights: { ...prev.weights, genre_fit: { ...prev.weights.genre_fit, targetGenres: [...existing, g] } } };
+                                });
+                                setScoutV3HunterWeightsGenreInput("");
+                              }
+                            }}
+                            placeholder="indie pop, folk, singer-songwriter…"
+                            style={{ ...iS, flex: 1 }}
+                          />
+                          <button onClick={() => {
+                            if (scoutV3HunterWeightsGenreInput.trim()) {
+                              const g = scoutV3HunterWeightsGenreInput.trim().toLowerCase();
+                              setScoutV3HunterWeightsObj(prev => {
+                                const existing = prev.weights.genre_fit.targetGenres || [];
+                                if (existing.includes(g)) return prev;
+                                return { ...prev, weights: { ...prev.weights, genre_fit: { ...prev.weights.genre_fit, targetGenres: [...existing, g] } } };
+                              });
+                              setScoutV3HunterWeightsGenreInput("");
                             }
-                          } catch (err) {
-                            setScoutV3HunterWeightsError(err.message);
-                          } finally {
-                            setScoutV3HunterWeightsSaving(false);
-                          }
-                        }}
-                        style={{ ...actionBtn(true, "accent"), opacity: scoutV3HunterWeightsSaving ? 0.6 : 1 }}
-                      >
-                        {scoutV3HunterWeightsSaving ? "Saving…" : "Save weights"}
-                      </button>
-                    </div>
-                  </>
-                )}
+                          }} style={actionBtn(false, "neutral")}>Add</button>
+                        </div>
+
+                        {sectionLabel("Target Regions")}
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+                          {(scoutV3HunterWeightsObj.weights.geography.targetRegions || []).map(r => (
+                            <span key={r} style={{ ...mkP(true, C.bu, C.bb), cursor: "default" }}>
+                              {r}
+                              <button
+                                onClick={() => setScoutV3HunterWeightsObj(prev => ({
+                                  ...prev,
+                                  weights: {
+                                    ...prev.weights,
+                                    geography: {
+                                      ...prev.weights.geography,
+                                      targetRegions: prev.weights.geography.targetRegions.filter(x => x !== r),
+                                    },
+                                  },
+                                }))}
+                                style={{ background: "transparent", border: "none", marginLeft: 4, cursor: "pointer", color: C.ts }}
+                              >×</button>
+                            </span>
+                          ))}
+                        </div>
+                        <div style={{ display: "flex", gap: 6 }}>
+                          <input
+                            value={scoutV3HunterWeightsRegionInput}
+                            onChange={e => setScoutV3HunterWeightsRegionInput(e.target.value.toUpperCase())}
+                            onKeyDown={e => {
+                              if (e.key === "Enter" && scoutV3HunterWeightsRegionInput.trim()) {
+                                e.preventDefault();
+                                const r = scoutV3HunterWeightsRegionInput.trim().toUpperCase();
+                                setScoutV3HunterWeightsObj(prev => {
+                                  const existing = prev.weights.geography.targetRegions || [];
+                                  if (existing.includes(r)) return prev;
+                                  return { ...prev, weights: { ...prev.weights, geography: { ...prev.weights.geography, targetRegions: [...existing, r] } } };
+                                });
+                                setScoutV3HunterWeightsRegionInput("");
+                              }
+                            }}
+                            placeholder="US, CA, GB…"
+                            maxLength={2}
+                            style={{ ...iS, width: 100, textTransform: "uppercase" }}
+                          />
+                          <button onClick={() => {
+                            if (scoutV3HunterWeightsRegionInput.trim()) {
+                              const r = scoutV3HunterWeightsRegionInput.trim().toUpperCase();
+                              setScoutV3HunterWeightsObj(prev => {
+                                const existing = prev.weights.geography.targetRegions || [];
+                                if (existing.includes(r)) return prev;
+                                return { ...prev, weights: { ...prev.weights, geography: { ...prev.weights.geography, targetRegions: [...existing, r] } } };
+                              });
+                              setScoutV3HunterWeightsRegionInput("");
+                            }
+                          }} style={actionBtn(false, "neutral")}>Add</button>
+                        </div>
+
+                        {sectionLabel("Defaults")}
+                        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
+                          <label style={{ fontSize: 13, color: C.tx, fontWeight: 500, whiteSpace: "nowrap" }}>Target count per run:</label>
+                          <input
+                            type="number"
+                            min={1}
+                            max={100}
+                            value={scoutV3HunterWeightsObj.target_count_default}
+                            onChange={e => {
+                              const v = Math.max(1, Math.min(100, parseInt(e.target.value, 10) || 1));
+                              setScoutV3HunterWeightsObj(prev => ({ ...prev, target_count_default: v }));
+                            }}
+                            style={{ ...iS, width: 80 }}
+                          />
+                        </div>
+
+                      </div>
+
+                      {/* Footer */}
+                      {scoutV3HunterWeightsError && (
+                        <div style={{ fontSize: 12, color: C.rd, padding: "8px 12px", background: C.rb, borderRadius: 6, marginTop: 10, whiteSpace: "pre-wrap", flexShrink: 0 }}>
+                          {scoutV3HunterWeightsError}
+                        </div>
+                      )}
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginTop: 16, flexShrink: 0 }}>
+                        <button
+                          onClick={() => {
+                            setScoutV3HunterWeightsObj(HUNTER_WEIGHT_DEFAULTS);
+                            setScoutV3HunterWeightsGenreInput("");
+                            setScoutV3HunterWeightsRegionInput("");
+                          }}
+                          style={actionBtn(false, "warn")}
+                        >Reset to defaults</button>
+                        <div style={{ display: "flex", gap: 8 }}>
+                          <button onClick={() => setScoutV3HunterWeightsOpen(false)} style={actionBtn(false, "neutral")}>Cancel</button>
+                          <button
+                            disabled={scoutV3HunterWeightsSaving}
+                            onClick={async () => {
+                              if (!selectedWorkspace?.id || !scoutV3HunterWeightsObj) return;
+                              setScoutV3HunterWeightsError("");
+                              setScoutV3HunterWeightsSaving(true);
+                              try {
+                                const res = await fetch(`/api/ar/scout/hunter/weights?workspaceId=${encodeURIComponent(selectedWorkspace.id)}`, {
+                                  method: "PUT",
+                                  credentials: "include",
+                                  headers: { "Content-Type": "application/json" },
+                                  body: JSON.stringify(scoutV3HunterWeightsObj),
+                                });
+                                const data = await res.json();
+                                if (data.ok) {
+                                  setScoutV3HunterWeightsOpen(false);
+                                } else {
+                                  const detail = (data.details || []).map(d => `${(d.path || []).join(".")}: ${d.message}`).join("\n");
+                                  setScoutV3HunterWeightsError(`${data.error || "Save failed"}${detail ? `\n${detail}` : ""}`);
+                                }
+                              } catch (err) {
+                                setScoutV3HunterWeightsError(err.message);
+                              } finally {
+                                setScoutV3HunterWeightsSaving(false);
+                              }
+                            }}
+                            style={{ ...actionBtn(true, "accent"), opacity: scoutV3HunterWeightsSaving ? 0.6 : 1 }}
+                          >
+                            {scoutV3HunterWeightsSaving ? "Saving…" : "Save weights"}
+                          </button>
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
         </div>
       </div>
     );
