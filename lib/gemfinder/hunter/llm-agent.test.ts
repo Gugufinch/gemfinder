@@ -74,8 +74,9 @@ describe('searchArtistsViaLLM', () => {
     const userMessage = mockCreate.mock.calls[0][0].messages[1].content;
     expect(userMessage).toContain('indie pop, folk');
     expect(userMessage).toContain('US, CA');
-    expect(userMessage).toContain('5000');
-    expect(userMessage).toContain('50000');
+    // Listener bounds get toLocaleString'd in the prompt for human readability.
+    expect(userMessage).toMatch(/5,?000/);
+    expect(userMessage).toMatch(/50,?000/);
     expect(userMessage).toContain('2022');
   });
 });

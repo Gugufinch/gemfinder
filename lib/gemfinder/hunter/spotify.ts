@@ -5,6 +5,16 @@ export type SpotifyArtist = {
   popularity: number;
   genres: string[];
   external_urls?: { spotify?: string };
+  images?: Array<{ url: string; height?: number; width?: number }>;
+};
+
+export type SpotifyTrack = {
+  id: string;
+  name: string;
+  popularity: number;
+  album?: { name?: string; release_date?: string };
+  preview_url?: string | null;
+  external_urls?: { spotify?: string };
 };
 
 type TokenCache = { token: string; expiresAt: number };
@@ -148,4 +158,47 @@ export async function searchArtistByName(name: string): Promise<SpotifyArtist | 
   // accounts above the actual artist.
   items.sort((a, b) => (b.followers?.total ?? 0) - (a.followers?.total ?? 0));
   return items[0];
+}
+
+/**
+ * Fetch the artist's top tracks from Spotify (market-scoped, default US).
+ *
+ * This is the most useful audio signal per candidate: each track has a
+ * popularity (0-100) score that tracks streaming activity. A top track at
+ * popularity 70 is a much stronger commission signal than just artist-level
+ * follower count — it's "this specific song is being played a lot RIGHT NOW."
+ *
+ * Returns up to 10 tracks sorted by popularity desc, or null on any failure.
+ * Free Spotify API tier supports this endpoint with Client Credentials.
+ */
+export async function getTopTracks(spotifyArtistId: string, market: string = 'US'): Promise<SpotifyTrack[] | null> {
+  let token: string;
+  try {
+    token = await getAccessToken();
+  } catch (err) {
+    console.warn('[HUNTER_SPOTIFY] token fetch failed; skipping top tracks:', err);
+    return null;
+  }
+
+  const url = `https://api.spotify.com/v1/artists/${encodeURIComponent(spotifyArtistId)}/top-tracks?market=${encodeURIComponent(market)}`;
+  let res: Response;
+  try {
+    res = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
+  } catch (err) {
+    console.warn('[HUNTER_SPOTIFY] getTopTracks network error:', err);
+    return null;
+  }
+
+  if (res.status === 401) {
+    _resetTokenCache();
+    return getTopTracks(spotifyArtistId, market);
+  }
+  if (!res.ok) {
+    console.warn(`[HUNTER_SPOTIFY] getTopTracks HTTP ${res.status} for ${spotifyArtistId}`);
+    return null;
+  }
+
+  const body = await res.json() as { tracks?: SpotifyTrack[] };
+  const tracks = body.tracks ?? [];
+  return tracks.slice().sort((a, b) => (b.popularity ?? 0) - (a.popularity ?? 0));
 }

@@ -1,6 +1,6 @@
 import type { MBArtist } from '@/lib/gemfinder/hunter/musicbrainz';
 import { fetchArtistDetails } from '@/lib/gemfinder/hunter/musicbrainz';
-import { getArtistById, parseSpotifyArtistId, searchArtistByName } from '@/lib/gemfinder/hunter/spotify';
+import { getArtistById, parseSpotifyArtistId, searchArtistByName, getTopTracks } from '@/lib/gemfinder/hunter/spotify';
 import { scrapeWebsite } from '@/lib/gemfinder/hunter/steel';
 import { getCached, putCached } from '@/lib/gemfinder/hunter/scrape-cache';
 import type { EnrichedCandidate } from '@/lib/gemfinder/types';
@@ -254,6 +254,7 @@ export async function enrichCandidate(
   // best-effort match. Without this, the size_cap gate can't fire for any
   // artist whose MB entry is incomplete — exactly the failure mode that
   // surfaced megastars to Greg's first hunt.
+  let spotifyImageUrl: string | undefined;
   if (spotifyFollowers === undefined) {
     let sp = null;
     try {
@@ -266,6 +267,28 @@ export async function enrichCandidate(
       spotifyPopularity = sp.popularity;
       spotifyGenres = sp.genres;
       spotifyArtistId = sp.id;
+      spotifyImageUrl = sp.images?.[0]?.url;
+    }
+  }
+
+  // Step 5b: Top tracks (Spotify Web API /artists/{id}/top-tracks). Provides
+  // per-track popularity, the best "is this song hot right now" signal we have.
+  // Skipped silently if no Spotify ID (artist not on Spotify or lookup failed).
+  let topTracks: Array<{ name: string; popularity: number; spotifyUrl?: string; previewUrl?: string | null }> | undefined;
+  if (spotifyArtistId) {
+    let tt = null;
+    try {
+      tt = await getTopTracks(spotifyArtistId);
+    } catch (err) {
+      console.warn('[HUNTER_ENRICH] top tracks fetch failed for', spotifyArtistId + ':', err);
+    }
+    if (tt && tt.length > 0) {
+      topTracks = tt.slice(0, 5).map((t) => ({
+        name: t.name,
+        popularity: t.popularity ?? 0,
+        spotifyUrl: t.external_urls?.spotify,
+        previewUrl: t.preview_url,
+      }));
     }
   }
 
@@ -337,6 +360,8 @@ export async function enrichCandidate(
     spotifyFollowers,
     spotifyPopularity,
     spotifyGenres,
+    topTracks,
+    spotifyImageUrl,
     scrapedContactEmail,
     scrapedManagerInfo,
     scrapedToursInfo,

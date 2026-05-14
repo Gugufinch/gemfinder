@@ -235,7 +235,15 @@ export async function runPipeline(input: RunPipelineInput): Promise<HunterRunSum
           youtubeSubscribers: sc.enriched.youtubeSubscribers,
           soundcloudFollowers: sc.enriched.soundcloudFollowers,
           score: sc.finalScore,
-          weightSnapshot: sc.perDimension,
+          // weightSnapshot is JSONB — piggy-back top tracks + image alongside
+          // the per-dimension scores so the UI card has audio metadata without
+          // requiring a new DB column. Field names are prefixed _ to denote
+          // "not a real dimension, surface data".
+          weightSnapshot: {
+            ...sc.perDimension,
+            ...(sc.enriched.topTracks ? { _topTracks: sc.enriched.topTracks } : {}),
+            ...(sc.enriched.spotifyImageUrl ? { _imageUrl: sc.enriched.spotifyImageUrl } : {}),
+          },
           hunterRunId: runId,
         };
         await createCandidate(candidate);

@@ -83,8 +83,8 @@ const SYSTEM_PROMPT = `You are an A&R discovery assistant for Songfinch, a perso
 HARD CONSTRAINTS (a candidate that violates any of these is WRONG):
 - MUST be a music recording artist. NEVER suggest novelists, authors, audiobook narrators, voice actors, podcasters, classical composers, film score composers, or anyone whose primary work isn't recorded music for streaming/release.
 - MUST be living. No deceased artists.
-- MUST have released original music since 2020 (not just compilation re-releases, not just a 2024 deluxe edition of 1995 album).
-- MUST have between 1,000 and 250,000 Spotify monthly listeners. Megastars (Bruce Springsteen, Taylor Swift, Bob Dylan tier) are unsignable. Below 1K listeners is below A&R-viable.
+- MUST have released original music since 2022 (not just compilation re-releases, not just a 2024 deluxe edition of an old album).
+- MUST have between 1,000 and 100,000 Spotify monthly listeners. This is the Songfinch A&R sweet spot. Above 100K listeners, artists are agency-managed and don't take direct outreach — that's outside our range. Below 1K is below A&R-viable.
 - MUST be a contemporary artist with active streaming presence — not a legacy/heritage act, not a session musician, not a "rock band from the 1960s" being marketed as catalog.
 
 QUALITY:
@@ -103,8 +103,12 @@ function buildPrompt(criteria: HunterCriteria): string {
   if (criteria.genres.length > 0) parts.push(`- Genres: ${criteria.genres.join(', ')}`);
   if (criteria.regions.length > 0) parts.push(`- Regions (ISO codes): ${criteria.regions.join(', ')}`);
   if (criteria.roleTarget !== 'both') parts.push(`- Role target: ${criteria.roleTarget}`);
-  if (criteria.sizeBracket?.min) parts.push(`- Min Spotify followers: ${criteria.sizeBracket.min}`);
-  if (criteria.sizeBracket?.max) parts.push(`- Max Spotify followers: ${criteria.sizeBracket.max} (HARD LIMIT — do not exceed)`);
+  // Default to the A&R sweet spot (1K-100K Spotify monthly listeners) if no
+  // explicit bracket is set in criteria — keeps the LLM honest about size.
+  const minListeners = criteria.sizeBracket?.min ?? 1000;
+  const maxListeners = criteria.sizeBracket?.max ?? 100_000;
+  parts.push(`- Min Spotify monthly listeners: ${minListeners.toLocaleString()}`);
+  parts.push(`- Max Spotify monthly listeners: ${maxListeners.toLocaleString()} (HARD LIMIT — do not exceed)`);
   if (criteria.recency?.sinceYear) parts.push(`- Active since: ${criteria.recency.sinceYear}`);
   if (criteria.instrument) parts.push(`- Notable for: ${criteria.instrument}`);
   parts.push(`\nReturn JSON in this exact shape:`);

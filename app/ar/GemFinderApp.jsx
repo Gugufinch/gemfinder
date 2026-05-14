@@ -13292,6 +13292,12 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                         .sort(([, a], [, b]) => b - a)
                         .slice(0, 3)
                     : [];
+                  // Top tracks live on weightSnapshot._topTracks (piggy-backed
+                  // to avoid a DB column add). Array of {name, popularity, spotifyUrl, previewUrl}.
+                  const topTracks = (c.weightSnapshot && Array.isArray(c.weightSnapshot._topTracks))
+                    ? c.weightSnapshot._topTracks.slice(0, 3)
+                    : [];
+                  const artistImageUrl = c.weightSnapshot?._imageUrl;
                   return (
                   <div key={`scoutv3-card-${c.id}`} style={{ ...cS, padding: "20px 22px" }}>
                     {/* Header row: name, role, source, score */}
@@ -13345,6 +13351,26 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                                 <span style={{ fontWeight: 700, textAlign: "right" }}>{r.value}</span>
                               </div>
                             ))}
+                          </div>
+                        )}
+
+                        {topTracks.length > 0 && (
+                          <div style={{ fontSize: 12, padding: "8px 10px", background: C.sa, borderRadius: 6 }}>
+                            <div style={{ color: C.ts, fontWeight: 700, marginBottom: 4 }}>🎵 Top tracks</div>
+                            <div style={{ display: "grid", gap: 3 }}>
+                              {topTracks.map((t, i) => (
+                                <div key={i} style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+                                  {t.spotifyUrl ? (
+                                    <a href={t.spotifyUrl} target="_blank" rel="noopener noreferrer" style={{ color: C.bu, textDecoration: "none", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={t.name}>
+                                      "{t.name}"
+                                    </a>
+                                  ) : (
+                                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>"{t.name}"</span>
+                                  )}
+                                  <span style={{ color: C.ts, flexShrink: 0 }}>pop {t.popularity}</span>
+                                </div>
+                              ))}
+                            </div>
                           </div>
                         )}
 

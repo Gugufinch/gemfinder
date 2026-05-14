@@ -395,6 +395,12 @@ export type EnrichedCandidate = {
   spotifyFollowers?: number;
   spotifyPopularity?: number;
   spotifyGenres?: string[];
+  // Top tracks from Spotify Web API /v1/artists/{id}/top-tracks. Tracks come
+  // with a 0-100 popularity score — much better A&R signal than artist-level
+  // follower count alone ("this song is hot RIGHT NOW" vs. "this artist has
+  // a built-up audience"). Sorted desc by popularity, capped at 10.
+  topTracks?: Array<{ name: string; popularity: number; spotifyUrl?: string; previewUrl?: string | null }>;
+  spotifyImageUrl?: string;
   instagramFollowers?: number;
   tiktokFollowers?: number;
   youtubeSubscribers?: number;

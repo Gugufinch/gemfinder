@@ -5,11 +5,12 @@ import type { HunterWeights, HunterCriteria, EnrichedCandidate, BlocklistResult 
 export type GateResult = { pass: true } | { pass: false; reason: string };
 
 // Hard upper-bound on Spotify followers when criteria.sizeBracket.max is not set.
-// Above this, the artist is too big for A&R discovery — we'd waste time
-// pretending we could engage them. Tuned for Songfinch's pre-engagement queue:
-// 250K is roughly where Spotify monthly listeners flip from "interested in any
-// commission" to "represented by an agency that won't return your email."
-const DEFAULT_MAX_SPOTIFY_FOLLOWERS = 250_000;
+// Above this, the artist is too big for A&R discovery — they're agency-managed
+// and won't return direct outreach. 100K is the Songfinch sweet spot: below
+// here, artists are open to commissions and direct contact; above here, they
+// have a manager/booking agent and a queue. Operators can raise this per-run
+// via criteria.sizeBracket.max.
+const DEFAULT_MAX_SPOTIFY_FOLLOWERS = 100_000;
 
 // Backup megastar signal: MusicBrainz caps release-groups at 25 in the standard
 // ?inc query. An artist with 20+ release groups is overwhelmingly likely to be
