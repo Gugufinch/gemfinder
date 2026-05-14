@@ -3,6 +3,7 @@ import { fetchArtistDetails } from '@/lib/gemfinder/hunter/musicbrainz';
 import { getArtistById, parseSpotifyArtistId, searchArtistByName, getTopTracks } from '@/lib/gemfinder/hunter/spotify';
 import { scrapeWebsite } from '@/lib/gemfinder/hunter/steel';
 import { getCached, putCached } from '@/lib/gemfinder/hunter/scrape-cache';
+import { fetchInstagramFollowers, fetchTiktokFollowers } from '@/lib/gemfinder/hunter/social-scraping';
 import type { EnrichedCandidate } from '@/lib/gemfinder/types';
 
 // ---------------------------------------------------------------------------
@@ -328,6 +329,34 @@ export async function enrichCandidate(
       scrapedToursInfo = scrapeResult.extractedFields.toursInfo;
     }
   }
+
+  // Step 7b: social follower scraping — run IG + TikTok in parallel with a
+  // 15-second timeout each so a slow scrape can't block the whole enrichment.
+  let igFollowers: number | undefined;
+  let ttFollowers: number | undefined;
+  const socialPromises: Promise<void>[] = [];
+
+  if (extracted.instagramHandle) {
+    socialPromises.push(
+      Promise.race([
+        fetchInstagramFollowers(extracted.instagramHandle),
+        new Promise<null>((r) => setTimeout(() => r(null), 15_000)),
+      ]).then((n) => { if (typeof n === 'number') igFollowers = n; })
+        .catch((err) => console.warn('[HUNTER_ENRICH] IG fetch failed:', err))
+    );
+  }
+
+  if (extracted.tiktokHandle) {
+    socialPromises.push(
+      Promise.race([
+        fetchTiktokFollowers(extracted.tiktokHandle),
+        new Promise<null>((r) => setTimeout(() => r(null), 15_000)),
+      ]).then((n) => { if (typeof n === 'number') ttFollowers = n; })
+        .catch((err) => console.warn('[HUNTER_ENRICH] TT fetch failed:', err))
+    );
+  }
+
+  await Promise.allSettled(socialPromises);
 
   // Step 8: inferredRole
   const inferredRole = computeInferredRole(mbArtist);

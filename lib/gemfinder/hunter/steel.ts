@@ -25,7 +25,7 @@ class Semaphore {
   }
 }
 
-const steelSem = new Semaphore(3);
+export const steelSem = new Semaphore(3);
 
 export function normalizeUrl(rawUrl: string): string {
   try {
