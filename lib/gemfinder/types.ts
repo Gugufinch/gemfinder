@@ -275,7 +275,8 @@ export type HunterSource = 'musicbrainz' | 'spotify' | 'bandcamp' | 'llm';
 
 export type HunterCriteria = {
   genres: string[];
-  regions: string[];
+  regions: string[];  // ISO country codes (US, CA, GB) for coarse country filtering
+  locations?: string[];  // Free-text city/state (e.g., "Austin, TX", "Brooklyn", "London") — LLM uses this for finer-grained discovery
   roleTarget: HunterRoleTarget;
   sizeBracket?: { min?: number; max?: number };
   recency?: { sinceYear?: number };

@@ -187,7 +187,8 @@ function buildPrompt(criteria: HunterCriteria): string {
   parts.push('Find ~30 emerging artists for Songfinch\'s A&R queue.');
   parts.push('\nCriteria:');
   if (criteria.genres.length > 0) parts.push(`- Genres: ${criteria.genres.join(', ')}`);
-  if (criteria.regions.length > 0) parts.push(`- Regions (ISO codes): ${criteria.regions.join(', ')}`);
+  if (criteria.regions.length > 0) parts.push(`- Country regions (ISO codes): ${criteria.regions.join(', ')}`);
+  if (criteria.locations && criteria.locations.length > 0) parts.push(`- Specific locations (cities/states/neighborhoods — bias results heavily toward artists actually based here): ${criteria.locations.join(', ')}`);
   if (criteria.roleTarget !== 'both') parts.push(`- Role target: ${criteria.roleTarget}`);
   const minListeners = criteria.sizeBracket?.min ?? 1000;
   const maxListeners = criteria.sizeBracket?.max ?? 1_000_000;

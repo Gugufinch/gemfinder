@@ -37,6 +37,7 @@ async function requireScoutV3Flag(workspaceId: string): Promise<boolean> {
 const criteriaSchema = z.object({
   genres: z.array(z.string()).min(0),
   regions: z.array(z.string()).optional().default([]),
+  locations: z.array(z.string().min(1).max(80)).optional(),  // Free-text city/state (e.g., "Austin, TX")
   roleTarget: z.enum(['performer', 'curator', 'both', 'unknown']).default('both'),
   sizeBracket: z.object({ min: z.number().optional(), max: z.number().optional() }).optional(),
   recency: z.object({ sinceYear: z.number().optional() }).optional(),

@@ -3707,6 +3707,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [scoutV3HunterCriteria, setScoutV3HunterCriteria] = useState({
     genres: [],
     regions: [],
+    locations: [],
     roleTarget: "both",
     sizeBracket: { min: undefined, max: undefined },
     recency: { sinceYear: undefined },
@@ -3715,6 +3716,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   });
   const [scoutV3HunterGenreInput, setScoutV3HunterGenreInput] = useState("");
   const [scoutV3HunterRegionInput, setScoutV3HunterRegionInput] = useState("");
+  const [scoutV3HunterLocationInput, setScoutV3HunterLocationInput] = useState("");
   const [scoutV3HunterSubmitting, setScoutV3HunterSubmitting] = useState(false);
   const [scoutV3HunterRuns, setScoutV3HunterRuns] = useState([]);
   const [scoutV3HunterRunsLoading, setScoutV3HunterRunsLoading] = useState(false);
@@ -13605,6 +13607,44 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                 </div>
               </div>
 
+              {/* Specific locations — free-text city/state/neighborhood */}
+              <div style={{ marginBottom: 16 }}>
+                <label style={{ fontSize: 12, fontWeight: 700, display: "block", marginBottom: 6 }}>
+                  Cities / States <span style={{ color: C.ts, fontWeight: 400 }}>(optional — e.g., "Austin, TX", "Brooklyn", "Atlanta")</span>
+                </label>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 6 }}>
+                  {(scoutV3HunterCriteria.locations || []).map(l => (
+                    <span key={l} style={{ ...mkP(true, C.bu, C.bb), cursor: "default" }}>
+                      {l}
+                      <button onClick={() => setScoutV3HunterCriteria(c => ({ ...c, locations: (c.locations || []).filter(x => x !== l) }))} style={{ background: "transparent", border: "none", marginLeft: 4, cursor: "pointer", color: C.ts }}>×</button>
+                    </span>
+                  ))}
+                </div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <input
+                    value={scoutV3HunterLocationInput}
+                    onChange={e => setScoutV3HunterLocationInput(e.target.value)}
+                    onKeyDown={e => {
+                      if (e.key === "Enter" && scoutV3HunterLocationInput.trim()) {
+                        e.preventDefault();
+                        const l = scoutV3HunterLocationInput.trim();
+                        setScoutV3HunterCriteria(c => (c.locations || []).includes(l) ? c : { ...c, locations: [...(c.locations || []), l] });
+                        setScoutV3HunterLocationInput("");
+                      }
+                    }}
+                    placeholder="Austin, TX..."
+                    style={{ flex: 1, padding: "8px 12px", border: `1px solid ${C.bd}`, borderRadius: 6, fontSize: 13 }}
+                  />
+                  <button onClick={() => {
+                    if (scoutV3HunterLocationInput.trim()) {
+                      const l = scoutV3HunterLocationInput.trim();
+                      setScoutV3HunterCriteria(c => (c.locations || []).includes(l) ? c : { ...c, locations: [...(c.locations || []), l] });
+                      setScoutV3HunterLocationInput("");
+                    }
+                  }} style={actionBtn(false, "neutral")}>Add</button>
+                </div>
+              </div>
+
               {/* Role target + target count (compact row) */}
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
                 <div>
@@ -13733,22 +13773,28 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                   // Auto-commit any pending text in the chip inputs (typed but not yet Added)
                   const pendingGenre = scoutV3HunterGenreInput.trim().toLowerCase();
                   const pendingRegion = scoutV3HunterRegionInput.trim().toUpperCase();
+                  const pendingLocation = scoutV3HunterLocationInput.trim();
                   const genres = pendingGenre && !scoutV3HunterCriteria.genres.includes(pendingGenre)
                     ? [...scoutV3HunterCriteria.genres, pendingGenre]
                     : scoutV3HunterCriteria.genres;
                   const regions = pendingRegion && !scoutV3HunterCriteria.regions.includes(pendingRegion)
                     ? [...scoutV3HunterCriteria.regions, pendingRegion]
                     : scoutV3HunterCriteria.regions;
+                  const existingLocations = scoutV3HunterCriteria.locations || [];
+                  const locations = pendingLocation && !existingLocations.includes(pendingLocation)
+                    ? [...existingLocations, pendingLocation]
+                    : existingLocations;
 
-                  if (genres.length === 0 && regions.length === 0) {
-                    window.alert("Add at least one genre or region. Type a value and press Enter or click Add to create a chip.");
+                  if (genres.length === 0 && regions.length === 0 && locations.length === 0) {
+                    window.alert("Add at least one genre, region, or location. Type a value and press Enter or click Add to create a chip.");
                     return;
                   }
 
                   // Reflect the auto-committed chips in UI state, clear pending inputs
-                  setScoutV3HunterCriteria(c => ({ ...c, genres, regions }));
+                  setScoutV3HunterCriteria(c => ({ ...c, genres, regions, locations }));
                   setScoutV3HunterGenreInput("");
                   setScoutV3HunterRegionInput("");
+                  setScoutV3HunterLocationInput("");
 
                   // Build clean payload: omit empty optional fields so zod's .optional() lands cleanly
                   const payload = {
@@ -13757,6 +13803,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                     roleTarget: scoutV3HunterCriteria.roleTarget,
                     targetCount: scoutV3HunterCriteria.targetCount,
                   };
+                  if (locations.length > 0) payload.locations = locations;
                   const sb = scoutV3HunterCriteria.sizeBracket;
                   if (sb && (typeof sb.min === "number" || typeof sb.max === "number")) {
                     payload.sizeBracket = {};
