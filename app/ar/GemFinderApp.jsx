@@ -13220,6 +13220,17 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                 <button onClick={() => setScreen("scout")} style={{ ...actionBtn(false, "neutral"), fontSize: 11 }}>
                   Legacy Scout V2 view →
                 </button>
+                {/* Admin-only: quick link to user management. Server still enforces
+                    role on /api/ar/admin/users — this button is just discovery. */}
+                {isAdmin && (
+                  <a
+                    href="/ar/admin"
+                    style={{ ...actionBtn(false, "neutral"), fontSize: 11, textDecoration: "none", display: "inline-flex", alignItems: "center" }}
+                    title="Manage Gemfinder users (admin only)"
+                  >
+                    👤 Manage users →
+                  </a>
+                )}
               </div>
             </div>
           </div>
