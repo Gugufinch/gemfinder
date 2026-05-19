@@ -129,10 +129,23 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  // 8. Spotify / Steel env vars
+  // 8. Spotify / Steel / Gemini env vars
   const SPOTIFY_ID = process.env.SPOTIFY_CLIENT_ID;
   const SPOTIFY_SECRET = process.env.SPOTIFY_CLIENT_SECRET;
   const STEEL_KEY = process.env.STEEL_API_KEY;
+  const GEMINI_KEY = process.env.GEMINI_API_KEY;
+
+  if (!GEMINI_KEY) {
+    fail('env.GEMINI_API_KEY', 'missing', 'free key at https://aistudio.google.com/apikey');
+  } else if (GEMINI_KEY === 'PLACEHOLDER_API_KEY') {
+    fail('env.GEMINI_API_KEY', 'is literal placeholder string', 'replace with real key');
+  } else if (GEMINI_KEY.trim() !== GEMINI_KEY) {
+    fail('env.GEMINI_API_KEY', 'has leading/trailing whitespace', 'trim and re-save in Render env vars');
+  } else if (!GEMINI_KEY.startsWith('AIza')) {
+    fail('env.GEMINI_API_KEY', 'does not look like a Google API key (should start with AIza...)', 'check value');
+  } else {
+    pass('env.GEMINI_API_KEY', `set (${GEMINI_KEY.slice(0, 6)}…${GEMINI_KEY.slice(-4)})`);
+  }
 
   if (!SPOTIFY_ID) {
     fail('env.SPOTIFY_CLIENT_ID', 'missing', 'add to Render env vars');
