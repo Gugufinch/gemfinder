@@ -89,7 +89,16 @@ export async function searchArtistsViaLLM(criteria: HunterCriteria): Promise<MBA
     parsed = JSON.parse(jsonStr);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    throw new Error(`[HUNTER_LLM] Gemini JSON parse failed: ${msg}`);
+    // Recover from mid-stream syntax errors (unescaped quote in a rationale,
+    // smart-quote, control char, etc.) by snipping back to the last complete
+    // artist entry. Same approach as truncation-recovery — works for both.
+    const recovered = recoverPartialArtists(jsonStr);
+    if (recovered) {
+      console.warn(`[HUNTER_LLM] JSON parse failed (${msg}) — recovered ${recovered.artists?.length ?? 0} complete artists before the bad position.`);
+      parsed = recovered;
+    } else {
+      throw new Error(`[HUNTER_LLM] Gemini JSON parse failed: ${msg}`);
+    }
   }
 
   const items = parsed.artists ?? [];
@@ -125,6 +134,43 @@ export async function searchArtistsViaLLM(criteria: HunterCriteria): Promise<MBA
  *    complete `}` in the artists array and append `]}` to close the structure.
  *    This recovers ~95% of a truncated response instead of failing entirely.
  */
+/**
+ * Recover usable artists from JSON that's structurally complete but has a
+ * mid-stream syntax error (e.g., an unescaped quote in a rationale at position
+ * 5465). Walks backward from the last well-formed parse boundary.
+ *
+ * Strategy: progressively trim back to the last `},` (end of a complete artist
+ * entry), append `]}` to close, and try parsing. If still fails, trim back to
+ * the previous `},` and try again. Up to 50 backoffs.
+ *
+ * Returns the parsed object if recovery succeeds, or null if no prefix is
+ * salvageable.
+ */
+function recoverPartialArtists(jsonStr: string): { artists?: Array<{ name: string; genres?: string[]; rationale?: string }> } | null {
+  // Find the position of the first `"artists":[` so we know where to insert the close.
+  const artistsMatch = jsonStr.match(/"artists"\s*:\s*\[/);
+  if (!artistsMatch || artistsMatch.index === undefined) return null;
+  const arrayStart = artistsMatch.index + artistsMatch[0].length;
+
+  // Walk backward through the `},` boundaries, trying each candidate.
+  let searchFrom = jsonStr.length;
+  for (let attempt = 0; attempt < 50; attempt++) {
+    const lastCloseObj = jsonStr.lastIndexOf('},', searchFrom);
+    if (lastCloseObj < arrayStart) return null;
+    const candidate = jsonStr.slice(0, lastCloseObj + 1) + ']}';
+    try {
+      const parsed = JSON.parse(candidate);
+      if (parsed && Array.isArray(parsed.artists)) {
+        return parsed;
+      }
+    } catch {
+      // try the previous `},`
+    }
+    searchFrom = lastCloseObj - 1;
+  }
+  return null;
+}
+
 function extractJsonObject(text: string): string | null {
   // Strip markdown code fences if present.
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);

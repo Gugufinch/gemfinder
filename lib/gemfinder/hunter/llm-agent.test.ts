@@ -91,6 +91,23 @@ describe('searchArtistsViaLLM', () => {
     expect(result[0].name).toBe('Indigo De Souza');
   });
 
+  it('recovers complete artists when JSON has a mid-stream syntax error (unescaped quote in rationale)', async () => {
+    // Real-world failure mode: Gemini grounded responses include long rationales
+    // and sometimes emit unescaped quotes mid-string. The full JSON.parse fails
+    // but the artists BEFORE the broken position are recoverable.
+    const brokenJson = '{"artists":[' +
+      '{"name":"Mannequin Pussy","genres":["punk"],"rationale":"FADER pick 2024"},' +
+      '{"name":"DIIV","genres":["shoegaze"],"rationale":"Stereogum review of "Frog In Boiling Water" album"},' +  // unescaped quotes around the album title
+      '{"name":"Chat Pile","genres":["noise rock"],"rationale":"Best of 2024"}' +
+      ']}';
+    mockGenerateContent.mockResolvedValue(geminiResponse(brokenJson));
+    const result = await searchArtistsViaLLM({ genres: ['indie'], regions: ['US'], roleTarget: 'performer', targetCount: 25 });
+    // First artist is fully formed before the broken one — should be recovered.
+    expect(result.length).toBeGreaterThanOrEqual(1);
+    expect(result[0].name).toBe('Mannequin Pussy');
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('recovered'));
+  });
+
   it('filters out entries without a name', async () => {
     mockGenerateContent.mockResolvedValue(geminiResponse(JSON.stringify({
       artists: [
