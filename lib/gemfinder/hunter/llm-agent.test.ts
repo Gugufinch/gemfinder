@@ -38,10 +38,40 @@ describe('searchArtistsViaLLM', () => {
     expect((result[0] as { _aiHint?: string })._aiHint).toBe('Pitchfork year-end pick');
   });
 
-  it('throws when Gemini call fails (infrastructure error)', async () => {
+  it('throws when all Gemini retries fail (infrastructure error)', async () => {
+    // 'network' triggers the retry path; all retries fail; final error surfaces.
     mockGenerateContent.mockRejectedValue(new Error('network'));
     await expect(searchArtistsViaLLM({ genres: ['indie'], regions: ['US'], roleTarget: 'performer', targetCount: 25 }))
-      .rejects.toThrow(/Gemini call failed/);
+      .rejects.toThrow(/All Gemini models overloaded or unavailable/);
+  });
+
+  it('retries on 503 UNAVAILABLE and succeeds on second attempt', async () => {
+    // Real-world failure mode: Gemini returns 503 when its capacity spikes.
+    // First call fails with 503, second call succeeds.
+    mockGenerateContent
+      .mockRejectedValueOnce(new Error('{"error":{"code":503,"message":"high demand","status":"UNAVAILABLE"}}'))
+      .mockResolvedValueOnce(geminiResponse(JSON.stringify({ artists: [{ name: 'Wednesday', genres: ['indie rock'] }] })));
+    const result = await searchArtistsViaLLM({ genres: ['indie'], regions: ['US'], roleTarget: 'performer', targetCount: 25 });
+    expect(result).toHaveLength(1);
+    expect(result[0].name).toBe('Wednesday');
+  });
+
+  it('falls back to a different model when the primary model exhausts retries', async () => {
+    // 3 retries on gemini-2.5-flash-lite all fail with 503 → fall back to
+    // gemini-2.5-flash which succeeds on first attempt.
+    mockGenerateContent
+      .mockRejectedValueOnce(new Error('503 UNAVAILABLE'))
+      .mockRejectedValueOnce(new Error('503 UNAVAILABLE'))
+      .mockRejectedValueOnce(new Error('503 UNAVAILABLE'))
+      .mockResolvedValueOnce(geminiResponse(JSON.stringify({ artists: [{ name: 'DIIV', genres: ['shoegaze'] }] })));
+    const result = await searchArtistsViaLLM({ genres: ['indie'], regions: ['US'], roleTarget: 'performer', targetCount: 25 });
+    expect(result).toHaveLength(1);
+    expect(result[0].name).toBe('DIIV');
+    // The 4th call (first call on the fallback model) was the one that succeeded.
+    expect(mockGenerateContent).toHaveBeenCalledTimes(4);
+    // Confirm the fallback model was called.
+    const fourthCall = mockGenerateContent.mock.calls[3][0];
+    expect(fourthCall.model).toBe('gemini-2.5-flash');
   });
 
   it('throws a clearer message on invalid API key', async () => {

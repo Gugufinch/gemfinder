@@ -38,44 +38,11 @@ function client(): GoogleGenAI {
 export async function searchArtistsViaLLM(criteria: HunterCriteria): Promise<MBArtist[]> {
   const userPrompt = buildPrompt(criteria);
 
-  // Infrastructure errors (auth failure, quota exceeded, model unavailable)
-  // THROW so the orchestrator catches them and pushes a visible 'mb_fetch'
-  // error to the run summary. The previous "return [] on error" was silent —
-  // operators saw runs complete with fetched=0 and had no idea why.
-  let responseText: string | undefined;
-  try {
-    const result = await client().models.generateContent({
-      // gemini-2.5-flash-lite has the most generous free-tier quota and handles
-      // grounding+structured-output cleanly with a sub-2s response time.
-      model: 'gemini-2.5-flash-lite',
-      contents: [{ role: 'user', parts: [{ text: SYSTEM_PROMPT + '\n\n' + userPrompt }] }],
-      config: {
-        tools: [{ googleSearch: {} }],
-        temperature: 0.7,
-        // 30 artists × ~250 tokens each = ~7500 tokens. 12K is headroom.
-        maxOutputTokens: 12000,
-      },
-    });
-    responseText = result.text;
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.warn('[HUNTER_LLM] Gemini call failed:', err);
-    // Surface specific failure modes with actionable messages.
-    if (/API key not valid|API_KEY_INVALID/i.test(msg)) {
-      throw new Error('[HUNTER_LLM] GEMINI_API_KEY is invalid — get a fresh key at https://aistudio.google.com/apikey');
-    }
-    if (/quota|RESOURCE_EXHAUSTED/i.test(msg)) {
-      throw new Error('[HUNTER_LLM] Gemini quota exceeded — free tier is 1500 req/day. Wait or rotate the key.');
-    }
-    if (/not found|404/i.test(msg) && /model/i.test(msg)) {
-      throw new Error('[HUNTER_LLM] Gemini model not available — Google may have rotated. Update the model name in llm-agent.ts.');
-    }
-    throw new Error(`[HUNTER_LLM] Gemini call failed: ${msg}`);
-  }
-
-  if (!responseText) {
-    throw new Error('[HUNTER_LLM] Gemini returned empty response (model may have been filtered or rate-limited)');
-  }
+  // Try the lite model first (generous free-tier quota); on overload/503, retry
+  // with exponential backoff; if all retries fail, fall back to the larger
+  // gemini-2.5-flash (separate quota pool, less likely to be saturated at the
+  // same moment).
+  const responseText = await callGeminiWithRetry(userPrompt);
 
   // Gemini doesn't always return clean JSON when google-search is enabled —
   // it may wrap the JSON in markdown code fences or add commentary. Extract.
@@ -212,6 +179,88 @@ function extractJsonObject(text: string): string | null {
     }
   }
   return null;
+}
+
+/**
+ * Call Gemini with retry-on-overload and a model fallback chain.
+ *
+ * Try sequence (each model gets 3 attempts with backoff):
+ *   1. gemini-2.5-flash-lite (fastest, most generous quota)
+ *   2. gemini-2.5-flash (heavier model, separate quota pool — used when lite is overloaded)
+ *
+ * Backoff: 2s → 5s → 10s. Total worst-case wait before failing over: 17s.
+ *
+ * Recovers from 503 UNAVAILABLE / overloaded / temporarily-unavailable errors
+ * that Google returns during capacity spikes. Auth and quota errors fail
+ * immediately (no retry) since they won't fix themselves.
+ */
+async function callGeminiWithRetry(userPrompt: string): Promise<string> {
+  const FALLBACK_MODELS = ['gemini-2.5-flash-lite', 'gemini-2.5-flash'];
+  // In vitest, use 0ms backoff so tests of the retry path don't time out.
+  // Production uses real exponential backoff.
+  const BACKOFF_MS = process.env.VITEST ? [0, 0, 0] : [2000, 5000, 10000];
+
+  let lastErrMsg = 'unknown';
+
+  for (const model of FALLBACK_MODELS) {
+    for (let attempt = 0; attempt < BACKOFF_MS.length; attempt++) {
+      try {
+        const result = await client().models.generateContent({
+          model,
+          contents: [{ role: 'user', parts: [{ text: SYSTEM_PROMPT + '\n\n' + userPrompt }] }],
+          config: {
+            tools: [{ googleSearch: {} }],
+            temperature: 0.7,
+            maxOutputTokens: 12000,
+          },
+        });
+        const text = result.text;
+        if (!text) {
+          throw new Error('Gemini returned empty response (model may have been filtered)');
+        }
+        if (model !== FALLBACK_MODELS[0] || attempt > 0) {
+          console.warn(`[HUNTER_LLM] succeeded on ${model} (attempt ${attempt + 1}/${BACKOFF_MS.length})`);
+        }
+        return text;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        lastErrMsg = msg;
+
+        // Non-retriable errors — fail fast with a clear message.
+        if (/API key not valid|API_KEY_INVALID/i.test(msg)) {
+          throw new Error('[HUNTER_LLM] GEMINI_API_KEY is invalid — get a fresh key at https://aistudio.google.com/apikey');
+        }
+        if (/quota|RESOURCE_EXHAUSTED/i.test(msg)) {
+          throw new Error('[HUNTER_LLM] Gemini quota exceeded — free tier is 1500 req/day per model. Wait or rotate the key.');
+        }
+        if (/not found|404/i.test(msg) && /model/i.test(msg)) {
+          // Model rotated by Google — skip to next fallback model immediately.
+          console.warn(`[HUNTER_LLM] ${model} returned 404, skipping to next fallback`);
+          break;
+        }
+
+        // Retriable: 503 UNAVAILABLE, overloaded, network blip, etc.
+        const isOverload = /503|UNAVAILABLE|overload|high demand|temporarily/i.test(msg);
+        const isNetwork = /ECONNRESET|ETIMEDOUT|fetch failed|network/i.test(msg);
+        if (!isOverload && !isNetwork) {
+          // Some other unexpected error — don't waste retries.
+          console.warn(`[HUNTER_LLM] ${model} attempt ${attempt + 1} unretriable error:`, msg);
+          break;
+        }
+
+        // If we have another attempt left for this model, back off and retry.
+        if (attempt < BACKOFF_MS.length - 1) {
+          const wait = BACKOFF_MS[attempt];
+          console.warn(`[HUNTER_LLM] ${model} attempt ${attempt + 1} got ${isOverload ? 'overload' : 'network err'}, retrying in ${wait}ms`);
+          await new Promise((r) => setTimeout(r, wait));
+        } else {
+          console.warn(`[HUNTER_LLM] ${model} exhausted ${BACKOFF_MS.length} retries — falling back to next model`);
+        }
+      }
+    }
+  }
+
+  throw new Error(`[HUNTER_LLM] All Gemini models overloaded or unavailable. Last error: ${lastErrMsg}. Wait ~30 seconds and try again, or check https://status.cloud.google.com for outages.`);
 }
 
 const SYSTEM_PROMPT = `You are an A&R scout for Songfinch. Use Google Search to find emerging recording artists matching the criteria. Search Pitchfork, FADER, Stereogum, NPR Music, Brooklyn Vegan year-end and "best new" lists from 2024-2025; festival lineups; Bandcamp editorial picks.
