@@ -43,10 +43,10 @@ const criteriaSchema = z.object({
   recency: z.object({ sinceYear: z.number().optional() }).optional(),
   instrument: z.string().optional(),
   targetCount: z.number().int().min(1).max(100).default(25),
+  minScore: z.number().min(0).max(100).optional(),
   source: z.enum(['musicbrainz', 'llm']).optional(),
-}).refine((c) => c.genres.length > 0 || c.regions.length > 0, {
-  message: 'At least one genre or region must be specified',
 });
+// No min-filter requirement — hunts with zero criteria run on weights alone.
 
 export async function POST(req: NextRequest) {
   const { actor, response } = await requireEditorActor(req);

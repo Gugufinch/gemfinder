@@ -232,8 +232,17 @@ function buildPrompt(criteria: HunterCriteria): string {
   const parts: string[] = [];
   parts.push('Find ~30 emerging artists for Songfinch\'s A&R queue.');
   parts.push('\nCriteria:');
-  if (criteria.genres.length > 0) parts.push(`- Genres: ${criteria.genres.join(', ')}`);
-  if (criteria.regions.length > 0) parts.push(`- Country regions (ISO codes): ${criteria.regions.join(', ')}`);
+  const hasGenres = criteria.genres.length > 0;
+  const hasRegions = criteria.regions.length > 0;
+  const hasLocations = criteria.locations && criteria.locations.length > 0;
+  if (!hasGenres && !hasRegions && !hasLocations) {
+    // Weight-only hunt — no explicit filters. Tell the LLM to surface a varied
+    // mix of emerging artists across genres + regions, biased toward "rising
+    // right now" press coverage. Operator's workspace weights will rank them.
+    parts.push('- (No explicit genre/region/location filter — return a varied mix of currently-rising emerging artists across diverse genres and regions)');
+  }
+  if (hasGenres) parts.push(`- Genres: ${criteria.genres.join(', ')}`);
+  if (hasRegions) parts.push(`- Country regions (ISO codes): ${criteria.regions.join(', ')}`);
   if (criteria.locations && criteria.locations.length > 0) parts.push(`- Specific locations (cities/states/neighborhoods — bias results heavily toward artists actually based here): ${criteria.locations.join(', ')}`);
   if (criteria.roleTarget !== 'both') parts.push(`- Role target: ${criteria.roleTarget}`);
   const minListeners = criteria.sizeBracket?.min ?? 1000;

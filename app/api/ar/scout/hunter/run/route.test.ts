@@ -151,13 +151,14 @@ describe('POST /api/ar/scout/hunter/run', () => {
     expect(json.error).toBe('Invalid criteria');
   });
 
-  it('returns 400 when both genres and regions are empty', async () => {
+  it('accepts a hunt with NO genres/regions/locations (weight-only hunt)', async () => {
+    // Previously required at least one of (genres, regions). Now valid — the
+    // LLM agent uses workspace weights to discover candidates without explicit filters.
     const req = makeReq('POST', { body: { genres: [], regions: [], targetCount: 10 } });
     const res = await POST(req);
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(202);
     const json = await res.json();
-    expect(json.error).toBe('Invalid criteria');
-    expect(JSON.stringify(json.details)).toMatch(/genre or region/);
+    expect(json.ok).toBe(true);
   });
 
   it('returns 400 when targetCount exceeds max of 100', async () => {

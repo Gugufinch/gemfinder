@@ -282,6 +282,7 @@ export type HunterCriteria = {
   recency?: { sinceYear?: number };
   instrument?: string;
   targetCount: number;
+  minScore?: number;  // Per-hunt score floor (0-100). Defaults to 35 if unset. Below this score, candidates gate out as low_score:N.
   // source is set server-side; not user-selectable in v1.
   source?: HunterSource;
 };

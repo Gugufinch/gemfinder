@@ -3722,6 +3722,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [scoutV3HunterRunsLoading, setScoutV3HunterRunsLoading] = useState(false);
   const [scoutV3HunterExpandedRunId, setScoutV3HunterExpandedRunId] = useState(null);
   const [scoutV3HunterRunDetail, setScoutV3HunterRunDetail] = useState(null);
+  const [scoutV3QueueFilterRunId, setScoutV3QueueFilterRunId] = useState(null);
   const [scoutV3HunterPollTick, setScoutV3HunterPollTick] = useState(0);
   const [scoutV3HunterWeightsOpen, setScoutV3HunterWeightsOpen] = useState(false);
   const [scoutV3HunterWeightsLoading, setScoutV3HunterWeightsLoading] = useState(false);
@@ -13289,12 +13290,25 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
             ) : (
               <div style={{ display: "grid", gap: 12 }}>
                 {/* + Hunt for more — start a new agent run without leaving the queue. */}
-                <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: -4 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: -4, gap: 8, flexWrap: "wrap" }}>
+                  {scoutV3QueueFilterRunId ? (
+                    <div style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 12, padding: "6px 10px", background: C.bb, color: C.bu, borderRadius: 6 }}>
+                      <span>🔍 Showing only candidates from this hunter run</span>
+                      <button
+                        onClick={() => setScoutV3QueueFilterRunId(null)}
+                        style={{ background: "transparent", border: "none", color: C.bu, textDecoration: "underline", cursor: "pointer", fontSize: 12, padding: 0 }}
+                      >
+                        clear filter
+                      </button>
+                    </div>
+                  ) : <div />}
                   <button onClick={() => setScoutV3Tab("search")} style={actionBtn(true, "accent")}>
                     + Hunt for more candidates →
                   </button>
                 </div>
-                {scoutV3Candidates.map(c => {
+                {scoutV3Candidates
+                  .filter(c => !scoutV3QueueFilterRunId || c.hunterRunId === scoutV3QueueFilterRunId)
+                  .map(c => {
                   const scoreTone = c.score == null ? { fg: C.ts, bg: C.sa } : c.score >= 75 ? { fg: C.gn, bg: C.gb } : c.score >= 60 ? { fg: C.bu, bg: C.bb } : { fg: C.ts, bg: C.sa };
                   const followerRows = [
                     c.spotifyMonthlyListeners && { label: "Spotify followers", value: c.spotifyMonthlyListeners.toLocaleString() },
@@ -13533,7 +13547,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
               {/* Genres */}
               <div style={{ marginBottom: 16 }}>
                 <label style={{ fontSize: 12, fontWeight: 700, display: "block", marginBottom: 6 }}>
-                  Genres <span style={{ color: C.ts, fontWeight: 400 }}>(at least one genre OR region required)</span>
+                  Genres <span style={{ color: C.ts, fontWeight: 400 }}>(all filters optional — empty hunt uses workspace weights only)</span>
                 </label>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 6 }}>
                   {scoutV3HunterCriteria.genres.map(g => (
@@ -13758,6 +13772,39 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                 </div>
               </div>
 
+              {/* Min score — tune how strict the score floor is */}
+              <div style={{ marginBottom: 16 }}>
+                <label style={{ fontSize: 12, fontWeight: 700, display: "block", marginBottom: 6 }}>
+                  Min score <span style={{ color: C.ts, fontWeight: 400 }}>
+                    (0-100, default 35 — lower means more candidates make it through, higher means stricter)
+                  </span>
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  placeholder="35"
+                  value={scoutV3HunterCriteria.minScore ?? ""}
+                  onChange={e => {
+                    const raw = e.target.value;
+                    if (raw === "") {
+                      setScoutV3HunterCriteria(c => ({ ...c, minScore: undefined }));
+                    } else {
+                      const v = parseInt(raw, 10);
+                      setScoutV3HunterCriteria(c => ({ ...c, minScore: Number.isFinite(v) ? v : undefined }));
+                    }
+                  }}
+                  onBlur={e => {
+                    const v = parseInt(e.target.value, 10);
+                    if (Number.isFinite(v)) {
+                      const clamped = Math.max(0, Math.min(100, v));
+                      if (clamped !== v) setScoutV3HunterCriteria(c => ({ ...c, minScore: clamped }));
+                    }
+                  }}
+                  style={{ width: 120, padding: "8px 12px", border: `1px solid ${C.bd}`, borderRadius: 6, fontSize: 13 }}
+                />
+              </div>
+
               {/* Hint: scoring weights live on the Runs tab */}
               <div style={{ fontSize: 11, color: C.ts, padding: "8px 12px", background: C.sa, borderRadius: 6, marginBottom: 16, lineHeight: 1.5 }}>
                 <strong>Looking for follower / monthly-listener weights?</strong> Those are
@@ -13785,10 +13832,9 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                     ? [...existingLocations, pendingLocation]
                     : existingLocations;
 
-                  if (genres.length === 0 && regions.length === 0 && locations.length === 0) {
-                    window.alert("Add at least one genre, region, or location. Type a value and press Enter or click Add to create a chip.");
-                    return;
-                  }
+                  // Weight-only hunts are valid now — the LLM uses workspace weights when no filters are set.
+                  // Only block if the user clearly has typed nothing AND submitted (likely a misclick).
+                  // No alert / no return on empty criteria.
 
                   // Reflect the auto-committed chips in UI state, clear pending inputs
                   setScoutV3HunterCriteria(c => ({ ...c, genres, regions, locations }));
@@ -13804,6 +13850,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                     targetCount: scoutV3HunterCriteria.targetCount,
                   };
                   if (locations.length > 0) payload.locations = locations;
+                  if (typeof scoutV3HunterCriteria.minScore === "number") payload.minScore = scoutV3HunterCriteria.minScore;
                   const sb = scoutV3HunterCriteria.sizeBracket;
                   if (sb && (typeof sb.min === "number" || typeof sb.max === "number")) {
                     payload.sizeBracket = {};
@@ -13994,6 +14041,41 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                               Pipeline crashed: {detail.errorMessage}
                             </div>
                           )}
+
+                          {/* Run-actions footer */}
+                          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", paddingTop: 10, borderTop: `1px solid ${C.bd}`, flexWrap: "wrap" }}>
+                            {detail.summary.added > 0 && (
+                              <button
+                                onClick={() => { setScoutV3QueueFilterRunId(detail.id); setScoutV3Tab("queue"); }}
+                                style={{ ...actionBtn(false, "accent"), fontSize: 12 }}
+                                title={`Show only the ${detail.summary.added} candidates added by this run`}
+                              >
+                                View {detail.summary.added} added in Queue →
+                              </button>
+                            )}
+                            <button
+                              onClick={() => {
+                                // Reload the run's criteria into the search form, switch to Search tab.
+                                setScoutV3HunterCriteria(prev => ({
+                                  ...prev,
+                                  genres: detail.criteria.genres || [],
+                                  regions: detail.criteria.regions || [],
+                                  locations: detail.criteria.locations || [],
+                                  roleTarget: detail.criteria.roleTarget || "both",
+                                  targetCount: detail.criteria.targetCount || 25,
+                                  sizeBracket: detail.criteria.sizeBracket || { min: undefined, max: undefined },
+                                  recency: detail.criteria.recency || { sinceYear: undefined },
+                                  instrument: detail.criteria.instrument || "",
+                                  minScore: detail.criteria.minScore,
+                                }));
+                                setScoutV3Tab("search");
+                              }}
+                              style={{ ...actionBtn(false, "neutral"), fontSize: 12 }}
+                              title="Load this run's criteria into the Search form so you can tweak + relaunch"
+                            >
+                              🔁 Run again with same criteria
+                            </button>
+                          </div>
                         </div>
                       )}
                     </div>

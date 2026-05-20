@@ -128,10 +128,12 @@ export async function runPipeline(input: RunPipelineInput): Promise<HunterRunSum
               return;
             }
             const score = computeScore(enriched, weights);
-            // Hard score floor: reject candidates that score under 50. Below
-            // this they're noise (genre mismatch + missing data + low followers).
-            // Surface the score in the gated_reasons so the operator can see WHY.
-            const MIN_SCORE_FLOOR = 50;
+            // Score floor: reject low-scoring candidates. Default 35 (low enough
+            // to let through candidates that lack IG/TT scrape data — those dims
+            // hit missing_baseline=50, dragging the weighted average down even
+            // for legit emerging artists). Operators can tune per-run via
+            // criteria.minScore.
+            const MIN_SCORE_FLOOR = typeof criteria.minScore === 'number' ? criteria.minScore : 35;
             if (score.final < MIN_SCORE_FLOOR) {
               summary.gatedOut++;
               summary.gatedReasons.push({
