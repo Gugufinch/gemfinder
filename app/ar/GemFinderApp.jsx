@@ -3694,6 +3694,12 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [scoutV3Stats, setScoutV3Stats] = useState({ pendingCount: 0, rejectedCount: 0 });
   const [scoutV3Tab, setScoutV3Tab] = useState("queue");
   const [scoutV3Candidates, setScoutV3Candidates] = useState([]);
+  // Sort + filter + view state for the queue. Defaults: newest first, no filters, card view.
+  const [scoutV3QueueSort, setScoutV3QueueSort] = useState("date_desc");  // date_desc | date_asc | score_desc | score_asc | name_asc | name_desc | spotify_desc | spotify_asc
+  const [scoutV3QueueGenreFilter, setScoutV3QueueGenreFilter] = useState("");  // substring match against primaryGenre + genres
+  const [scoutV3QueueMinScore, setScoutV3QueueMinScore] = useState("");        // string for input control
+  const [scoutV3QueueContactOnly, setScoutV3QueueContactOnly] = useState(false); // only show candidates with a contact email
+  const [scoutV3QueueView, setScoutV3QueueView] = useState("card");  // card | compact
   const [scoutV3Rejections, setScoutV3Rejections] = useState([]);
   const [scoutV3AddModalOpen, setScoutV3AddModalOpen] = useState(false);
   const [scoutV3ApproveTarget, setScoutV3ApproveTarget] = useState(null);
@@ -3722,6 +3728,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [scoutV3HunterRunsLoading, setScoutV3HunterRunsLoading] = useState(false);
   const [scoutV3HunterExpandedRunId, setScoutV3HunterExpandedRunId] = useState(null);
   const [scoutV3HunterRunDetail, setScoutV3HunterRunDetail] = useState(null);
+  const [scoutV3HunterRunAddedCandidates, setScoutV3HunterRunAddedCandidates] = useState([]);
   const [scoutV3QueueFilterRunId, setScoutV3QueueFilterRunId] = useState(null);
   const [scoutV3HunterPollTick, setScoutV3HunterPollTick] = useState(0);
   const [scoutV3HunterWeightsOpen, setScoutV3HunterWeightsOpen] = useState(false);
@@ -4893,11 +4900,17 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   useEffect(() => {
     if (!scoutV3HunterExpandedRunId || !selectedWorkspace?.id) {
       setScoutV3HunterRunDetail(null);
+      setScoutV3HunterRunAddedCandidates([]);
       return;
     }
     fetch(`/api/ar/scout/hunter/run/${encodeURIComponent(scoutV3HunterExpandedRunId)}?workspaceId=${encodeURIComponent(selectedWorkspace.id)}`, { credentials: "include" })
       .then(r => r.json())
-      .then(data => { if (data.ok) setScoutV3HunterRunDetail(data.run); })
+      .then(data => {
+        if (data.ok) {
+          setScoutV3HunterRunDetail(data.run);
+          setScoutV3HunterRunAddedCandidates(Array.isArray(data.addedCandidates) ? data.addedCandidates : []);
+        }
+      })
       .catch(err => console.warn("[SCOUT_V3_HUNTER] run detail fetch failed:", err));
   }, [scoutV3HunterExpandedRunId, selectedWorkspace?.id, scoutV3HunterPollTick]);
 
@@ -13306,9 +13319,135 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                     + Hunt for more candidates →
                   </button>
                 </div>
-                {scoutV3Candidates
-                  .filter(c => !scoutV3QueueFilterRunId || c.hunterRunId === scoutV3QueueFilterRunId)
-                  .map(c => {
+                {/* Sort + filter + view controls — client-side over the loaded queue (capped at 50). */}
+                <div style={{ ...cS, padding: "10px 14px", display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center", fontSize: 12 }}>
+                  <span style={{ color: C.ts, fontWeight: 700 }}>Sort</span>
+                  <select
+                    value={scoutV3QueueSort}
+                    onChange={e => setScoutV3QueueSort(e.target.value)}
+                    style={{ padding: "6px 10px", border: `1px solid ${C.bd}`, borderRadius: 6, fontSize: 12 }}
+                  >
+                    <option value="date_desc">Newest first</option>
+                    <option value="date_asc">Oldest first</option>
+                    <option value="score_desc">Score: high → low</option>
+                    <option value="score_asc">Score: low → high</option>
+                    <option value="name_asc">Name: A → Z</option>
+                    <option value="name_desc">Name: Z → A</option>
+                    <option value="spotify_desc">Spotify followers: high → low</option>
+                    <option value="spotify_asc">Spotify followers: low → high</option>
+                  </select>
+
+                  <span style={{ color: C.bd }}>│</span>
+
+                  <span style={{ color: C.ts, fontWeight: 700 }}>Filter</span>
+                  <input
+                    type="text"
+                    placeholder="Genre contains..."
+                    value={scoutV3QueueGenreFilter}
+                    onChange={e => setScoutV3QueueGenreFilter(e.target.value)}
+                    style={{ padding: "6px 10px", border: `1px solid ${C.bd}`, borderRadius: 6, fontSize: 12, width: 140 }}
+                  />
+                  <input
+                    type="number"
+                    placeholder="Min score"
+                    value={scoutV3QueueMinScore}
+                    onChange={e => setScoutV3QueueMinScore(e.target.value)}
+                    min={0}
+                    max={100}
+                    style={{ padding: "6px 10px", border: `1px solid ${C.bd}`, borderRadius: 6, fontSize: 12, width: 100 }}
+                  />
+                  <label style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer", color: C.ts }}>
+                    <input type="checkbox" checked={scoutV3QueueContactOnly} onChange={e => setScoutV3QueueContactOnly(e.target.checked)} />
+                    Has contact only
+                  </label>
+
+                  <span style={{ color: C.bd }}>│</span>
+
+                  <span style={{ color: C.ts, fontWeight: 700 }}>View</span>
+                  <button onClick={() => setScoutV3QueueView("card")} style={{ ...actionBtn(scoutV3QueueView === "card", "neutral"), fontSize: 11 }}>Card</button>
+                  <button onClick={() => setScoutV3QueueView("compact")} style={{ ...actionBtn(scoutV3QueueView === "compact", "neutral"), fontSize: 11 }}>Compact</button>
+
+                  {(scoutV3QueueGenreFilter || scoutV3QueueMinScore || scoutV3QueueContactOnly || scoutV3QueueSort !== "date_desc") && (
+                    <button
+                      onClick={() => {
+                        setScoutV3QueueSort("date_desc");
+                        setScoutV3QueueGenreFilter("");
+                        setScoutV3QueueMinScore("");
+                        setScoutV3QueueContactOnly(false);
+                      }}
+                      style={{ marginLeft: "auto", background: "transparent", border: "none", color: C.ts, textDecoration: "underline", cursor: "pointer", fontSize: 11 }}
+                    >
+                      Reset filters
+                    </button>
+                  )}
+                </div>
+
+                {(() => {
+                  // Apply all filters + sort to derive the visible candidate list.
+                  const minScoreNum = scoutV3QueueMinScore === "" ? null : parseInt(scoutV3QueueMinScore, 10);
+                  const genreSubstr = scoutV3QueueGenreFilter.trim().toLowerCase();
+                  const visible = scoutV3Candidates.filter(c => {
+                    if (scoutV3QueueFilterRunId && c.hunterRunId !== scoutV3QueueFilterRunId) return false;
+                    if (minScoreNum != null && Number.isFinite(minScoreNum) && (c.score == null || c.score < minScoreNum)) return false;
+                    if (genreSubstr) {
+                      const allGenres = [(c.primaryGenre || ""), ...(c.genres || [])].join(" ").toLowerCase();
+                      if (!allGenres.includes(genreSubstr)) return false;
+                    }
+                    if (scoutV3QueueContactOnly && !c.primaryEmail) return false;
+                    return true;
+                  });
+                  const sortedVisible = [...visible].sort((a, b) => {
+                    switch (scoutV3QueueSort) {
+                      case "date_asc":   return new Date(a.createdAt) - new Date(b.createdAt);
+                      case "date_desc":  return new Date(b.createdAt) - new Date(a.createdAt);
+                      case "score_desc": return (b.score ?? -1) - (a.score ?? -1);
+                      case "score_asc":  return (a.score ?? 999) - (b.score ?? 999);
+                      case "name_asc":   return (a.displayName || "").localeCompare(b.displayName || "");
+                      case "name_desc":  return (b.displayName || "").localeCompare(a.displayName || "");
+                      case "spotify_desc": return (b.spotifyMonthlyListeners || 0) - (a.spotifyMonthlyListeners || 0);
+                      case "spotify_asc":  return (a.spotifyMonthlyListeners || 0) - (b.spotifyMonthlyListeners || 0);
+                      default: return 0;
+                    }
+                  });
+
+                  if (sortedVisible.length === 0) {
+                    return (
+                      <div style={{ ...cS, padding: "24px 28px", textAlign: "center", fontSize: 13, color: C.ts }}>
+                        No candidates match the current filters. <button onClick={() => { setScoutV3QueueGenreFilter(""); setScoutV3QueueMinScore(""); setScoutV3QueueContactOnly(false); }} style={{ background: "transparent", border: "none", color: C.bu, textDecoration: "underline", cursor: "pointer", fontSize: 13 }}>Clear filters</button>
+                      </div>
+                    );
+                  }
+
+                  // Compact view: dense rows, one line per candidate
+                  if (scoutV3QueueView === "compact") {
+                    return (
+                      <div style={{ ...cS, overflow: "hidden" }}>
+                        {sortedVisible.map((c, i) => {
+                          const score = c.score == null ? null : Math.round(c.score);
+                          const scoreTone = score == null ? { fg: C.ts, bg: C.sa } : score >= 75 ? { fg: C.gn, bg: C.gb } : score >= 60 ? { fg: C.bu, bg: C.bb } : { fg: C.ts, bg: C.sa };
+                          return (
+                            <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", fontSize: 13, borderTop: i === 0 ? "none" : `1px solid ${C.bd}` }}>
+                              <span style={{ fontWeight: 700 }}>{c.displayName}</span>
+                              {score != null && (
+                                <span style={{ background: scoreTone.bg, color: scoreTone.fg, padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700 }}>{score}</span>
+                              )}
+                              {c.primaryGenre && <span style={{ color: C.ts, fontSize: 11 }}>{c.primaryGenre}</span>}
+                              {c.spotifyMonthlyListeners && <span style={{ color: C.ts, fontSize: 11 }}>· {c.spotifyMonthlyListeners.toLocaleString()} Spotify</span>}
+                              {c.primaryEmail && <span style={{ color: C.gn, fontSize: 11 }}>· 📧</span>}
+                              <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+                                {c.spotifyUrl && <a href={c.spotifyUrl} target="_blank" rel="noopener noreferrer" style={{ color: C.bu, textDecoration: "none", fontSize: 11 }}>Spotify ↗</a>}
+                                <button onClick={() => setScoutV3ApproveTarget(c)} style={{ ...actionBtn(true, "accent"), fontSize: 11 }}>✓</button>
+                                <button onClick={() => setScoutV3RejectTarget(c)} style={{ ...actionBtn(false, "danger"), fontSize: 11 }}>✗</button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  }
+
+                  // Card view (default) — full rich cards
+                  return sortedVisible.map(c => {
                   const scoreTone = c.score == null ? { fg: C.ts, bg: C.sa } : c.score >= 75 ? { fg: C.gn, bg: C.gb } : c.score >= 60 ? { fg: C.bu, bg: C.bb } : { fg: C.ts, bg: C.sa };
                   const followerRows = [
                     c.spotifyMonthlyListeners && { label: "Spotify followers", value: c.spotifyMonthlyListeners.toLocaleString() },
@@ -13473,7 +13612,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                     </div>
                   </div>
                 );
-                })}
+                });
+                })()}
               </div>
             )
           )}
@@ -14039,6 +14179,46 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                           {detail.status === "failed" && detail.errorMessage && (
                             <div style={{ fontSize: 12, color: C.rd, padding: "8px 12px", background: C.rb, borderRadius: 6 }}>
                               Pipeline crashed: {detail.errorMessage}
+                            </div>
+                          )}
+
+                          {/* Added artists — inline list of candidates this run inserted into the queue.
+                              Lets the operator review WHO came out of the run without leaving the Runs tab. */}
+                          {scoutV3HunterRunAddedCandidates.length > 0 && (
+                            <div>
+                              <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>
+                                ✨ Added to queue ({scoutV3HunterRunAddedCandidates.length}):
+                              </div>
+                              <div style={{ display: "grid", gap: 6, maxHeight: 320, overflowY: "auto" }}>
+                                {scoutV3HunterRunAddedCandidates.map(ac => {
+                                  const score = ac.score == null ? null : Math.round(ac.score);
+                                  const scoreTone = score == null ? { fg: C.ts, bg: C.sa }
+                                    : score >= 75 ? { fg: C.gn, bg: C.gb }
+                                    : score >= 50 ? { fg: C.bu, bg: C.bb }
+                                    : { fg: C.ts, bg: C.sa };
+                                  return (
+                                    <div key={ac.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", background: C.sa, borderRadius: 6, fontSize: 12 }}>
+                                      <span style={{ fontWeight: 700, fontSize: 13 }}>{ac.displayName}</span>
+                                      {score != null && (
+                                        <span style={{ background: scoreTone.bg, color: scoreTone.fg, padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700 }}>
+                                          {score}
+                                        </span>
+                                      )}
+                                      {ac.primaryGenre && (
+                                        <span style={{ color: C.ts }}>{ac.primaryGenre}</span>
+                                      )}
+                                      {ac.spotifyMonthlyListeners && (
+                                        <span style={{ color: C.ts }}>· {ac.spotifyMonthlyListeners.toLocaleString()} Spotify</span>
+                                      )}
+                                      {ac.spotifyUrl && (
+                                        <a href={ac.spotifyUrl} target="_blank" rel="noopener noreferrer" style={{ color: C.bu, textDecoration: "none", marginLeft: "auto", fontSize: 11 }}>
+                                          Spotify ↗
+                                        </a>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
                             </div>
                           )}
 

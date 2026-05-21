@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getAuthUserById } from '@/lib/gemfinder/auth-store';
 import { listWorkspaceProjects } from '@/lib/gemfinder/project-store';
 import { getRun, sweepStaleRuns, deleteRun } from '@/lib/gemfinder/hunter-runs-store';
+import { listCandidatesByHunterRun } from '@/lib/gemfinder/scout-candidate-store';
 
 // Inline auth helper — duplicated per existing scout route convention.
 async function requireEditorActor(req: NextRequest) {
@@ -64,7 +65,18 @@ export async function GET(
     return NextResponse.json({ error: 'Run not found' }, { status: 404 });
   }
 
-  return NextResponse.json({ ok: true, run });
+  // Inline the candidates this run produced so the UI can render them in the
+  // run detail panel without a second round-trip. Failures degrade gracefully
+  // (empty array) — operator can still see the run summary even if the
+  // candidate fetch fails.
+  let addedCandidates: Awaited<ReturnType<typeof listCandidatesByHunterRun>> = [];
+  try {
+    addedCandidates = await listCandidatesByHunterRun(workspaceId, runId);
+  } catch (err) {
+    console.warn('[HUNTER_RUN_DETAIL] listCandidatesByHunterRun failed:', err);
+  }
+
+  return NextResponse.json({ ok: true, run, addedCandidates });
 }
 
 export async function DELETE(

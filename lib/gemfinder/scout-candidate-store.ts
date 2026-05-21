@@ -318,6 +318,28 @@ export async function listCandidatesByWorkspace(
   return res.rows.map(rowToCandidate);
 }
 
+/**
+ * List candidates inserted by a specific hunter run. Used by the run-detail
+ * UI to show "what came out of this run" inline without forcing the user
+ * to switch to the Queue tab and find them. Sorted by score desc so the
+ * strongest hits surface first.
+ *
+ * Returns an empty array for unknown runIds (no error) — the UI handles
+ * the empty case.
+ */
+export async function listCandidatesByHunterRun(
+  workspaceId: string,
+  hunterRunId: string,
+): Promise<ScoutCandidate[]> {
+  const res = await getPool().query(
+    `select * from scout_candidates
+     where workspace_id = $1 and hunter_run_id = $2
+     order by score desc nulls last, created_at desc`,
+    [workspaceId, hunterRunId],
+  );
+  return res.rows.map(rowToCandidate);
+}
+
 export async function deleteCandidate(workspaceId: string, id: string): Promise<boolean> {
   const res = await getPool().query(
     `delete from scout_candidates where workspace_id = $1 and id = $2`,
