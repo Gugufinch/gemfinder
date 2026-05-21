@@ -3746,6 +3746,11 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [scoutV3HunterExpandedRunId, setScoutV3HunterExpandedRunId] = useState(null);
   const [scoutV3HunterRunDetail, setScoutV3HunterRunDetail] = useState(null);
   const [scoutV3HunterRunAddedCandidates, setScoutV3HunterRunAddedCandidates] = useState([]);
+  // Live activity log for the expanded Hunter run. Holds events for ONE run
+  // at a time (resets when operator collapses/switches). Polls every 3s while
+  // run is 'running'; loads once + stops polling when complete or failed.
+  const [scoutV3RunEvents, setScoutV3RunEvents] = useState([]);
+  const [scoutV3RunEventsLoading, setScoutV3RunEventsLoading] = useState(false);
   const [scoutV3QueueFilterRunId, setScoutV3QueueFilterRunId] = useState(null);
   // Info modal: full-detail view of one candidate for A&R deep-dive review
   const [scoutV3InfoCandidate, setScoutV3InfoCandidate] = useState(null);
@@ -4946,6 +4951,66 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       .catch(err => console.warn("[SCOUT_V3_HUNTER] run detail fetch failed:", err));
   }, [scoutV3HunterExpandedRunId, selectedWorkspace?.id, scoutV3HunterPollTick]);
 
+  // Scout V3 Hunter: load + stream activity events for the expanded run.
+  // Initial load grabs the most recent 100 events (DESC). If the run is still
+  // running, polls every 3s with ?since=<newest-cursor> to tail new events.
+  // Stops polling when run reaches a terminal status.
+  useEffect(() => {
+    if (!scoutV3HunterExpandedRunId || !selectedWorkspace?.id) {
+      setScoutV3RunEvents([]);
+      return;
+    }
+    const runId = scoutV3HunterExpandedRunId;
+    const workspaceId = selectedWorkspace.id;
+    let cancelled = false;
+    let pollTimer = null;
+    let sinceCursor = null;
+
+    setScoutV3RunEventsLoading(true);
+    fetch(`/api/ar/scout/events?workspaceId=${encodeURIComponent(workspaceId)}&runId=${encodeURIComponent(runId)}&limit=100`, { credentials: "include" })
+      .then(r => r.json())
+      .then(data => {
+        if (cancelled) return;
+        if (data.ok && Array.isArray(data.events)) {
+          setScoutV3RunEvents(data.events);
+          // Newest event's createdAt becomes the cursor for incremental polls.
+          // data.events is DESC, so the newest is events[0].
+          sinceCursor = data.events[0]?.createdAt || null;
+        }
+      })
+      .catch(err => console.warn("[SCOUT_V3_HUNTER] run events load failed:", err))
+      .finally(() => { if (!cancelled) setScoutV3RunEventsLoading(false); });
+
+    // Poll only while the run we're looking at appears running. The dependency
+    // on scoutV3HunterRunDetail.status flips this naturally.
+    const runIsActive = scoutV3HunterRunDetail?.id === runId && scoutV3HunterRunDetail?.status === "running";
+    if (runIsActive) {
+      pollTimer = setInterval(async () => {
+        if (cancelled) return;
+        try {
+          const url = sinceCursor
+            ? `/api/ar/scout/events?workspaceId=${encodeURIComponent(workspaceId)}&runId=${encodeURIComponent(runId)}&since=${encodeURIComponent(sinceCursor)}&limit=100`
+            : `/api/ar/scout/events?workspaceId=${encodeURIComponent(workspaceId)}&runId=${encodeURIComponent(runId)}&limit=100`;
+          const r = await fetch(url, { credentials: "include" });
+          const j = await r.json();
+          if (j.ok && Array.isArray(j.events) && j.events.length > 0) {
+            // With `since`, the API returns ASC (oldest-new first). We display
+            // DESC, so reverse and prepend.
+            setScoutV3RunEvents(prev => [...j.events.slice().reverse(), ...prev]);
+            sinceCursor = j.newestAt || sinceCursor;
+          }
+        } catch (err) {
+          console.warn("[SCOUT_V3_HUNTER] run events poll failed:", err);
+        }
+      }, 3000);
+    }
+
+    return () => {
+      cancelled = true;
+      if (pollTimer) clearInterval(pollTimer);
+    };
+  }, [scoutV3HunterExpandedRunId, selectedWorkspace?.id, scoutV3HunterRunDetail?.status]);
+
   // Scout V3 Hunter: fetch weights when modal opens
   useEffect(() => {
     if (!scoutV3HunterWeightsOpen || !selectedWorkspace?.id) return;
@@ -5836,6 +5901,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const css = `
     @keyframes si{from{opacity:0;transform:translateY(-10px)}to{opacity:1;transform:translateY(0)}}
     @keyframes fu{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+    @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.35}}
     html,body,#root{margin:0;padding:0;cursor:default;background:${C.bg}}
     input[type="file"]{display:none}
     ::selection{background:${C.ac}2b}
@@ -14326,6 +14392,65 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                             <div><div style={{ color: C.ts }}>Scored</div><div style={{ fontWeight: 700, fontSize: 18 }}>{detail.summary.scored}</div></div>
                             <div><div style={{ color: C.ts }}>Added</div><div style={{ fontWeight: 700, fontSize: 18, color: C.gn }}>{detail.summary.added}</div></div>
                           </div>
+
+                          {/* Activity log — live timeline of what the agent is doing right now.
+                              Reuses the same event data the candidate modal does, but scoped by runId. */}
+                          {(scoutV3RunEvents.length > 0 || scoutV3RunEventsLoading) && (() => {
+                            const phaseIcon = (phase) => ({
+                              meta: "▶", mb_fetch: "🎼", deep_research: "🔍", spotify: "🟢",
+                              top_tracks: "🎵", ig_scrape: "📷", tt_scrape: "🎬", score: "📊", cache: "💾",
+                            }[phase] || "•");
+                            const statusColor = (status) => ({
+                              started: C.ts, success: C.gn, failed: C.rd, skipped: C.tt,
+                            }[status] || C.ts);
+                            const relativeTime = (iso) => {
+                              const ms = Date.now() - new Date(iso).getTime();
+                              if (ms < 5000) return "just now";
+                              if (ms < 60_000) return `${Math.round(ms / 1000)}s ago`;
+                              if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m ago`;
+                              if (ms < 86_400_000) return `${Math.round(ms / 3_600_000)}h ago`;
+                              return new Date(iso).toLocaleDateString();
+                            };
+                            const isLive = detail.status === "running";
+                            return (
+                              <div>
+                                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                                  <div style={{ fontSize: 12, fontWeight: 700 }}>
+                                    Activity log <span style={{ color: C.ts, fontWeight: 500 }}>({scoutV3RunEvents.length} event{scoutV3RunEvents.length === 1 ? "" : "s"})</span>
+                                  </div>
+                                  {isLive && (
+                                    <span style={{ fontSize: 10, color: C.gn, fontWeight: 700, padding: "2px 6px", background: `${C.gn}15`, borderRadius: 999, display: "flex", alignItems: "center", gap: 4 }}>
+                                      <span style={{ width: 6, height: 6, background: C.gn, borderRadius: "50%", animation: "pulse 1.5s ease-in-out infinite" }} />
+                                      LIVE
+                                    </span>
+                                  )}
+                                </div>
+                                <div style={{ maxHeight: 320, overflowY: "auto", border: `1px solid ${C.bd}`, borderRadius: 8, background: C.sf }}>
+                                  {scoutV3RunEventsLoading && scoutV3RunEvents.length === 0 && (
+                                    <div style={{ padding: 12, fontSize: 12, color: C.ts }}>Loading events…</div>
+                                  )}
+                                  {scoutV3RunEvents.map((ev, idx) => (
+                                    <div
+                                      key={`runevt-${ev.id || idx}`}
+                                      style={{ padding: "8px 12px", borderTop: idx === 0 ? "none" : `1px solid ${C.bd}`, fontSize: 12, lineHeight: 1.5, display: "flex", gap: 10, alignItems: "flex-start" }}
+                                    >
+                                      <span style={{ fontSize: 13, minWidth: 22, textAlign: "center" }}>{phaseIcon(ev.phase)}</span>
+                                      <div style={{ flex: 1, minWidth: 0 }}>
+                                        <div style={{ color: C.tx, fontWeight: ev.status === "failed" ? 700 : 500 }}>{ev.message}</div>
+                                        <div style={{ marginTop: 2, fontSize: 10, color: C.ts, display: "flex", gap: 6, flexWrap: "wrap" }}>
+                                          <span style={{ color: statusColor(ev.status), fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>{ev.status}</span>
+                                          <span>·</span>
+                                          <span>{ev.phase}</span>
+                                          <span>·</span>
+                                          <span>{relativeTime(ev.createdAt)}</span>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            );
+                          })()}
 
                           {/* Gated reasons (if any) */}
                           {detail.summary.gatedReasons?.length > 0 && (
