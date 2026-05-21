@@ -3732,6 +3732,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [scoutV3QueueFilterRunId, setScoutV3QueueFilterRunId] = useState(null);
   // Info modal: full-detail view of one candidate for A&R deep-dive review
   const [scoutV3InfoCandidate, setScoutV3InfoCandidate] = useState(null);
+  const [scoutV3InfoReenriching, setScoutV3InfoReenriching] = useState(false);
   const [scoutV3HunterPollTick, setScoutV3HunterPollTick] = useState(0);
   const [scoutV3HunterWeightsOpen, setScoutV3HunterWeightsOpen] = useState(false);
   const [scoutV3HunterWeightsLoading, setScoutV3HunterWeightsLoading] = useState(false);
@@ -14666,8 +14667,37 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                   </div>
 
                   {/* Action footer — sticky, big buttons */}
-                  <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", padding: "16px 24px", borderTop: `1px solid ${C.bd}`, background: C.sa }}>
+                  <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", padding: "16px 24px", borderTop: `1px solid ${C.bd}`, background: C.sa, flexWrap: "wrap" }}>
                     <button onClick={() => setScoutV3InfoCandidate(null)} style={{ ...actionBtn(false, "neutral"), fontSize: 14, padding: "10px 18px" }}>Close</button>
+                    <button
+                      onClick={async () => {
+                        if (!selectedWorkspace?.id || scoutV3InfoReenriching) return;
+                        setScoutV3InfoReenriching(true);
+                        try {
+                          const res = await fetch(`/api/ar/scout/candidates/${encodeURIComponent(c.id)}/reenrich?workspaceId=${encodeURIComponent(selectedWorkspace.id)}`, {
+                            method: "POST",
+                            credentials: "include",
+                          });
+                          const data = await res.json();
+                          if (data.ok && data.candidate) {
+                            setScoutV3InfoCandidate(data.candidate);
+                            // Also refresh the candidates list in the background.
+                            setScoutV3HunterPollTick(n => n + 1);
+                          } else {
+                            window.alert(`Re-enrich failed: ${data.error || "unknown error"}`);
+                          }
+                        } catch (err) {
+                          window.alert(`Re-enrich failed: ${err.message}`);
+                        } finally {
+                          setScoutV3InfoReenriching(false);
+                        }
+                      }}
+                      disabled={scoutV3InfoReenriching}
+                      style={{ ...actionBtn(false, "neutral"), fontSize: 14, padding: "10px 18px", opacity: scoutV3InfoReenriching ? 0.6 : 1 }}
+                      title="Re-run Spotify lookup + Gemini deep research + IG/TT scraping on this candidate. Useful when data is missing."
+                    >
+                      {scoutV3InfoReenriching ? "🔄 Re-enriching…" : "🔄 Re-enrich"}
+                    </button>
                     <button onClick={() => { const target = c; setScoutV3InfoCandidate(null); setScoutV3RejectTarget(target); }} style={{ ...actionBtn(false, "danger"), fontSize: 14, padding: "10px 18px" }}>✗ Reject</button>
                     <button onClick={() => { const target = c; setScoutV3InfoCandidate(null); setScoutV3ApproveTarget(target); }} style={{ ...actionBtn(true, "accent"), fontSize: 14, padding: "10px 18px" }}>✓ Approve into Kickoff</button>
                   </div>
