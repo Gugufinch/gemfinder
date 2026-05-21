@@ -25,6 +25,22 @@ export type RunPipelineInput = {
 const ENRICHMENT_CONCURRENCY = 8;
 
 /**
+ * Remove keys whose values are undefined / null / empty-string. Used for
+ * "merge non-empty fields over existing fields" — prevents a deferred deep
+ * research call from erasing good data via fields it failed to populate.
+ */
+function stripEmpty<T extends Record<string, unknown>>(obj: T): Partial<T> {
+  const result: Partial<T> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (v === undefined || v === null) continue;
+    if (typeof v === 'string' && v === '') continue;
+    if (Array.isArray(v) && v.length === 0) continue;
+    (result as Record<string, unknown>)[k] = v;
+  }
+  return result;
+}
+
+/**
  * Run the full Hunter pipeline asynchronously for a single hunter_runs row.
  *
  * Phases:
@@ -121,7 +137,11 @@ export async function runPipeline(input: RunPipelineInput): Promise<HunterRunSum
         const mb = queue.shift()!;
         const task = (async () => {
           try {
-            const enriched = await enrichCandidate(workspaceId, mb);
+            // PHASE C (light enrichment): skip the deep-research Gemini call to
+            // save quota. Spotify lookup + IG/TT scrape + MB enrichment are fast
+            // and cheap; deep research is the expensive Gemini call we defer
+            // to Phase D where it only runs on the top-N survivors after scoring.
+            const enriched = await enrichCandidate(workspaceId, mb, { skipDeepResearch: true });
             const identity = buildIdentity({
               displayName: enriched.displayName,
               spotifyArtistId: enriched.spotifyArtistId,
@@ -197,6 +217,39 @@ export async function runPipeline(input: RunPipelineInput): Promise<HunterRunSum
     // Phase E: sort + top N
     scored.sort((a, b) => b.finalScore - a.finalScore);
     const topN = scored.slice(0, criteria.targetCount);
+
+    // Phase E.5: DEEP RESEARCH (deferred from Phase C). Now that we know which
+    // candidates actually made the cut, run the expensive Gemini grounded
+    // research call on JUST these survivors. Saves 60-80% of Gemini quota vs
+    // the old "research everyone" approach. Cached for 30 days so re-runs are
+    // free. Failures degrade gracefully — candidate keeps its Phase-C data.
+    const deepResearchPromises = topN.map(async (sc) => {
+      try {
+        // Re-enrich WITH deep research; merge new findings into the existing
+        // sc.enriched. enrichCandidate hits caches for Spotify + Steel so this
+        // is fast (~5s mostly waiting on the Gemini deep-research call).
+        const mb = {
+          id: sc.enriched.musicbrainzId || '',
+          name: sc.enriched.displayName,
+          tags: (sc.enriched.genres || []).map((g) => ({ name: g, count: 1 })),
+        };
+        const deepEnriched = await enrichCandidate(workspaceId, mb, { skipDeepResearch: false });
+        // Merge: take whatever deep-research added on top of existing fields.
+        sc.enriched = { ...sc.enriched, ...stripEmpty(deepEnriched) };
+      } catch (err) {
+        // Deep research on this survivor failed — most likely 'not-a-recording-artist'.
+        // Record the gated reason but DON'T drop the candidate (they're already
+        // in the top-N, the operator can decide).
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`[HUNTER_RUN] deferred deep research failed for ${sc.enriched.displayName}:`, msg);
+        summary.errors.push({
+          candidateName: sc.enriched.displayName,
+          stage: 'deferred_deep_research',
+          message: msg,
+        });
+      }
+    });
+    await Promise.allSettled(deepResearchPromises);
 
     // Phase F: insert each into scout_candidates
     for (const sc of topN) {

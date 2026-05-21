@@ -282,7 +282,12 @@ Output ONLY this JSON, no prose, no markdown fences:
 
 function buildPrompt(criteria: HunterCriteria, excludeNames: string[] = []): string {
   const parts: string[] = [];
-  parts.push('Find ~30 emerging artists for Songfinch\'s A&R queue.');
+  // Ask for roughly 2x targetCount plus a small buffer, capped at 50. This
+  // scales discovery to the actual demand instead of always burning the same
+  // ~30-name compute regardless of how many the operator wants. Buffer covers
+  // candidates that will get gated out (blocked, low-score, deceased, etc).
+  const askCount = Math.min(50, Math.max(10, (criteria.targetCount ?? 25) * 2 + 5));
+  parts.push(`Find ~${askCount} emerging artists for Songfinch's A&R queue.`);
   parts.push('\nCriteria:');
   const hasGenres = criteria.genres.length > 0;
   const hasRegions = criteria.regions.length > 0;
