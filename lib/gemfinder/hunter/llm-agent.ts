@@ -39,7 +39,29 @@ export async function searchArtistsViaLLM(
   criteria: HunterCriteria,
   options?: { excludeNames?: string[] },
 ): Promise<MBArtist[]> {
-  const userPrompt = buildPrompt(criteria, options?.excludeNames ?? []);
+  const excludeNames = options?.excludeNames ?? [];
+
+  // Cache check: discovery results are cached for 12 hours by criteria
+  // signature. Music journalism doesn't shift within hours so the cache hit
+  // is safe; saves the entire Gemini discovery call on repeat hunts.
+  // The cache stores the RAW LLM output (pre-exclusion-filter) so we can
+  // re-apply the current excludeNames post-cache.
+  if (!process.env.VITEST) {
+    try {
+      const cached = await getCachedDiscovery(criteria);
+      if (cached) {
+        console.log(`[HUNTER_LLM] cache HIT for criteria ${shortCriteriaKey(criteria)} — ${cached.length} candidates`);
+        // Post-filter by current exclude list (cache may be older than the
+        // current exclusion set, so re-apply to skip already-shown names).
+        const excludeSet = new Set(excludeNames.map((n) => n.toLowerCase()));
+        return cached.filter((a) => !excludeSet.has(a.name.toLowerCase()));
+      }
+    } catch (err) {
+      console.warn('[HUNTER_LLM] cache read failed (continuing to live call):', err);
+    }
+  }
+
+  const userPrompt = buildPrompt(criteria, excludeNames);
 
   // Try the lite model first (generous free-tier quota); on overload/503, retry
   // with exponential backoff; if all retries fail, fall back to the larger
@@ -79,17 +101,80 @@ export async function searchArtistsViaLLM(
   // Map LLM output → MBArtist shape. id is empty (no MB lookup), name comes
   // from the LLM. The enrichment Step 0 fetchArtistDetails is skipped for
   // empty id; Spotify search-by-name kicks in instead.
-  return items
+  const mapped: MBArtist[] = items
     .filter((a) => a && typeof a.name === 'string' && a.name.trim().length > 0)
     .map((a) => ({
       id: '',  // sentinel: "no MB lookup possible"
       name: a.name.trim(),
       type: 'Person' as const,
       tags: (a.genres ?? []).slice(0, 5).map((name) => ({ name: name.toLowerCase(), count: 1 })),
-      // Pass the LLM's rationale (now grounded in real web search) through as
-      // an aiHint → becomes the "💬 Why this artist?" line on the review card.
       _aiHint: typeof a.rationale === 'string' ? a.rationale : undefined,
     }));
+
+  // Write to cache (fire-and-forget). Cache the PRE-exclusion-filter list so
+  // future hits can apply the then-current exclude set.
+  if (!process.env.VITEST && mapped.length > 0) {
+    void putCachedDiscovery(criteria, mapped).catch((err) =>
+      console.warn('[HUNTER_LLM] cache write failed:', err),
+    );
+  }
+
+  // Post-filter by current exclude list (in case the LLM ignored the "don't
+  // suggest these" instruction in the prompt and returned some anyway).
+  const excludeSet = new Set(excludeNames.map((n) => n.toLowerCase()));
+  return mapped.filter((a) => !excludeSet.has(a.name.toLowerCase()));
+}
+
+// ---------------------------------------------------------------------------
+// Discovery cache (DB-backed, 12h TTL)
+// ---------------------------------------------------------------------------
+// Stores raw LLM discovery results keyed by criteria signature. Reuses the
+// hunter_scrape_cache table — the cache_key column gets a `discovery:` prefix.
+
+const DISCOVERY_TTL_MS = 12 * 60 * 60 * 1000;
+
+function shortCriteriaKey(criteria: HunterCriteria): string {
+  const parts = [
+    `g=${(criteria.genres ?? []).slice().sort().join(',')}`,
+    `r=${(criteria.regions ?? []).slice().sort().join(',')}`,
+    `l=${(criteria.locations ?? []).slice().sort().join(',')}`,
+    `role=${criteria.roleTarget ?? 'both'}`,
+    `tc=${criteria.targetCount ?? 25}`,
+    `sb=${criteria.sizeBracket?.min ?? ''}-${criteria.sizeBracket?.max ?? ''}`,
+    `y=${criteria.recency?.sinceYear ?? ''}`,
+    `inst=${criteria.instrument ?? ''}`,
+  ];
+  return parts.join(';');
+}
+
+function discoveryCacheKey(criteria: HunterCriteria): string {
+  return `discovery:${shortCriteriaKey(criteria)}`;
+}
+
+async function getCachedDiscovery(criteria: HunterCriteria): Promise<MBArtist[] | null> {
+  // Dynamic import to keep this file free of pg imports for vitest setup.
+  const { getScoutPool, ensureSchema } = await import('../scout-candidate-store');
+  await ensureSchema();
+  const key = discoveryCacheKey(criteria);
+  const res = await getScoutPool().query(
+    `SELECT result FROM hunter_scrape_cache WHERE cache_key = $1 AND expires_at > NOW() LIMIT 1`,
+    [key],
+  );
+  if (!res.rows.length) return null;
+  return res.rows[0].result as MBArtist[];
+}
+
+async function putCachedDiscovery(criteria: HunterCriteria, candidates: MBArtist[]): Promise<void> {
+  const { getScoutPool, ensureSchema } = await import('../scout-candidate-store');
+  await ensureSchema();
+  const key = discoveryCacheKey(criteria);
+  const expiresAt = new Date(Date.now() + DISCOVERY_TTL_MS).toISOString();
+  await getScoutPool().query(
+    `INSERT INTO hunter_scrape_cache (cache_key, scrape_url, result, expires_at)
+     VALUES ($1, $2, $3::jsonb, $4)
+     ON CONFLICT (cache_key) DO UPDATE SET result = $3::jsonb, cached_at = NOW(), expires_at = $4`,
+    [key, `discovery://${shortCriteriaKey(criteria)}`, JSON.stringify(candidates), expiresAt],
+  );
 }
 
 /**
