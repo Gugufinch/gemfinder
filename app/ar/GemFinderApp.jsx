@@ -3699,7 +3699,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [scoutV3QueueGenreFilter, setScoutV3QueueGenreFilter] = useState("");  // substring match against primaryGenre + genres
   const [scoutV3QueueMinScore, setScoutV3QueueMinScore] = useState("");        // string for input control
   const [scoutV3QueueContactOnly, setScoutV3QueueContactOnly] = useState(false); // only show candidates with a contact email
-  const [scoutV3QueueView, setScoutV3QueueView] = useState("card");  // card | compact
+  const [scoutV3QueueView, setScoutV3QueueView] = useState("compact");  // card | compact — default to compact since it's the fast-scan triage mode
   const [scoutV3Rejections, setScoutV3Rejections] = useState([]);
   const [scoutV3AddModalOpen, setScoutV3AddModalOpen] = useState(false);
   const [scoutV3ApproveTarget, setScoutV3ApproveTarget] = useState(null);
