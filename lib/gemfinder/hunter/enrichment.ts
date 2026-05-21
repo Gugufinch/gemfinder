@@ -1,6 +1,7 @@
 import type { MBArtist } from '@/lib/gemfinder/hunter/musicbrainz';
 import { fetchArtistDetails } from '@/lib/gemfinder/hunter/musicbrainz';
 import { getArtistById, parseSpotifyArtistId, searchArtistByName, getTopTracks } from '@/lib/gemfinder/hunter/spotify';
+import { researchArtist } from '@/lib/gemfinder/hunter/deep-research';
 import { scrapeWebsite } from '@/lib/gemfinder/hunter/steel';
 import { getCached, putCached } from '@/lib/gemfinder/hunter/scrape-cache';
 import { fetchInstagramFollowers, fetchTiktokFollowers } from '@/lib/gemfinder/hunter/social-scraping';
@@ -202,8 +203,35 @@ export async function enrichCandidate(
   // From here on, use fullArtist (which has relations + release-groups).
   mbArtist = fullArtist;
 
+  // Step 0b: DEEP RESEARCH — per-candidate Gemini call with Google Search
+  // grounding. Verifies the artist is real, finds current bio + contact +
+  // socials. Cached 30 days so re-runs hitting the same name are free.
+  // Skipped if the discovery layer already confirmed via MB (empty mbArtist.id
+  // = LLM-sourced; non-empty = MB-verified). Failures degrade gracefully.
+  const hintGenres = (mbArtist.tags ?? []).map((t) => t.name).slice(0, 5);
+  let deep: Awaited<ReturnType<typeof researchArtist>> = null;
+  try {
+    deep = await researchArtist(workspaceId, mbArtist.name, hintGenres);
+    if (deep && deep.verified === false) {
+      // Gemini says this isn't a real recording artist — short-circuit. The
+      // orchestrator's enrichCandidate caller catches errors and skips the
+      // candidate; we throw a specific marker so the gated_reasons surface
+      // says why.
+      throw new Error(`[HUNTER_ENRICH] deep research flagged "${mbArtist.name}" as not-a-recording-artist`);
+    }
+  } catch (err) {
+    if (err instanceof Error && err.message.includes('not-a-recording-artist')) {
+      throw err;  // re-throw so orchestrator records the gate-out
+    }
+    console.warn('[HUNTER_ENRICH] deep research failed for', mbArtist.name, ':', err);
+    deep = null;  // continue without enhanced data
+  }
+
   // Step 1 & 2: core MB fields + isLiving
-  const isLiving = !mbArtist['life-span']?.end;
+  // Deep research's isLiving takes precedence when available; fall back to MB life-span.
+  const isLiving = deep?.isLiving !== null && deep?.isLiving !== undefined
+    ? deep.isLiving
+    : !mbArtist['life-span']?.end;
 
   // Step 3: recentReleaseYear
   let recentReleaseYear: number | undefined;
@@ -218,8 +246,17 @@ export async function enrichCandidate(
     }
   }
 
-  // Step 4: extract platform URLs from relations
+  // Step 4: extract platform URLs from relations, then layer deep-research's
+  // platform URLs on top (deep research often finds URLs MB lacks).
   const extracted = extractPlatformUrls(mbArtist.relations);
+  if (deep) {
+    if (!extracted.spotifyUrl && deep.spotifyUrl) extracted.spotifyUrl = deep.spotifyUrl;
+    if (!extracted.bandcampUrl && deep.bandcampUrl) extracted.bandcampUrl = deep.bandcampUrl;
+    if (!extracted.website && deep.website) extracted.website = deep.website;
+    if (!extracted.instagramHandle && deep.instagramHandle) extracted.instagramHandle = deep.instagramHandle;
+    if (!extracted.tiktokHandle && deep.tiktokHandle) extracted.tiktokHandle = deep.tiktokHandle;
+    if (!extracted.youtubeHandle && deep.youtubeHandle) extracted.youtubeHandle = deep.youtubeHandle;
+  }
 
   // MB genres baseline (sorted by count desc)
   const mbGenres = [...(mbArtist.tags ?? [])]
@@ -304,6 +341,14 @@ export async function enrichCandidate(
   let scrapedManagerInfo: string | undefined;
   let scrapedToursInfo: string | undefined;
 
+  // Deep research's contact info comes BEFORE Steel scraping — it's usually
+  // more reliable (Gemini reads the booking page; Steel just scrapes raw HTML).
+  // Steel scrape later can overwrite if it finds something more current.
+  if (deep) {
+    if (deep.bookingEmail) scrapedContactEmail = deep.bookingEmail;
+    if (deep.managerInfo) scrapedManagerInfo = deep.managerInfo;
+  }
+
   if (scrapeUrl) {
     let scrapeResult = null;
     try {
@@ -324,9 +369,11 @@ export async function enrichCandidate(
       }
     }
     if (scrapeResult?.extractedFields) {
-      scrapedContactEmail = scrapeResult.extractedFields.contactEmail;
-      scrapedManagerInfo = scrapeResult.extractedFields.managerInfo;
-      scrapedToursInfo = scrapeResult.extractedFields.toursInfo;
+      // Only overwrite deep-research values if Steel actually found something
+      // — otherwise we'd erase the better source with empty string.
+      if (scrapeResult.extractedFields.contactEmail) scrapedContactEmail = scrapeResult.extractedFields.contactEmail;
+      if (scrapeResult.extractedFields.managerInfo) scrapedManagerInfo = scrapeResult.extractedFields.managerInfo;
+      if (scrapeResult.extractedFields.toursInfo) scrapedToursInfo = scrapeResult.extractedFields.toursInfo;
     }
   }
 
@@ -369,14 +416,23 @@ export async function enrichCandidate(
     extracted,
   );
 
+  // Deep research's bio (grounded in real recent press) beats the discovery
+  // LLM's first-pass rationale every time. Fall back to the discovery rationale.
+  const finalBio = deep?.bio || mbArtist._aiHint;
+  // recentReleaseYear: prefer deep research's verified value over MB's parsed
+  // release-groups date (MB sometimes has stale data).
+  const finalReleaseYear = deep?.recentReleaseYear ?? recentReleaseYear;
+  // country: prefer deep research's normalized ISO code; fall back to MB.
+  const finalCountry = deep?.country || mbArtist.country;
+
   const candidate: EnrichedCandidate = {
     displayName: mbArtist.name,
     musicbrainzId: mbArtist.id,
-    country: mbArtist.country,
+    country: finalCountry,
     genres,
     artistType: mbArtist.type,
     isLiving,
-    recentReleaseYear,
+    recentReleaseYear: finalReleaseYear,
     releaseGroupCount: mbArtist['release-groups']?.length,
     spotifyUrl: extracted.spotifyUrl,
     spotifyArtistId,
@@ -398,10 +454,7 @@ export async function enrichCandidate(
     scrapedToursInfo,
     inferredRole,
     contactReadiness,
-    // Pass the LLM rationale through (if any) so the review card has a
-    // "why this artist?" line. MB-sourced candidates don't have a hint
-    // and end up undefined.
-    aiSummary: mbArtist._aiHint,
+    aiSummary: finalBio,
   };
 
   return candidate;

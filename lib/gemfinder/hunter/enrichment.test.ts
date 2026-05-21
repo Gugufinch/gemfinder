@@ -27,6 +27,9 @@ vi.mock('@/lib/gemfinder/hunter/social-scraping', () => ({
   fetchInstagramFollowers: vi.fn(async () => null),
   fetchTiktokFollowers: vi.fn(async () => null),
 }));
+vi.mock('@/lib/gemfinder/hunter/deep-research', () => ({
+  researchArtist: vi.fn(async () => null),
+}));
 
 import { enrichCandidate } from '@/lib/gemfinder/hunter/enrichment';
 import * as spotify from '@/lib/gemfinder/hunter/spotify';
@@ -34,6 +37,7 @@ import * as steel from '@/lib/gemfinder/hunter/steel';
 import * as cache from '@/lib/gemfinder/hunter/scrape-cache';
 import * as mb from '@/lib/gemfinder/hunter/musicbrainz';
 import * as social from '@/lib/gemfinder/hunter/social-scraping';
+import * as deepResearch from '@/lib/gemfinder/hunter/deep-research';
 import type { MBArtist } from '@/lib/gemfinder/hunter/musicbrainz';
 import type { SpotifyArtist } from '@/lib/gemfinder/hunter/spotify';
 import type { SteelScrapeResult } from '@/lib/gemfinder/hunter/steel';
@@ -635,6 +639,69 @@ describe('enrichCandidate', () => {
       }));
 
       expect(social.fetchInstagramFollowers).not.toHaveBeenCalled();
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Deep research integration
+  // ---------------------------------------------------------------------------
+  describe('deep research layer', () => {
+    it('throws not-a-recording-artist when deep research returns verified=false', async () => {
+      vi.mocked(deepResearch.researchArtist).mockResolvedValueOnce({
+        verified: false,
+        isLiving: null,
+        genres: [],
+        citations: [],
+        researchedAt: '2026-01-01T00:00:00Z',
+      });
+      await expect(
+        enrichCandidate('ws-1', minimalArtist({ name: 'James Dashner' }))
+      ).rejects.toThrow(/not-a-recording-artist/);
+    });
+
+    it('layers deep research location + bio + contact onto the EnrichedCandidate', async () => {
+      vi.mocked(deepResearch.researchArtist).mockResolvedValueOnce({
+        verified: true,
+        isLiving: true,
+        recentReleaseYear: 2024,
+        location: 'Asheville, NC',
+        country: 'US',
+        genres: ['indie rock'],
+        bookingEmail: 'booking@wednesdayband.com',
+        managerInfo: 'Hardly Art / Asheville mgmt',
+        bio: 'Asheville indie band, Pitchfork "Best New Music" March 2024.',
+        citations: ['https://pitchfork.com/x'],
+        researchedAt: '2026-01-01T00:00:00Z',
+      });
+      const result = await enrichCandidate('ws-1', minimalArtist({ name: 'Wednesday' }));
+      expect(result.country).toBe('US');
+      expect(result.recentReleaseYear).toBe(2024);
+      expect(result.aiSummary).toContain('Pitchfork');
+      expect(result.scrapedContactEmail).toBe('booking@wednesdayband.com');
+      expect(result.scrapedManagerInfo).toContain('Hardly Art');
+    });
+
+    it('graceful degrade when deep research returns null — enrichment continues with MB/Spotify data', async () => {
+      vi.mocked(deepResearch.researchArtist).mockResolvedValueOnce(null);
+      const result = await enrichCandidate('ws-1', minimalArtist({
+        name: 'Wednesday',
+        country: 'US',
+      }));
+      expect(result.displayName).toBe('Wednesday');
+      expect(result.country).toBe('US');  // falls back to MB
+    });
+
+    it("uses deep research's spotifyUrl when MB doesn't have one", async () => {
+      vi.mocked(deepResearch.researchArtist).mockResolvedValueOnce({
+        verified: true,
+        isLiving: true,
+        spotifyUrl: 'https://open.spotify.com/artist/deepfound123',
+        genres: ['indie rock'],
+        citations: [],
+        researchedAt: '2026-01-01T00:00:00Z',
+      });
+      const result = await enrichCandidate('ws-1', minimalArtist({ name: 'Wednesday' }));
+      expect(result.spotifyUrl).toBe('https://open.spotify.com/artist/deepfound123');
     });
   });
 });
