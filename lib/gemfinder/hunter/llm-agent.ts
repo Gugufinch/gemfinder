@@ -284,11 +284,10 @@ function extractJsonObject(text: string): string | null {
  */
 async function callGeminiWithRetry(userPrompt: string): Promise<string> {
   const FALLBACK_MODELS = ['gemini-2.5-flash-lite', 'gemini-2.5-flash'];
-  // In vitest, use 0ms backoff so tests of the retry path don't time out.
-  // Production uses real exponential backoff.
   const BACKOFF_MS = process.env.VITEST ? [0, 0, 0] : [2000, 5000, 10000];
 
   let lastErrMsg = 'unknown';
+  let quotaExhausted = false;
 
   for (const model of FALLBACK_MODELS) {
     for (let attempt = 0; attempt < BACKOFF_MS.length; attempt++) {
@@ -314,29 +313,28 @@ async function callGeminiWithRetry(userPrompt: string): Promise<string> {
         const msg = err instanceof Error ? err.message : String(err);
         lastErrMsg = msg;
 
-        // Non-retriable errors — fail fast with a clear message.
         if (/API key not valid|API_KEY_INVALID/i.test(msg)) {
           throw new Error('[HUNTER_LLM] GEMINI_API_KEY is invalid — get a fresh key at https://aistudio.google.com/apikey');
         }
+        // Quota error: don't retry on THIS model, but try next Gemini model
+        // (separate quota pool) and then fall through to Groq if both exhausted.
         if (/quota|RESOURCE_EXHAUSTED/i.test(msg)) {
-          throw new Error('[HUNTER_LLM] Gemini quota exceeded — free tier is 1500 req/day per model. Wait or rotate the key.');
+          quotaExhausted = true;
+          console.warn(`[HUNTER_LLM] ${model} quota exhausted; moving to next provider`);
+          break;
         }
         if (/not found|404/i.test(msg) && /model/i.test(msg)) {
-          // Model rotated by Google — skip to next fallback model immediately.
           console.warn(`[HUNTER_LLM] ${model} returned 404, skipping to next fallback`);
           break;
         }
 
-        // Retriable: 503 UNAVAILABLE, overloaded, network blip, etc.
         const isOverload = /503|UNAVAILABLE|overload|high demand|temporarily/i.test(msg);
         const isNetwork = /ECONNRESET|ETIMEDOUT|fetch failed|network/i.test(msg);
         if (!isOverload && !isNetwork) {
-          // Some other unexpected error — don't waste retries.
           console.warn(`[HUNTER_LLM] ${model} attempt ${attempt + 1} unretriable error:`, msg);
           break;
         }
 
-        // If we have another attempt left for this model, back off and retry.
         if (attempt < BACKOFF_MS.length - 1) {
           const wait = BACKOFF_MS[attempt];
           console.warn(`[HUNTER_LLM] ${model} attempt ${attempt + 1} got ${isOverload ? 'overload' : 'network err'}, retrying in ${wait}ms`);
@@ -348,7 +346,97 @@ async function callGeminiWithRetry(userPrompt: string): Promise<string> {
     }
   }
 
-  throw new Error(`[HUNTER_LLM] All Gemini models overloaded or unavailable. Last error: ${lastErrMsg}. Wait ~30 seconds and try again, or check https://status.cloud.google.com for outages.`);
+  // Gemini chain exhausted. Try Groq as a final fallback (Llama 3.3 70B,
+  // separate quota pool of 14,400/day). No web grounding here — Groq is
+  // text-only — but Llama 3.3 has solid music knowledge from training.
+  // Quality is "good not great" relative to grounded Gemini, but it keeps
+  // the agent running when Gemini quota is hit.
+  if (process.env.GROQ_API_KEY) {
+    try {
+      console.warn(`[HUNTER_LLM] Falling back to Groq (Gemini ${quotaExhausted ? 'quota exhausted' : 'unavailable'})`);
+      const text = await callGroq(SYSTEM_PROMPT + '\n\n' + userPrompt);
+      if (text) return text;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn('[HUNTER_LLM] Groq fallback also failed:', msg);
+      lastErrMsg = `Gemini: ${lastErrMsg} | Groq: ${msg}`;
+    }
+  } else if (quotaExhausted) {
+    lastErrMsg += ' (set GROQ_API_KEY for free fallback — 14,400/day on llama-3.3-70b)';
+  }
+
+  throw new Error(`[HUNTER_LLM] All LLM providers exhausted. Last error: ${lastErrMsg}`);
+}
+
+/**
+ * Call Groq's Llama 3.3 70B via their OpenAI-compatible Chat Completions API.
+ *
+ * Pure text generation — no web grounding (Groq doesn't expose native search).
+ * Used as a fallback when Gemini quota / availability fails. Llama 3.3 70B
+ * has strong music knowledge from training; the trade-off is "good but not
+ * current" vs. Gemini's grounded "great and current."
+ *
+ * Returns the response text on success, throws on failure. Caller handles
+ * the JSON-extract step (same parser path as Gemini).
+ */
+async function callGroq(fullPrompt: string): Promise<string> {
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey) throw new Error('GROQ_API_KEY not set');
+
+  // Single 90-sec timeout — Groq is FAST (Llama 3.3 70B at 200+ tok/sec),
+  // a normal response is <10 sec. If we're past 90s something's broken.
+  const ctrl = new AbortController();
+  const timeoutId = setTimeout(() => ctrl.abort(), 90_000);
+  try {
+    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'llama-3.3-70b-versatile',
+        messages: [
+          {
+            role: 'system',
+            content:
+              'IMPORTANT: You do NOT have web search. Use your training knowledge of emerging music artists. ' +
+              'Still verify what you suggest is real to the best of your knowledge. ' +
+              'Bias toward artists you have STRONG training-data evidence for (Pitchfork-covered acts, year-end-list staples, Bandcamp editorial picks). ' +
+              'Skip artists you only vaguely recall — accuracy > breadth.',
+          },
+          { role: 'user', content: fullPrompt },
+        ],
+        temperature: 0.7,
+        max_tokens: 8000,
+        response_format: { type: 'json_object' },
+      }),
+      signal: ctrl.signal,
+    });
+    clearTimeout(timeoutId);
+
+    if (res.status === 401) {
+      throw new Error('GROQ_API_KEY is invalid — get a fresh key at https://console.groq.com/keys');
+    }
+    if (res.status === 429) {
+      throw new Error('Groq rate limit hit (free tier is 14,400/day on llama-3.3-70b-versatile)');
+    }
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new Error(`Groq HTTP ${res.status}: ${body.slice(0, 200)}`);
+    }
+
+    const body = await res.json() as { choices?: Array<{ message?: { content?: string } }> };
+    const text = body.choices?.[0]?.message?.content;
+    if (!text) throw new Error('Groq returned empty completion');
+    return text;
+  } catch (err) {
+    clearTimeout(timeoutId);
+    if (err instanceof Error && err.name === 'AbortError') {
+      throw new Error('Groq call timed out (90s)');
+    }
+    throw err;
+  }
 }
 
 const SYSTEM_PROMPT = `You are an A&R scout for Songfinch. Use Google Search to find emerging recording artists matching the criteria. Search Pitchfork, FADER, Stereogum, NPR Music, Brooklyn Vegan year-end and "best new" lists from 2024-2025; festival lineups; Bandcamp editorial picks.

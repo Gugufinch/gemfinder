@@ -38,11 +38,13 @@ describe('searchArtistsViaLLM', () => {
     expect((result[0] as { _aiHint?: string })._aiHint).toBe('Pitchfork year-end pick');
   });
 
-  it('throws when all Gemini retries fail (infrastructure error)', async () => {
-    // 'network' triggers the retry path; all retries fail; final error surfaces.
+  it('throws when all LLM providers (Gemini + Groq) exhausted', async () => {
+    // 'network' triggers the retry path; all Gemini retries fail; no GROQ_API_KEY
+    // set so no fallback; final error surfaces.
+    delete process.env.GROQ_API_KEY;
     mockGenerateContent.mockRejectedValue(new Error('network'));
     await expect(searchArtistsViaLLM({ genres: ['indie'], regions: ['US'], roleTarget: 'performer', targetCount: 25 }))
-      .rejects.toThrow(/All Gemini models overloaded or unavailable/);
+      .rejects.toThrow(/All LLM providers exhausted/);
   });
 
   it('retries on 503 UNAVAILABLE and succeeds on second attempt', async () => {
@@ -80,10 +82,39 @@ describe('searchArtistsViaLLM', () => {
       .rejects.toThrow(/GEMINI_API_KEY is invalid/);
   });
 
-  it('throws a clearer message on quota exceeded', async () => {
+  it('throws helpful message when both Gemini quota AND Groq are unavailable', async () => {
+    // Gemini quota exhausted on both models; no GROQ_API_KEY set.
+    delete process.env.GROQ_API_KEY;
     mockGenerateContent.mockRejectedValue(new Error('RESOURCE_EXHAUSTED: quota exceeded'));
     await expect(searchArtistsViaLLM({ genres: ['indie'], regions: ['US'], roleTarget: 'performer', targetCount: 25 }))
-      .rejects.toThrow(/quota exceeded/);
+      .rejects.toThrow(/All LLM providers exhausted/);
+  });
+
+  it('falls back to Groq when Gemini quota is exhausted (GROQ_API_KEY set)', async () => {
+    process.env.GROQ_API_KEY = 'gsk_test-key';
+    mockGenerateContent.mockRejectedValue(new Error('RESOURCE_EXHAUSTED: quota exceeded'));
+    // Mock global fetch for the Groq call
+    const originalFetch = global.fetch;
+    global.fetch = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        choices: [{ message: { content: JSON.stringify({ artists: [{ name: 'Big Thief', genres: ['indie folk'] }] }) } }],
+      }),
+    } as unknown as Response);
+
+    try {
+      const result = await searchArtistsViaLLM({ genres: ['indie folk'], regions: ['US'], roleTarget: 'performer', targetCount: 25 });
+      expect(result.length).toBeGreaterThanOrEqual(1);
+      expect(result[0].name).toBe('Big Thief');
+      // Confirm Groq was actually called
+      expect(global.fetch).toHaveBeenCalledWith(
+        'https://api.groq.com/openai/v1/chat/completions',
+        expect.objectContaining({ method: 'POST' }),
+      );
+    } finally {
+      global.fetch = originalFetch;
+    }
   });
 
   it('throws when Gemini returns empty content', async () => {

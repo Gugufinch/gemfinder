@@ -129,11 +129,12 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  // 8. Spotify / Steel / Gemini env vars
+  // 8. Spotify / Steel / Gemini / Groq env vars
   const SPOTIFY_ID = process.env.SPOTIFY_CLIENT_ID;
   const SPOTIFY_SECRET = process.env.SPOTIFY_CLIENT_SECRET;
   const STEEL_KEY = process.env.STEEL_API_KEY;
   const GEMINI_KEY = process.env.GEMINI_API_KEY;
+  const GROQ_KEY = process.env.GROQ_API_KEY;
 
   if (!GEMINI_KEY) {
     fail('env.GEMINI_API_KEY', 'missing', 'free key at https://aistudio.google.com/apikey');
@@ -145,6 +146,18 @@ export async function GET(req: NextRequest) {
     fail('env.GEMINI_API_KEY', 'does not look like a Google API key (should start with AIza...)', 'check value');
   } else {
     pass('env.GEMINI_API_KEY', `set (${GEMINI_KEY.slice(0, 6)}…${GEMINI_KEY.slice(-4)})`);
+  }
+
+  // GROQ is optional — only used as a fallback when Gemini quota is exhausted.
+  // Surface its presence so operators can see whether the fallback is wired.
+  if (!GROQ_KEY) {
+    pass('env.GROQ_API_KEY', 'not set (Groq fallback disabled; Gemini-only mode)');
+  } else if (!GROQ_KEY.startsWith('gsk_')) {
+    fail('env.GROQ_API_KEY', 'does not look like a Groq key (should start with gsk_)', 'check value');
+  } else if (GROQ_KEY.trim() !== GROQ_KEY) {
+    fail('env.GROQ_API_KEY', 'has leading/trailing whitespace', 'trim and re-save');
+  } else {
+    pass('env.GROQ_API_KEY', `set (${GROQ_KEY.slice(0, 6)}…${GROQ_KEY.slice(-4)}) — fallback enabled`);
   }
 
   if (!SPOTIFY_ID) {
