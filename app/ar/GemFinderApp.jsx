@@ -3592,6 +3592,11 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [npD, setNpD] = useState("");
   const [newProjectType, setNewProjectType] = useState("ar");
   const [showAddArtist, setShowAddArtist] = useState(false);
+  // Kickoff CSV import result modal — shown after "Import + Merge CSV" so the
+  // operator sees how many rows landed, how many were duplicates, and exactly
+  // which existing artist each duplicate matched against (plus that artist's
+  // pipeline stage). Null = no modal showing.
+  const [csvImportResult, setCsvImportResult] = useState(null);
   const [artistForm, setArtistForm] = useState({
     name: "",
     genre: "",
@@ -7574,14 +7579,40 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     } else {
       const p = parseCSV(t);
       if (!p.length) { flash("No valid artists", "err"); return; }
-      const ex = new Set(proj.artists.map(a => canonicalArtistName(a.n)));
-      const nw = p.filter(a => !ex.has(canonicalArtistName(a.n)));
-      const mg = [...proj.artists, ...nw];
+      // Build a name → existing artist map so we can show WHERE each dup matched
+      // (not just "duplicate" — also which row of the existing list and what stage).
+      const existingByCanon = new Map();
+      proj.artists.forEach(a => existingByCanon.set(canonicalArtistName(a.n), a));
+
+      const added = [];
+      const duplicates = [];
+      for (const a of p) {
+        const canon = canonicalArtistName(a.n);
+        const existing = existingByCanon.get(canon);
+        if (existing) {
+          const stage = proj.pipeline?.[existing.n]?.stage || "prospect";
+          duplicates.push({ csvName: a.n, matchedAs: existing.n, stage });
+        } else {
+          added.push(a);
+          // Prevent intra-CSV duplicates from sneaking through twice.
+          existingByCanon.set(canon, { n: a.n });
+        }
+      }
+
+      const mg = [...proj.artists, ...added];
       const nl = { ...proj.pipeline };
-      nw.forEach(a => { if (a.s && !nl[a.n]) nl[a.n] = { stage: "sent", date: new Date().toISOString() }; });
+      added.forEach(a => { if (a.s && !nl[a.n]) nl[a.n] = { stage: "sent", date: new Date().toISOString() }; });
       const nextProj = { ...proj, artists: mg, pipeline: nl };
       await saveProject(nextProj);
-      flash(`Merged ${nw.length} new artists · ${p.length - nw.length} duplicates skipped`);
+
+      // Detailed import-result modal — operator sees what worked + why each
+      // duplicate was skipped + which Kickoff stage the matched artist is in.
+      setCsvImportResult({
+        added: added.length,
+        duplicates,
+        sample: duplicates.slice(0, 25),  // cap UI list to avoid jankiness on 1000-row CSVs
+      });
+      flash(`CSV imported: ${added.length} new · ${duplicates.length} duplicates (see details)`);
     }
     e.target.value = "";
   };
@@ -7633,9 +7664,16 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       return;
     }
     const canon = canonicalArtistName(name);
-    const existing = new Set(proj.artists.map(a => canonicalArtistName(a.n)));
-    if (existing.has(canon)) {
-      flash(`${name} is already in this project`, "err");
+    const existingArtist = proj.artists.find(a => canonicalArtistName(a.n) === canon);
+    if (existingArtist) {
+      const stage = proj.pipeline?.[existingArtist.n]?.stage || "prospect";
+      const dateStr = proj.pipeline?.[existingArtist.n]?.date
+        ? new Date(proj.pipeline[existingArtist.n].date).toLocaleDateString()
+        : null;
+      flash(
+        `"${existingArtist.n}" is already in Kickoff (stage: ${stage}${dateStr ? `, added ${dateStr}` : ""})`,
+        "err",
+      );
       return;
     }
     manualArtistSubmitRef.current = true;
@@ -7962,9 +8000,10 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     }
     const renamed = nextName !== previousName;
     const nextCanon = canonicalArtistName(nextName);
-    const hasCollision = proj.artists.some(item => item.n !== previousName && canonicalArtistName(item.n) === nextCanon);
-    if (hasCollision) {
-      flash(`${nextName} already exists in this project`, "err");
+    const collision = proj.artists.find(item => item.n !== previousName && canonicalArtistName(item.n) === nextCanon);
+    if (collision) {
+      const stage = proj.pipeline?.[collision.n]?.stage || "prospect";
+      flash(`Cannot rename to "${nextName}" — "${collision.n}" is already in Kickoff (stage: ${stage})`, "err");
       return;
     }
 
@@ -10853,11 +10892,25 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
               <textarea value={artistForm.note} onChange={e => setArtistForm(prev => ({ ...prev, note: e.target.value }))} placeholder="Optional note" style={{ ...iS, width: "100%", minHeight: 80, resize: "vertical", gridColumn: "1 / span 2" }} />
             </div>
             <div style={{ marginTop: 10, fontSize: 11, color: C.ts }}>
-              {artistForm.name.trim() && proj?.artists?.some(a => canonicalArtistName(a.n) === canonicalArtistName(artistForm.name)) && (
-                <div style={{ color: C.rd }}>This artist is already in the project.</div>
-              )}
+              {artistForm.name.trim() && (() => {
+                const typedCanon = canonicalArtistName(artistForm.name);
+                const existing = proj?.artists?.find(a => canonicalArtistName(a.n) === typedCanon);
+                if (!existing) return null;
+                const pipelineEntry = proj?.pipeline?.[existing.n];
+                const stage = pipelineEntry?.stage || "prospect";
+                const dateStr = pipelineEntry?.date ? new Date(pipelineEntry.date).toLocaleDateString() : null;
+                return (
+                  <div style={{ color: C.rd, lineHeight: 1.55 }}>
+                    <strong>"{existing.n}" is already in this project's Kickoff list.</strong>
+                    <div style={{ fontSize: 11, color: C.ts, marginTop: 2 }}>
+                      Pipeline stage: <strong>{stage}</strong>{dateStr ? ` · added ${dateStr}` : ""}.
+                      Find them in the Kickoff list below this modal.
+                    </div>
+                  </div>
+                );
+              })()}
               {artistForm.name.trim() && (proj?.internalRoster?.names || []).some(name => canonicalArtistName(name) === canonicalArtistName(artistForm.name)) && (
-                <div style={{ color: C.pr }}>This artist appears in your internal roster check.</div>
+                <div style={{ color: C.pr, marginTop: 4 }}>This artist also appears in your internal roster CSV.</div>
               )}
             </div>
             <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 18 }}>
@@ -12358,6 +12411,56 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
           </div>
         </div>
         )}
+      {csvImportResult && (
+        <div
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 130 }}
+          onClick={e => { if (e.target === e.currentTarget) setCsvImportResult(null); }}
+        >
+          <div style={{ background: C.sf, borderRadius: 18, padding: "24px 28px", width: 620, maxWidth: "calc(100vw - 32px)", maxHeight: "calc(100vh - 80px)", overflowY: "auto", boxShadow: "0 25px 70px rgba(0,0,0,0.2)" }}>
+            <div style={{ fontSize: 18, fontWeight: 800, color: C.tx, marginBottom: 4 }}>CSV import results</div>
+            <div style={{ fontSize: 12, color: C.ts, marginBottom: 16 }}>
+              Every row is reported below. Duplicates are kept in their existing pipeline stage — nothing was overwritten.
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
+              <div style={{ padding: 12, borderRadius: 12, background: C.bg, border: `1px solid ${C.bd}` }}>
+                <div style={{ fontSize: 11, color: C.ts, textTransform: "uppercase", letterSpacing: 0.5 }}>Added</div>
+                <div style={{ fontSize: 22, fontWeight: 800, color: C.gn, marginTop: 4 }}>{csvImportResult.added}</div>
+              </div>
+              <div style={{ padding: 12, borderRadius: 12, background: C.bg, border: `1px solid ${C.bd}` }}>
+                <div style={{ fontSize: 11, color: C.ts, textTransform: "uppercase", letterSpacing: 0.5 }}>Duplicates skipped</div>
+                <div style={{ fontSize: 22, fontWeight: 800, color: csvImportResult.duplicates.length > 0 ? C.rd : C.tt, marginTop: 4 }}>{csvImportResult.duplicates.length}</div>
+              </div>
+            </div>
+            {csvImportResult.duplicates.length > 0 && (
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: C.tx, marginBottom: 8 }}>
+                  Skipped rows{csvImportResult.duplicates.length > csvImportResult.sample.length ? ` (showing first ${csvImportResult.sample.length} of ${csvImportResult.duplicates.length})` : ""}
+                </div>
+                <div style={{ border: `1px solid ${C.bd}`, borderRadius: 10, overflow: "hidden" }}>
+                  {csvImportResult.sample.map((dup, i) => (
+                    <div
+                      key={`csv-dup-${i}`}
+                      style={{ padding: "10px 12px", borderTop: i === 0 ? "none" : `1px solid ${C.bd}`, fontSize: 12, lineHeight: 1.5, background: i % 2 === 0 ? C.sf : C.bg }}
+                    >
+                      <div style={{ color: C.tx, fontWeight: 600 }}>
+                        {dup.csvName === dup.matchedAs ? `"${dup.csvName}"` : `"${dup.csvName}" → matched "${dup.matchedAs}"`}
+                      </div>
+                      <div style={{ color: C.ts, marginTop: 2 }}>
+                        Already in Kickoff at stage <strong style={{ color: C.tx }}>{dup.stage}</strong>.
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            <div style={{ display: "flex", justifyContent: "flex-end" }}>
+              <button onClick={() => setCsvImportResult(null)} style={{ ...actionBtn(true, "accent"), fontSize: 13 }}>
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 
