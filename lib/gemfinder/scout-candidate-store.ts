@@ -148,6 +148,41 @@ END $$;
 
 CREATE INDEX IF NOT EXISTS idx_scout_cand_hunter_run
   ON scout_candidates (hunter_run_id) WHERE hunter_run_id IS NOT NULL;
+
+-- ============================================================================
+-- Hunter observability: per-phase activity events
+-- ============================================================================
+-- One row per "thing the agent did" — Spotify lookup attempted, IG scrape
+-- returned, deep research succeeded/failed. The UI polls this for both
+-- live hunter runs (real-time progress) and individual candidate re-enrichments
+-- (so the operator can see WHY re-enrich did or didn't change anything).
+--
+-- run_id and candidate_id are both nullable + soft FKs — we deliberately
+-- don't cascade-delete: a run can be purged and we still want to inspect
+-- its events; a candidate can be deleted and its history persists as audit.
+
+CREATE TABLE IF NOT EXISTS hunter_events (
+  id            uuid primary key default gen_random_uuid(),
+  workspace_id  text not null,
+  run_id        uuid,
+  candidate_id  uuid,
+  phase         text not null,
+  status        text not null,
+  message       text not null,
+  data          jsonb not null default '{}'::jsonb,
+  created_at    timestamptz not null default now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_hunter_events_workspace_candidate
+  ON hunter_events (workspace_id, candidate_id, created_at DESC)
+  WHERE candidate_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_hunter_events_workspace_run
+  ON hunter_events (workspace_id, run_id, created_at DESC)
+  WHERE run_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_hunter_events_workspace_recent
+  ON hunter_events (workspace_id, created_at DESC);
 `;
 
 let pool: Pool | null = null;
@@ -510,4 +545,136 @@ export async function getStats(workspaceId: string): Promise<{ pendingCount: num
     pendingCount: Number(res.rows[0].pending),
     rejectedCount: Number(res.rows[0].rejected),
   };
+}
+
+// ============================================================================
+// Hunter activity events — per-phase observability
+// ============================================================================
+//
+// Why a separate table instead of stuffing into hunter_runs.summary:
+//   - We want per-candidate granularity (re-enrich shows just that candidate's
+//     events, not the whole run)
+//   - We want appendable timeline ordering for streaming UIs
+//   - We want events to survive a run being purged (audit trail)
+//
+// All writes are fire-and-forget — a logging failure must NEVER break the
+// enrichment pipeline. Callers should not await emitEvent or handle its errors.
+
+export type HunterEventPhase =
+  | 'meta'           // pipeline-level: 'starting re-enrich', 'enrichment complete'
+  | 'mb_fetch'       // MusicBrainz artist lookup
+  | 'deep_research'  // Gemini verification + summary
+  | 'spotify'        // Spotify artist resolution (by ID or by name search)
+  | 'top_tracks'     // Spotify top tracks fetch
+  | 'ig_scrape'      // Instagram follower scrape via Steel
+  | 'tt_scrape'      // TikTok follower scrape via Steel
+  | 'score'          // Score recomputation
+  | 'cache';         // Cache hit/miss
+
+export type HunterEventStatus = 'started' | 'success' | 'failed' | 'skipped';
+
+export interface HunterEvent {
+  id: string;
+  workspaceId: string;
+  runId: string | null;
+  candidateId: string | null;
+  phase: HunterEventPhase;
+  status: HunterEventStatus;
+  message: string;
+  data: Record<string, unknown>;
+  createdAt: string;
+}
+
+function rowToEvent(row: Record<string, unknown>): HunterEvent {
+  return {
+    id: row.id as string,
+    workspaceId: row.workspace_id as string,
+    runId: (row.run_id as string) || null,
+    candidateId: (row.candidate_id as string) || null,
+    phase: row.phase as HunterEventPhase,
+    status: row.status as HunterEventStatus,
+    message: row.message as string,
+    data: (row.data as Record<string, unknown>) || {},
+    createdAt: (row.created_at as Date).toISOString(),
+  };
+}
+
+/**
+ * Insert a hunter activity event. Fire-and-forget — never throws.
+ *
+ * Usage:
+ *   emitEvent({ workspaceId, candidateId, phase: 'spotify', status: 'success',
+ *               message: 'Matched by name', data: { spotifyArtistId: '...' } });
+ *
+ * If the DB write fails, we log a warning and swallow — the caller's
+ * enrichment work continues unaffected.
+ */
+export async function emitEvent(input: {
+  workspaceId: string;
+  runId?: string | null;
+  candidateId?: string | null;
+  phase: HunterEventPhase;
+  status: HunterEventStatus;
+  message: string;
+  data?: Record<string, unknown>;
+}): Promise<void> {
+  try {
+    await ensureSchema();
+    await getPool().query(
+      `INSERT INTO hunter_events (workspace_id, run_id, candidate_id, phase, status, message, data)
+       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)`,
+      [
+        input.workspaceId,
+        input.runId ?? null,
+        input.candidateId ?? null,
+        input.phase,
+        input.status,
+        input.message.slice(0, 500), // hard cap to keep rows small
+        JSON.stringify(input.data ?? {}),
+      ]
+    );
+  } catch (err) {
+    console.warn('[HUNTER_EVENT] insert failed (non-fatal):', err);
+  }
+}
+
+/**
+ * Read events for the UI. Two query shapes:
+ *   - { candidateId } — per-candidate timeline (used by candidate info modal)
+ *   - { runId } — per-run streaming feed (used by Hunter run detail view)
+ * Both support `since` for incremental polling.
+ *
+ * Order: when `since` is provided, returns ASC (so client can append to its
+ * existing log); otherwise DESC (most recent first for historical view).
+ */
+export async function listEvents(opts: {
+  workspaceId: string;
+  candidateId?: string | null;
+  runId?: string | null;
+  since?: string | null;
+  limit?: number;
+}): Promise<HunterEvent[]> {
+  const limit = Math.min(Math.max(opts.limit ?? 100, 1), 500);
+  const params: unknown[] = [opts.workspaceId];
+  const where: string[] = ['workspace_id = $1'];
+  let i = 2;
+  if (opts.candidateId) {
+    where.push(`candidate_id = $${i++}`);
+    params.push(opts.candidateId);
+  }
+  if (opts.runId) {
+    where.push(`run_id = $${i++}`);
+    params.push(opts.runId);
+  }
+  if (opts.since) {
+    where.push(`created_at > $${i++}`);
+    params.push(opts.since);
+  }
+  const order = opts.since ? 'asc' : 'desc';
+  params.push(limit);
+  const res = await getPool().query(
+    `SELECT * FROM hunter_events WHERE ${where.join(' AND ')} ORDER BY created_at ${order} LIMIT $${i}`,
+    params
+  );
+  return res.rows.map(rowToEvent);
 }

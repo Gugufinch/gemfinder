@@ -15,12 +15,76 @@ import { getAuthUserById } from '@/lib/gemfinder/auth-store';
 import {
   getCandidate,
   updateCandidate,
+  emitEvent,
 } from '@/lib/gemfinder/scout-candidate-store';
 import { listWorkspaceProjects } from '@/lib/gemfinder/project-store';
 import { enrichCandidate } from '@/lib/gemfinder/hunter/enrichment';
 import { getWeights } from '@/lib/gemfinder/hunter/weights-store';
 import { computeScore } from '@/lib/gemfinder/hunter/scoring';
 import type { MBArtist } from '@/lib/gemfinder/hunter/musicbrainz';
+import type { ScoutCandidate } from '@/lib/gemfinder/types';
+
+// Fields the re-enrich pipeline can touch — used to compute the per-field delta
+// shown in the UI's "What just happened" panel. The label is human-readable.
+// IMPORTANT: when you add a new patched field in the route below, add it here
+// too — otherwise it won't appear in the delta and the operator will think
+// "nothing changed" when something actually did.
+type DeltaFieldSpec = {
+  key: keyof ScoutCandidate;
+  label: string;
+  kind: 'text' | 'number' | 'array';
+};
+const DELTA_FIELDS: DeltaFieldSpec[] = [
+  { key: 'spotifyUrl', label: 'Spotify URL', kind: 'text' },
+  { key: 'spotifyArtistId', label: 'Spotify artist ID', kind: 'text' },
+  { key: 'instagramHandle', label: 'Instagram handle', kind: 'text' },
+  { key: 'tiktokHandle', label: 'TikTok handle', kind: 'text' },
+  { key: 'youtubeHandle', label: 'YouTube handle', kind: 'text' },
+  { key: 'soundcloudHandle', label: 'SoundCloud handle', kind: 'text' },
+  { key: 'bandcampUrl', label: 'Bandcamp URL', kind: 'text' },
+  { key: 'musicbrainzId', label: 'MusicBrainz ID', kind: 'text' },
+  { key: 'primaryEmail', label: 'Booking email', kind: 'text' },
+  { key: 'contactType', label: 'Contact type', kind: 'text' },
+  { key: 'aiSummary', label: 'AI summary', kind: 'text' },
+  { key: 'primaryGenre', label: 'Primary genre', kind: 'text' },
+  { key: 'score', label: 'Score', kind: 'number' },
+  { key: 'spotifyMonthlyListeners', label: 'Spotify listeners', kind: 'number' },
+  { key: 'instagramFollowers', label: 'Instagram followers', kind: 'number' },
+  { key: 'tiktokFollowers', label: 'TikTok followers', kind: 'number' },
+  { key: 'youtubeSubscribers', label: 'YouTube subscribers', kind: 'number' },
+  { key: 'soundcloudFollowers', label: 'SoundCloud followers', kind: 'number' },
+  { key: 'genres', label: 'Genres', kind: 'array' },
+];
+
+type DeltaRow = {
+  field: string;
+  label: string;
+  kind: 'text' | 'number' | 'array';
+  before: string | number | string[] | null;
+  after: string | number | string[] | null;
+  changed: boolean;
+  deltaNumeric?: number;
+};
+
+function computeDelta(before: ScoutCandidate, after: ScoutCandidate): DeltaRow[] {
+  return DELTA_FIELDS.map(({ key, label, kind }) => {
+    const b = (before[key] ?? null) as string | number | string[] | null;
+    const a = (after[key] ?? null) as string | number | string[] | null;
+    let changed: boolean;
+    if (kind === 'array') {
+      const bs = Array.isArray(b) ? [...b].sort().join('|') : '';
+      const as = Array.isArray(a) ? [...a].sort().join('|') : '';
+      changed = bs !== as;
+    } else {
+      changed = b !== a;
+    }
+    const row: DeltaRow = { field: String(key), label, kind, before: b, after: a, changed };
+    if (kind === 'number' && typeof b === 'number' && typeof a === 'number') {
+      row.deltaNumeric = a - b;
+    }
+    return row;
+  });
+}
 
 async function requireEditorActor(req: NextRequest) {
   const userId = req.cookies.get('ar_user')?.value || '';
@@ -84,7 +148,9 @@ export async function POST(
 
   let enriched;
   try {
-    enriched = await enrichCandidate(workspaceId, mbShim);
+    // Pass candidateId so every phase emits a hunter_events row tied to this
+    // candidate — that's what powers the "Activity log" panel in the UI.
+    enriched = await enrichCandidate(workspaceId, mbShim, { candidateId });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     // The deep-research agent throws "not-a-recording-artist" if Gemini's
@@ -150,5 +216,34 @@ export async function POST(
     return NextResponse.json({ error: 'Update failed' }, { status: 500 });
   }
 
-  return NextResponse.json({ ok: true, candidate: updated });
+  // Compute what actually changed vs. the pre-re-enrich snapshot. This is what
+  // gives the operator visibility — "your re-enrich found 2 new things and
+  // updated 3 follower counts" instead of the old silent success.
+  const deltaRows = computeDelta(candidate, updated);
+  const changedRows = deltaRows.filter((r) => r.changed);
+  const delta = {
+    fields: deltaRows,
+    totalChanged: changedRows.length,
+    totalUnchanged: deltaRows.length - changedRows.length,
+    lastSeenAt: candidate.updatedAt,
+    summary: changedRows.length === 0
+      ? 'No fields changed — all data on file was already current.'
+      : `${changedRows.length} field${changedRows.length === 1 ? '' : 's'} updated.`,
+  };
+
+  // Emit a final summary event so the activity-log panel can render a
+  // "✓ Re-enrich complete" capstone row that ties together everything below it.
+  void emitEvent({
+    workspaceId,
+    candidateId,
+    phase: 'meta',
+    status: 'success',
+    message: delta.summary,
+    data: {
+      changedFields: changedRows.map((r) => r.field),
+      totalChanged: delta.totalChanged,
+    },
+  });
+
+  return NextResponse.json({ ok: true, candidate: updated, delta });
 }

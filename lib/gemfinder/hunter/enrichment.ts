@@ -6,6 +6,8 @@ import { scrapeWebsite } from '@/lib/gemfinder/hunter/steel';
 import { getCached, putCached } from '@/lib/gemfinder/hunter/scrape-cache';
 import { fetchInstagramFollowers, fetchTiktokFollowers } from '@/lib/gemfinder/hunter/social-scraping';
 import type { EnrichedCandidate } from '@/lib/gemfinder/types';
+import { emitEvent } from '@/lib/gemfinder/scout-candidate-store';
+import type { HunterEventPhase, HunterEventStatus } from '@/lib/gemfinder/scout-candidate-store';
 
 // ---------------------------------------------------------------------------
 // Internal types
@@ -176,8 +178,39 @@ function computeContactReadiness(
 export async function enrichCandidate(
   workspaceId: string,
   mbArtist: MBArtist,
-  options?: { skipDeepResearch?: boolean },
+  options?: {
+    skipDeepResearch?: boolean;
+    // Observability: when set, every phase emits a hunter_events row so the UI
+    // can show "what the agent did" for this enrichment. Both fields optional —
+    // omitting them keeps enrichment silent (used by unit tests).
+    runId?: string | null;
+    candidateId?: string | null;
+  },
 ): Promise<EnrichedCandidate> {
+  // Fire-and-forget event emit — wrapped so we can keep the call sites terse
+  // and never accidentally await (logging is non-critical, must never block).
+  const emit = (
+    phase: HunterEventPhase,
+    status: HunterEventStatus,
+    message: string,
+    data?: Record<string, unknown>,
+  ) => {
+    if (!options?.runId && !options?.candidateId) return; // silent when no context
+    void emitEvent({
+      workspaceId,
+      runId: options.runId ?? null,
+      candidateId: options.candidateId ?? null,
+      phase,
+      status,
+      message,
+      data,
+    });
+  };
+
+  emit('meta', 'started', `Starting enrichment for "${mbArtist.name}"`, {
+    skipDeepResearch: !!options?.skipDeepResearch,
+    hasMbId: !!mbArtist.id,
+  });
   // Step 0: MB search results don't include relations / release-groups / extended tags —
   // those only come from `fetchArtistDetails`. Without it, we have no Spotify URL to
   // extract → no Spotify follower data → size_cap gate can never fire → megastars
@@ -188,16 +221,26 @@ export async function enrichCandidate(
   let fullArtist: MBArtist = mbArtist;
   if (!mbArtist.relations || !mbArtist['release-groups']) {
     if (mbArtist.id) {  // skip MB lookup for LLM-sourced candidates (empty id)
+      emit('mb_fetch', 'started', `Fetching MusicBrainz details for ${mbArtist.id.slice(0, 8)}…`);
       try {
         const detailed = await fetchArtistDetails(mbArtist.id);
         if (detailed) {
           // Merge: keep the search-result data as a baseline, layer detailed fields on top.
           fullArtist = { ...mbArtist, ...detailed };
+          emit('mb_fetch', 'success', 'MusicBrainz returned full record', {
+            relationsCount: (detailed.relations ?? []).length,
+            releaseGroupsCount: (detailed['release-groups'] ?? []).length,
+          });
+        } else {
+          emit('mb_fetch', 'success', 'MusicBrainz returned empty record', {});
         }
       } catch (err) {
         console.warn('[HUNTER_ENRICH] fetchArtistDetails failed for', mbArtist.id, err);
+        emit('mb_fetch', 'failed', `MusicBrainz lookup failed: ${err instanceof Error ? err.message : String(err)}`);
         // Continue with whatever we have — degraded but not broken.
       }
+    } else {
+      emit('mb_fetch', 'skipped', 'No MusicBrainz ID (LLM-sourced candidate)');
     }
   }
 
@@ -218,22 +261,43 @@ export async function enrichCandidate(
   const hintGenres = (mbArtist.tags ?? []).map((t) => t.name).slice(0, 5);
   let deep: Awaited<ReturnType<typeof researchArtist>> = null;
   if (!options?.skipDeepResearch) {
+    emit('deep_research', 'started', `Verifying "${mbArtist.name}" via Gemini deep research`, {
+      hintGenres,
+    });
     try {
       deep = await researchArtist(workspaceId, mbArtist.name, hintGenres);
       if (deep && deep.verified === false) {
+        emit('deep_research', 'failed', 'Gemini flagged name as not a recording artist', {
+          verified: false,
+        });
         // Gemini says this isn't a real recording artist — short-circuit. The
         // orchestrator's enrichCandidate caller catches errors and skips the
         // candidate; we throw a specific marker so the gated_reasons surface
         // says why.
         throw new Error(`[HUNTER_ENRICH] deep research flagged "${mbArtist.name}" as not-a-recording-artist`);
       }
+      if (deep) {
+        emit('deep_research', 'success', 'Deep research returned grounded summary', {
+          verified: deep.verified,
+          hasBookingEmail: !!deep.bookingEmail,
+          hasManager: !!deep.managerInfo,
+          summaryLength: deep.bio?.length || 0,
+          hasIg: !!deep.instagramHandle,
+          hasTt: !!deep.tiktokHandle,
+        });
+      } else {
+        emit('deep_research', 'skipped', 'Deep research returned null (likely quota or no signal)');
+      }
     } catch (err) {
       if (err instanceof Error && err.message.includes('not-a-recording-artist')) {
         throw err;  // re-throw so orchestrator records the gate-out
       }
       console.warn('[HUNTER_ENRICH] deep research failed for', mbArtist.name, ':', err);
+      emit('deep_research', 'failed', `Deep research errored: ${err instanceof Error ? err.message : String(err)}`);
       deep = null;  // continue without enhanced data
     }
+  } else {
+    emit('deep_research', 'skipped', 'Skipped (light-enrichment phase)');
   }
 
   // Step 1 & 2: core MB fields + isLiving
@@ -281,16 +345,25 @@ export async function enrichCandidate(
   if (extracted.spotifyUrl) {
     spotifyArtistId = parseSpotifyArtistId(extracted.spotifyUrl) ?? undefined;
     if (spotifyArtistId) {
+      emit('spotify', 'started', `Looking up Spotify artist by ID: ${spotifyArtistId.slice(0, 8)}…`);
       let sp = null;
       try {
         sp = await getArtistById(spotifyArtistId);
       } catch (err) {
         console.warn('[HUNTER_ENRICH] spotify lookup failed for', spotifyArtistId + ':', err);
+        emit('spotify', 'failed', `Spotify by-ID lookup failed: ${err instanceof Error ? err.message : String(err)}`);
       }
       if (sp) {
         spotifyFollowers = sp.followers.total;
         spotifyPopularity = sp.popularity;
         spotifyGenres = sp.genres;
+        emit('spotify', 'success', `Spotify resolved by ID: ${sp.followers.total.toLocaleString()} followers, popularity ${sp.popularity}`, {
+          spotifyArtistId,
+          followers: sp.followers.total,
+          popularity: sp.popularity,
+          genres: sp.genres,
+          source: 'by_id',
+        });
       }
     }
   }
@@ -303,11 +376,13 @@ export async function enrichCandidate(
   // surfaced megastars to Greg's first hunt.
   let spotifyImageUrl: string | undefined;
   if (spotifyFollowers === undefined) {
+    emit('spotify', 'started', `Falling back to Spotify name search for "${mbArtist.name}"`);
     let sp = null;
     try {
       sp = await searchArtistByName(mbArtist.name);
     } catch (err) {
       console.warn('[HUNTER_ENRICH] spotify name search failed for', mbArtist.name + ':', err);
+      emit('spotify', 'failed', `Spotify name search failed: ${err instanceof Error ? err.message : String(err)}`);
     }
     if (sp) {
       spotifyFollowers = sp.followers.total;
@@ -315,6 +390,16 @@ export async function enrichCandidate(
       spotifyGenres = sp.genres;
       spotifyArtistId = sp.id;
       spotifyImageUrl = sp.images?.[0]?.url;
+      emit('spotify', 'success', `Spotify matched by name: ${sp.followers.total.toLocaleString()} followers, popularity ${sp.popularity}`, {
+        spotifyArtistId: sp.id,
+        followers: sp.followers.total,
+        popularity: sp.popularity,
+        genres: sp.genres,
+        hasImage: !!spotifyImageUrl,
+        source: 'by_name',
+      });
+    } else if (!sp) {
+      emit('spotify', 'skipped', `No Spotify match found for "${mbArtist.name}"`);
     }
   }
 
@@ -328,6 +413,7 @@ export async function enrichCandidate(
       tt = await getTopTracks(spotifyArtistId);
     } catch (err) {
       console.warn('[HUNTER_ENRICH] top tracks fetch failed for', spotifyArtistId + ':', err);
+      emit('top_tracks', 'failed', `Top-tracks fetch failed: ${err instanceof Error ? err.message : String(err)}`);
     }
     if (tt && tt.length > 0) {
       topTracks = tt.slice(0, 5).map((t) => ({
@@ -336,6 +422,13 @@ export async function enrichCandidate(
         spotifyUrl: t.external_urls?.spotify,
         previewUrl: t.preview_url,
       }));
+      emit('top_tracks', 'success', `Fetched ${topTracks.length} top tracks (top: "${topTracks[0]?.name}", pop ${topTracks[0]?.popularity})`, {
+        count: topTracks.length,
+        topTrackName: topTracks[0]?.name,
+        topTrackPopularity: topTracks[0]?.popularity,
+      });
+    } else if (tt !== null) {
+      emit('top_tracks', 'skipped', 'Spotify returned zero top tracks');
     }
   }
 
@@ -393,22 +486,52 @@ export async function enrichCandidate(
   const socialPromises: Promise<void>[] = [];
 
   if (extracted.instagramHandle) {
+    const igHandle = extracted.instagramHandle;
+    emit('ig_scrape', 'started', `Scraping IG @${igHandle}…`);
     socialPromises.push(
       Promise.race([
-        fetchInstagramFollowers(extracted.instagramHandle),
+        fetchInstagramFollowers(igHandle),
         new Promise<null>((r) => setTimeout(() => r(null), 15_000)),
-      ]).then((n) => { if (typeof n === 'number') igFollowers = n; })
-        .catch((err) => console.warn('[HUNTER_ENRICH] IG fetch failed:', err))
+      ]).then((n) => {
+        if (typeof n === 'number') {
+          igFollowers = n;
+          emit('ig_scrape', 'success', `IG @${igHandle}: ${n.toLocaleString()} followers`, {
+            handle: igHandle,
+            followers: n,
+          });
+        } else {
+          emit('ig_scrape', 'skipped', `IG @${igHandle} returned no follower count (timeout or scrape blocked)`);
+        }
+      })
+        .catch((err) => {
+          console.warn('[HUNTER_ENRICH] IG fetch failed:', err);
+          emit('ig_scrape', 'failed', `IG fetch errored: ${err instanceof Error ? err.message : String(err)}`);
+        })
     );
   }
 
   if (extracted.tiktokHandle) {
+    const ttHandle = extracted.tiktokHandle;
+    emit('tt_scrape', 'started', `Scraping TikTok @${ttHandle}…`);
     socialPromises.push(
       Promise.race([
-        fetchTiktokFollowers(extracted.tiktokHandle),
+        fetchTiktokFollowers(ttHandle),
         new Promise<null>((r) => setTimeout(() => r(null), 15_000)),
-      ]).then((n) => { if (typeof n === 'number') ttFollowers = n; })
-        .catch((err) => console.warn('[HUNTER_ENRICH] TT fetch failed:', err))
+      ]).then((n) => {
+        if (typeof n === 'number') {
+          ttFollowers = n;
+          emit('tt_scrape', 'success', `TikTok @${ttHandle}: ${n.toLocaleString()} followers`, {
+            handle: ttHandle,
+            followers: n,
+          });
+        } else {
+          emit('tt_scrape', 'skipped', `TikTok @${ttHandle} returned no follower count (timeout or scrape blocked)`);
+        }
+      })
+        .catch((err) => {
+          console.warn('[HUNTER_ENRICH] TT fetch failed:', err);
+          emit('tt_scrape', 'failed', `TikTok fetch errored: ${err instanceof Error ? err.message : String(err)}`);
+        })
     );
   }
 
@@ -465,6 +588,15 @@ export async function enrichCandidate(
     contactReadiness,
     aiSummary: finalBio,
   };
+
+  emit('meta', 'success', `Enrichment complete for "${mbArtist.name}"`, {
+    hasSpotify: !!spotifyArtistId,
+    hasIg: typeof igFollowers === 'number',
+    hasTt: typeof ttFollowers === 'number',
+    hasContactEmail: !!scrapedContactEmail,
+    contactReadiness,
+    genreCount: genres.length,
+  });
 
   return candidate;
 }

@@ -3704,7 +3704,19 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [scoutV3QueueGenreFilter, setScoutV3QueueGenreFilter] = useState("");  // substring match against primaryGenre + genres
   const [scoutV3QueueMinScore, setScoutV3QueueMinScore] = useState("");        // string for input control
   const [scoutV3QueueContactOnly, setScoutV3QueueContactOnly] = useState(false); // only show candidates with a contact email
-  const [scoutV3QueueView, setScoutV3QueueView] = useState("compact");  // card | compact — default to compact since it's the fast-scan triage mode
+  // View preference persisted in localStorage so the operator's choice sticks
+  // across sessions. Default to "compact" for first-time users (fast triage).
+  const [scoutV3QueueView, setScoutV3QueueViewState] = useState(() => {
+    if (typeof window === "undefined") return "compact";
+    try {
+      const v = window.localStorage.getItem("scoutV3.queueView");
+      return v === "card" || v === "compact" ? v : "compact";
+    } catch { return "compact"; }
+  });
+  const setScoutV3QueueView = (v) => {
+    setScoutV3QueueViewState(v);
+    try { window.localStorage.setItem("scoutV3.queueView", v); } catch { /* swallow: storage failure is non-fatal */ }
+  };
   const [scoutV3Rejections, setScoutV3Rejections] = useState([]);
   const [scoutV3AddModalOpen, setScoutV3AddModalOpen] = useState(false);
   const [scoutV3ApproveTarget, setScoutV3ApproveTarget] = useState(null);
@@ -3738,6 +3750,13 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   // Info modal: full-detail view of one candidate for A&R deep-dive review
   const [scoutV3InfoCandidate, setScoutV3InfoCandidate] = useState(null);
   const [scoutV3InfoReenriching, setScoutV3InfoReenriching] = useState(false);
+  // Activity log + delta state for the info modal. Events are loaded once when
+  // the modal opens, then poll-appended every 2s while a re-enrich is running.
+  // Delta is null until the next re-enrich response returns it.
+  const [scoutV3InfoEvents, setScoutV3InfoEvents] = useState([]);
+  const [scoutV3InfoEventsLoading, setScoutV3InfoEventsLoading] = useState(false);
+  const [scoutV3InfoDelta, setScoutV3InfoDelta] = useState(null);
+  const [scoutV3InfoActivityOpen, setScoutV3InfoActivityOpen] = useState(false);
   // CSV bulk-add state
   const [scoutV3AddMode, setScoutV3AddMode] = useState("single");   // "single" | "csv"
   const [scoutV3BulkCsvText, setScoutV3BulkCsvText] = useState("");
@@ -5720,6 +5739,37 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       return next;
     });
   }, [archivedLiveCampaignHubRows]);
+
+  // Load activity-log events when the Scout V3 candidate info modal opens.
+  // Most recent 50 events first (DESC) — those tell the operator "what
+  // happened most recently to this candidate" without polling. Polling kicks
+  // in separately during a re-enrich.
+  useEffect(() => {
+    if (!scoutV3InfoCandidate?.id || !selectedWorkspace?.id) {
+      setScoutV3InfoEvents([]);
+      setScoutV3InfoDelta(null);
+      setScoutV3InfoActivityOpen(false);
+      return;
+    }
+    let cancelled = false;
+    setScoutV3InfoEventsLoading(true);
+    fetch(`/api/ar/scout/events?workspaceId=${encodeURIComponent(selectedWorkspace.id)}&candidateId=${encodeURIComponent(scoutV3InfoCandidate.id)}&limit=50`, {
+      credentials: "include",
+    })
+      .then(r => r.json())
+      .then(data => {
+        if (cancelled) return;
+        if (data.ok && Array.isArray(data.events)) {
+          // Events come back DESC (most recent first) — that's how we want to
+          // render the timeline. Each new re-enrich poll appends to the
+          // beginning (we flip the ASC poll response).
+          setScoutV3InfoEvents(data.events);
+        }
+      })
+      .catch(err => console.warn("[SCOUT_V3] events load failed:", err))
+      .finally(() => { if (!cancelled) setScoutV3InfoEventsLoading(false); });
+    return () => { cancelled = true; };
+  }, [scoutV3InfoCandidate?.id, selectedWorkspace?.id]);
   const sessionUserName = useMemo(
     () => resolveSessionUserName(authEmail, authUserId, proj?.teamUsers || DEFAULT_TEAM_USERS),
     [authEmail, authUserId, proj?.teamUsers],
@@ -13529,13 +13579,25 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                     );
                   }
 
+                  // Four-tier score coloring — replaces the old 3-tier scheme.
+                  // Mid-scoring candidates (40-59) now read as amber instead of
+                  // gray, so the operator can differentiate "warm" prospects
+                  // from "cold" ones at a glance.
+                  const tierFor = (score) => {
+                    if (score == null) return { fg: C.ts, bg: C.sa, border: C.bd, label: "unscored" };
+                    if (score >= 75) return { fg: C.gn, bg: C.gb, border: `${C.gn}55`, label: "strong" };
+                    if (score >= 60) return { fg: C.bu, bg: C.bb, border: `${C.bu}44`, label: "warm" };
+                    if (score >= 30) return { fg: C.ab, bg: C.abb, border: `${C.ab}44`, label: "mid" };
+                    return { fg: C.rd, bg: C.rb, border: `${C.rd}33`, label: "cold" };
+                  };
+
                   // Compact view: dense rows, one line per candidate
                   if (scoutV3QueueView === "compact") {
                     return (
                       <div style={{ ...cS, overflow: "hidden" }}>
                         {sortedVisible.map((c, i) => {
                           const score = c.score == null ? null : Math.round(c.score);
-                          const scoreTone = score == null ? { fg: C.ts, bg: C.sa } : score >= 75 ? { fg: C.gn, bg: C.gb } : score >= 60 ? { fg: C.bu, bg: C.bb } : { fg: C.ts, bg: C.sa };
+                          const scoreTone = tierFor(score);
                           return (
                             <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", fontSize: 13, borderTop: i === 0 ? "none" : `1px solid ${C.bd}` }}>
                               <span style={{ fontWeight: 700 }}>{c.displayName}</span>
@@ -13560,7 +13622,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
 
                   // Card view (default) — full rich cards
                   return sortedVisible.map(c => {
-                  const scoreTone = c.score == null ? { fg: C.ts, bg: C.sa } : c.score >= 75 ? { fg: C.gn, bg: C.gb } : c.score >= 60 ? { fg: C.bu, bg: C.bb } : { fg: C.ts, bg: C.sa };
+                  const scoreTone = tierFor(c.score == null ? null : Math.round(c.score));
                   const followerRows = [
                     c.spotifyMonthlyListeners && { label: "Spotify followers", value: c.spotifyMonthlyListeners.toLocaleString() },
                     c.instagramFollowers && { label: "Instagram", value: c.instagramFollowers.toLocaleString() },
@@ -13581,7 +13643,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                     : [];
                   const artistImageUrl = c.weightSnapshot?._imageUrl;
                   return (
-                  <div key={`scoutv3-card-${c.id}`} style={{ ...cS, padding: "20px 22px" }}>
+                  <div key={`scoutv3-card-${c.id}`} style={{ ...cS, padding: "20px 22px", borderLeft: `3px solid ${scoreTone.border}` }}>
                     {/* Header row: name, role, source, score */}
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
                       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
@@ -14947,6 +15009,127 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                     </div>
                   </div>
 
+                  {/* Activity log + re-enrich delta panel */}
+                  {(scoutV3InfoEvents.length > 0 || scoutV3InfoDelta || scoutV3InfoEventsLoading) && (() => {
+                    // Helpers scoped to this render — keep them near the only
+                    // place they're used so the JSX stays readable.
+                    const phaseIcon = (phase) => ({
+                      meta: "▶",
+                      mb_fetch: "🎼",
+                      deep_research: "🔍",
+                      spotify: "🟢",
+                      top_tracks: "🎵",
+                      ig_scrape: "📷",
+                      tt_scrape: "🎬",
+                      score: "📊",
+                      cache: "💾",
+                    }[phase] || "•");
+                    const statusColor = (status) => ({
+                      started: C.ts,
+                      success: C.gn,
+                      failed: C.rd,
+                      skipped: C.tt,
+                    }[status] || C.ts);
+                    const relativeTime = (iso) => {
+                      const ms = Date.now() - new Date(iso).getTime();
+                      if (ms < 5000) return "just now";
+                      if (ms < 60_000) return `${Math.round(ms / 1000)}s ago`;
+                      if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m ago`;
+                      if (ms < 86_400_000) return `${Math.round(ms / 3_600_000)}h ago`;
+                      return new Date(iso).toLocaleDateString();
+                    };
+                    const formatVal = (v) => {
+                      if (v === null || v === undefined || v === "") return <em style={{ color: C.tt }}>(empty)</em>;
+                      if (Array.isArray(v)) return v.join(", ") || <em style={{ color: C.tt }}>(empty)</em>;
+                      if (typeof v === "number") return v.toLocaleString();
+                      if (typeof v === "string" && v.length > 60) return v.slice(0, 60) + "…";
+                      return String(v);
+                    };
+
+                    return (
+                      <div style={{ borderTop: `1px solid ${C.bd}`, padding: "16px 24px", background: C.bg }}>
+                        {/* Delta summary card */}
+                        {scoutV3InfoDelta && (() => {
+                          const changed = scoutV3InfoDelta.fields.filter(f => f.changed);
+                          return (
+                            <div style={{ padding: 14, borderRadius: 12, background: changed.length > 0 ? `${C.gn}15` : C.sa, border: `1px solid ${changed.length > 0 ? C.gn : C.bd}`, marginBottom: 12 }}>
+                              <div style={{ fontSize: 13, fontWeight: 700, color: changed.length > 0 ? C.gn : C.ts, marginBottom: 6 }}>
+                                {changed.length > 0 ? "✓ " : ""}{scoutV3InfoDelta.summary}
+                              </div>
+                              {changed.length > 0 && (
+                                <div style={{ display: "grid", gap: 4, marginTop: 8 }}>
+                                  {changed.map(row => (
+                                    <div key={`delta-${row.field}`} style={{ display: "flex", alignItems: "baseline", gap: 8, fontSize: 12, lineHeight: 1.5 }}>
+                                      <span style={{ minWidth: 140, color: C.ts, fontWeight: 600 }}>{row.label}:</span>
+                                      <span style={{ color: C.tt, textDecoration: "line-through" }}>{formatVal(row.before)}</span>
+                                      <span style={{ color: C.ts }}>→</span>
+                                      <span style={{ color: C.tx, fontWeight: 600 }}>{formatVal(row.after)}</span>
+                                      {typeof row.deltaNumeric === "number" && row.deltaNumeric !== 0 && (
+                                        <span style={{ color: row.deltaNumeric > 0 ? C.gn : C.rd, fontSize: 11, fontWeight: 700 }}>
+                                          ({row.deltaNumeric > 0 ? "+" : ""}{row.deltaNumeric.toLocaleString()})
+                                        </span>
+                                      )}
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                              {scoutV3InfoDelta.totalUnchanged > 0 && (
+                                <div style={{ fontSize: 11, color: C.tt, marginTop: 8 }}>
+                                  {scoutV3InfoDelta.totalUnchanged} field{scoutV3InfoDelta.totalUnchanged === 1 ? "" : "s"} unchanged
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })()}
+
+                        {/* Collapsible activity log */}
+                        <button
+                          onClick={() => setScoutV3InfoActivityOpen(o => !o)}
+                          style={{ display: "flex", alignItems: "center", gap: 8, background: "none", border: "none", padding: "4px 0", cursor: "pointer", fontFamily: ft, color: C.tx, fontSize: 13, fontWeight: 700 }}
+                        >
+                          <span style={{ display: "inline-block", transition: "transform 0.15s", transform: scoutV3InfoActivityOpen ? "rotate(90deg)" : "rotate(0deg)" }}>▶</span>
+                          Activity log
+                          {scoutV3InfoReenriching && (
+                            <span style={{ fontSize: 11, color: C.ts, fontWeight: 500, marginLeft: 4 }}>· live</span>
+                          )}
+                          <span style={{ fontSize: 11, color: C.ts, fontWeight: 500, marginLeft: 4 }}>
+                            ({scoutV3InfoEvents.length} event{scoutV3InfoEvents.length === 1 ? "" : "s"})
+                          </span>
+                        </button>
+                        {scoutV3InfoActivityOpen && (
+                          <div style={{ marginTop: 8, maxHeight: 280, overflowY: "auto", border: `1px solid ${C.bd}`, borderRadius: 10, background: C.sf }}>
+                            {scoutV3InfoEventsLoading && scoutV3InfoEvents.length === 0 && (
+                              <div style={{ padding: 12, fontSize: 12, color: C.ts }}>Loading events…</div>
+                            )}
+                            {!scoutV3InfoEventsLoading && scoutV3InfoEvents.length === 0 && (
+                              <div style={{ padding: 12, fontSize: 12, color: C.tt }}>
+                                No activity recorded yet. Click <strong>Re-enrich</strong> to start a fresh enrichment pass and watch each phase here.
+                              </div>
+                            )}
+                            {scoutV3InfoEvents.map((ev, idx) => (
+                              <div
+                                key={`evt-${ev.id || idx}`}
+                                style={{ padding: "10px 12px", borderTop: idx === 0 ? "none" : `1px solid ${C.bd}`, fontSize: 12, lineHeight: 1.5, display: "flex", gap: 10, alignItems: "flex-start" }}
+                              >
+                                <span style={{ fontSize: 14, minWidth: 22, textAlign: "center" }}>{phaseIcon(ev.phase)}</span>
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                  <div style={{ color: C.tx, fontWeight: ev.status === "failed" ? 700 : 500 }}>{ev.message}</div>
+                                  <div style={{ marginTop: 2, fontSize: 11, color: C.ts, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                                    <span style={{ color: statusColor(ev.status), fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>{ev.status}</span>
+                                    <span>·</span>
+                                    <span>{ev.phase}</span>
+                                    <span>·</span>
+                                    <span>{relativeTime(ev.createdAt)}</span>
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
+
                   {/* Action footer — sticky, big buttons */}
                   <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", padding: "16px 24px", borderTop: `1px solid ${C.bd}`, background: C.sa, flexWrap: "wrap" }}>
                     <button onClick={() => setScoutV3InfoCandidate(null)} style={{ ...actionBtn(false, "neutral"), fontSize: 14, padding: "10px 18px" }}>Close</button>
@@ -14954,6 +15137,30 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                       onClick={async () => {
                         if (!selectedWorkspace?.id || scoutV3InfoReenriching) return;
                         setScoutV3InfoReenriching(true);
+                        // Reset prior delta and open the activity panel so the user
+                        // can watch events stream in. Use the current timestamp as
+                        // the polling cursor — only events AFTER this point are new.
+                        setScoutV3InfoDelta(null);
+                        setScoutV3InfoActivityOpen(true);
+                        const pollCursor = { sinceTs: new Date().toISOString() };
+                        const pollInterval = setInterval(async () => {
+                          try {
+                            const r = await fetch(
+                              `/api/ar/scout/events?workspaceId=${encodeURIComponent(selectedWorkspace.id)}&candidateId=${encodeURIComponent(c.id)}&since=${encodeURIComponent(pollCursor.sinceTs)}&limit=50`,
+                              { credentials: "include" },
+                            );
+                            const j = await r.json();
+                            if (j.ok && Array.isArray(j.events) && j.events.length > 0) {
+                              // `since` returns ASC; UI displays DESC, so flip
+                              // then prepend. Update cursor to newest event.
+                              setScoutV3InfoEvents(prev => [...j.events.slice().reverse(), ...prev]);
+                              pollCursor.sinceTs = j.newestAt || pollCursor.sinceTs;
+                            }
+                          } catch (err) {
+                            console.warn("[SCOUT_V3] event poll failed:", err);
+                          }
+                        }, 2000);
+
                         try {
                           const res = await fetch(`/api/ar/scout/candidates/${encodeURIComponent(c.id)}/reenrich?workspaceId=${encodeURIComponent(selectedWorkspace.id)}`, {
                             method: "POST",
@@ -14962,7 +15169,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                           const data = await res.json();
                           if (data.ok && data.candidate) {
                             setScoutV3InfoCandidate(data.candidate);
-                            // Also refresh the candidates list in the background.
+                            setScoutV3InfoDelta(data.delta || null);
+                            // Refresh the candidates list in the background.
                             setScoutV3HunterPollTick(n => n + 1);
                           } else {
                             window.alert(`Re-enrich failed: ${data.error || "unknown error"}`);
@@ -14970,12 +15178,25 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                         } catch (err) {
                           window.alert(`Re-enrich failed: ${err.message}`);
                         } finally {
+                          clearInterval(pollInterval);
                           setScoutV3InfoReenriching(false);
+                          // One final poll to catch any events that landed
+                          // between the last tick and the response returning.
+                          try {
+                            const r = await fetch(
+                              `/api/ar/scout/events?workspaceId=${encodeURIComponent(selectedWorkspace.id)}&candidateId=${encodeURIComponent(c.id)}&since=${encodeURIComponent(pollCursor.sinceTs)}&limit=50`,
+                              { credentials: "include" },
+                            );
+                            const j = await r.json();
+                            if (j.ok && Array.isArray(j.events) && j.events.length > 0) {
+                              setScoutV3InfoEvents(prev => [...j.events.slice().reverse(), ...prev]);
+                            }
+                          } catch (err) { /* swallowed: trailing fetch is best-effort */ }
                         }
                       }}
                       disabled={scoutV3InfoReenriching}
                       style={{ ...actionBtn(false, "neutral"), fontSize: 14, padding: "10px 18px", opacity: scoutV3InfoReenriching ? 0.6 : 1 }}
-                      title="Re-run Spotify lookup + Gemini deep research + IG/TT scraping on this candidate. Useful when data is missing."
+                      title="Re-run Spotify lookup + Gemini deep research + IG/TT scraping on this candidate. Watch the Activity Log to see exactly what the agent does."
                     >
                       {scoutV3InfoReenriching ? "🔄 Re-enriching…" : "🔄 Re-enrich"}
                     </button>

@@ -109,6 +109,16 @@ export async function GET(req: NextRequest) {
     fail('schema.hunter_scrape_cache', err, 'table missing; run ensureSchema()');
   }
 
+  // Hunter activity-event log — new in Scout V3 observability work.
+  // Powers per-candidate timelines and live hunter-run progress streams.
+  try {
+    const pool = getScoutPool();
+    await pool.query('select 1 from hunter_events limit 1');
+    pass('schema.hunter_events', 'ready');
+  } catch (err) {
+    fail('schema.hunter_events', err, 'table missing; run ensureSchema()');
+  }
+
   // 7b. Optional Hunter weights check (gated on workspaceId)
   if (workspaceId) {
     try {

@@ -141,7 +141,7 @@ export async function runPipeline(input: RunPipelineInput): Promise<HunterRunSum
             // save quota. Spotify lookup + IG/TT scrape + MB enrichment are fast
             // and cheap; deep research is the expensive Gemini call we defer
             // to Phase D where it only runs on the top-N survivors after scoring.
-            const enriched = await enrichCandidate(workspaceId, mb, { skipDeepResearch: true });
+            const enriched = await enrichCandidate(workspaceId, mb, { skipDeepResearch: true, runId });
             const identity = buildIdentity({
               displayName: enriched.displayName,
               spotifyArtistId: enriched.spotifyArtistId,
@@ -233,7 +233,7 @@ export async function runPipeline(input: RunPipelineInput): Promise<HunterRunSum
           name: sc.enriched.displayName,
           tags: (sc.enriched.genres || []).map((g) => ({ name: g, count: 1 })),
         };
-        const deepEnriched = await enrichCandidate(workspaceId, mb, { skipDeepResearch: false });
+        const deepEnriched = await enrichCandidate(workspaceId, mb, { skipDeepResearch: false, runId });
         // Merge: take whatever deep-research added on top of existing fields.
         sc.enriched = { ...sc.enriched, ...stripEmpty(deepEnriched) };
       } catch (err) {
