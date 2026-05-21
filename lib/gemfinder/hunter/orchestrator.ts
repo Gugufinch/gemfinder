@@ -12,7 +12,7 @@ import { computeScore } from './scoring';
 import { isBlocked } from '@/lib/gemfinder/scout-blocklist';
 import { buildIdentity, canonicalizeName } from '@/lib/gemfinder/scout/identity';
 import { updateRunSummary, setRunStatus } from '@/lib/gemfinder/hunter-runs-store';
-import { createCandidate } from '@/lib/gemfinder/scout-candidate-store';
+import { createCandidate, listKnownCanonicalNames } from '@/lib/gemfinder/scout-candidate-store';
 
 export type RunPipelineInput = {
   runId: string;
@@ -61,12 +61,25 @@ export async function runPipeline(input: RunPipelineInput): Promise<HunterRunSum
     // Phase A: MusicBrainz fetch
     let mbResults: MBArtist[];
     try {
+      // Memory layer: fetch names we've already touched in this workspace so
+      // the LLM doesn't re-suggest them. Pre-load before the discovery call.
+      // Failures degrade gracefully — empty array means "no memory, return
+      // whatever you'd return normally".
+      let excludeNames: string[] = [];
+      if (source === 'llm') {
+        try {
+          excludeNames = await listKnownCanonicalNames(workspaceId, 500);
+        } catch (err) {
+          console.warn('[HUNTER_RUN] listKnownCanonicalNames failed (continuing without memory):', err);
+        }
+      }
+
       // Dispatch by source. 'llm' is the default in v1.1 — MusicBrainz tends to
       // return megastars regardless of offset tier; LLM-driven discovery uses
       // the model's implicit knowledge of music journalism to surface emerging
       // artists much more reliably.
       if (source === 'llm') {
-        mbResults = await searchArtistsViaLLM(criteria);
+        mbResults = await searchArtistsViaLLM(criteria, { excludeNames });
       } else {
         mbResults = await searchArtists(criteria);
       }

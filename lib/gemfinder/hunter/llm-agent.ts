@@ -35,8 +35,11 @@ function client(): GoogleGenAI {
  *
  * Returns up to 50 candidates. Orchestrator enriches + scores + top-N from these.
  */
-export async function searchArtistsViaLLM(criteria: HunterCriteria): Promise<MBArtist[]> {
-  const userPrompt = buildPrompt(criteria);
+export async function searchArtistsViaLLM(
+  criteria: HunterCriteria,
+  options?: { excludeNames?: string[] },
+): Promise<MBArtist[]> {
+  const userPrompt = buildPrompt(criteria, options?.excludeNames ?? []);
 
   // Try the lite model first (generous free-tier quota); on overload/503, retry
   // with exponential backoff; if all retries fail, fall back to the larger
@@ -277,7 +280,7 @@ Per artist, rationale should reference what you actually found in search (a 2024
 Output ONLY this JSON, no prose, no markdown fences:
 {"artists":[{"name":"...","genres":["..."],"rationale":"specific real reason"}]}`;
 
-function buildPrompt(criteria: HunterCriteria): string {
+function buildPrompt(criteria: HunterCriteria, excludeNames: string[] = []): string {
   const parts: string[] = [];
   parts.push('Find ~30 emerging artists for Songfinch\'s A&R queue.');
   parts.push('\nCriteria:');
@@ -300,6 +303,19 @@ function buildPrompt(criteria: HunterCriteria): string {
   parts.push(`- Max Spotify monthly listeners: ${maxListeners.toLocaleString()} (HARD LIMIT — do not exceed)`);
   if (criteria.recency?.sinceYear) parts.push(`- Active since: ${criteria.recency.sinceYear}`);
   if (criteria.instrument) parts.push(`- Notable for: ${criteria.instrument}`);
+
+  // Memory: prevent re-suggesting names we've already shown the operator. The
+  // blocklist still catches dupes downstream, but excluding them at the LLM
+  // level saves enrichment compute AND forces more variety in the results
+  // (Gemini tends to default to the same 20-30 buzzy names without nudging).
+  if (excludeNames.length > 0) {
+    // Cap at 200 to keep the prompt token cost reasonable. Most relevant
+    // (recent) names are at the head of the list because the SQL sorts desc.
+    const excludeList = excludeNames.slice(0, 200).join(', ');
+    parts.push(`\nALREADY IN OUR SYSTEM — DO NOT SUGGEST THESE (we have ${excludeNames.length} known artists; ${excludeNames.length > 200 ? 'first 200 listed' : 'all listed'}):\n${excludeList}`);
+    parts.push('\nFind DIFFERENT emerging artists — ones we have not seen yet. Variety matters; reach beyond the top-tier indie buzz names.');
+  }
+
   parts.push('\nUse Google Search to find real, current candidates. Return the JSON specified in the system prompt.');
   return parts.join('\n');
 }

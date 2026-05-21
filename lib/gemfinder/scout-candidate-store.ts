@@ -327,6 +327,40 @@ export async function listCandidatesByWorkspace(
  * Returns an empty array for unknown runIds (no error) — the UI handles
  * the empty case.
  */
+/**
+ * Return the canonical names of every artist we've EVER touched in this
+ * workspace — pending queue, rejected, AND the candidate snapshots from
+ * rejections (which preserve canonical name even after the candidate row
+ * is gone). Feeds the LLM agent's "don't suggest these" memory so Gemini
+ * stops returning the same buzzy names every hunt.
+ *
+ * Cap at 500 names to keep the prompt bounded — even if a workspace has
+ * thousands of historic rejections, the LLM only needs to know "we already
+ * have a lot of these tier 1 names" not the full list. We sort by most
+ * recent to bias the dedup toward currently-relevant names.
+ */
+export async function listKnownCanonicalNames(
+  workspaceId: string,
+  limit: number = 500,
+): Promise<string[]> {
+  // UNION across active candidates + rejections. Both store canonical_name.
+  const res = await getPool().query(
+    `(
+       select canonical_name, created_at from scout_candidates
+       where workspace_id = $1 and canonical_name is not null
+     )
+     union
+     (
+       select canonical_name, rejected_at as created_at from scout_rejections
+       where workspace_id = $1 and canonical_name is not null
+     )
+     order by created_at desc
+     limit $2`,
+    [workspaceId, limit],
+  );
+  return res.rows.map((r) => r.canonical_name as string).filter(Boolean);
+}
+
 export async function listCandidatesByHunterRun(
   workspaceId: string,
   hunterRunId: string,

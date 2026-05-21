@@ -172,6 +172,42 @@ describe('searchArtistsViaLLM', () => {
     expect(userText).toContain('2022');
   });
 
+  it('includes excludeNames in the prompt so Gemini avoids re-suggestions', async () => {
+    mockGenerateContent.mockResolvedValue(geminiResponse(JSON.stringify({ artists: [] })));
+    await searchArtistsViaLLM(
+      { genres: ['indie'], regions: ['US'], roleTarget: 'performer', targetCount: 25 },
+      { excludeNames: ['wednesday', 'mj lenderman', 'big freedia'] },
+    );
+    const userText = mockGenerateContent.mock.calls[0][0].contents[0].parts[0].text;
+    expect(userText).toContain('ALREADY IN OUR SYSTEM');
+    expect(userText).toContain('wednesday');
+    expect(userText).toContain('mj lenderman');
+    expect(userText).toContain('big freedia');
+    expect(userText).toContain('DO NOT SUGGEST');
+  });
+
+  it('omits the exclude block when excludeNames is empty', async () => {
+    mockGenerateContent.mockResolvedValue(geminiResponse(JSON.stringify({ artists: [] })));
+    await searchArtistsViaLLM({ genres: ['indie'], regions: ['US'], roleTarget: 'performer', targetCount: 25 });
+    const userText = mockGenerateContent.mock.calls[0][0].contents[0].parts[0].text;
+    expect(userText).not.toContain('ALREADY IN OUR SYSTEM');
+  });
+
+  it('caps excludeNames at 200 to keep the prompt bounded', async () => {
+    const bigList = Array.from({ length: 500 }, (_, i) => `artist${i}`);
+    mockGenerateContent.mockResolvedValue(geminiResponse(JSON.stringify({ artists: [] })));
+    await searchArtistsViaLLM(
+      { genres: ['indie'], regions: ['US'], roleTarget: 'performer', targetCount: 25 },
+      { excludeNames: bigList },
+    );
+    const userText = mockGenerateContent.mock.calls[0][0].contents[0].parts[0].text;
+    // first 200 must be present; later names should NOT appear in the list
+    expect(userText).toContain('artist0');
+    expect(userText).toContain('artist199');
+    expect(userText).not.toContain('artist200');
+    expect(userText).toContain('first 200 listed');
+  });
+
   it('enables Google Search grounding in the config', async () => {
     mockGenerateContent.mockResolvedValue(geminiResponse(JSON.stringify({ artists: [] })));
     await searchArtistsViaLLM({ genres: ['indie'], regions: ['US'], roleTarget: 'performer', targetCount: 25 });

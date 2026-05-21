@@ -3730,6 +3730,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [scoutV3HunterRunDetail, setScoutV3HunterRunDetail] = useState(null);
   const [scoutV3HunterRunAddedCandidates, setScoutV3HunterRunAddedCandidates] = useState([]);
   const [scoutV3QueueFilterRunId, setScoutV3QueueFilterRunId] = useState(null);
+  // Info modal: full-detail view of one candidate for A&R deep-dive review
+  const [scoutV3InfoCandidate, setScoutV3InfoCandidate] = useState(null);
   const [scoutV3HunterPollTick, setScoutV3HunterPollTick] = useState(0);
   const [scoutV3HunterWeightsOpen, setScoutV3HunterWeightsOpen] = useState(false);
   const [scoutV3HunterWeightsLoading, setScoutV3HunterWeightsLoading] = useState(false);
@@ -13436,6 +13438,7 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                               {c.primaryEmail && <span style={{ color: C.gn, fontSize: 11 }}>· 📧</span>}
                               <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
                                 {c.spotifyUrl && <a href={c.spotifyUrl} target="_blank" rel="noopener noreferrer" style={{ color: C.bu, textDecoration: "none", fontSize: 11 }}>Spotify ↗</a>}
+                                <button onClick={() => setScoutV3InfoCandidate(c)} style={{ ...actionBtn(false, "neutral"), fontSize: 11 }}>ℹ️ Info</button>
                                 <button onClick={() => setScoutV3ApproveTarget(c)} style={{ ...actionBtn(true, "accent"), fontSize: 11 }}>✓</button>
                                 <button onClick={() => setScoutV3RejectTarget(c)} style={{ ...actionBtn(false, "danger"), fontSize: 11 }}>✗</button>
                               </div>
@@ -13601,8 +13604,11 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                       )}
                     </div>
 
-                    {/* Action footer — prominent approve / reject */}
+                    {/* Action footer — prominent approve / reject + info */}
                     <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", paddingTop: 12, borderTop: `1px solid ${C.bd}` }}>
+                      <button onClick={() => setScoutV3InfoCandidate(c)} style={{ ...actionBtn(false, "neutral"), fontSize: 14, padding: "10px 18px" }}>
+                        ℹ️ More info
+                      </button>
                       <button onClick={() => setScoutV3RejectTarget(c)} style={{ ...actionBtn(false, "danger"), fontSize: 14, padding: "10px 18px" }}>
                         ✗ Reject
                       </button>
@@ -14471,6 +14477,204 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
               </div>
             </div>
           )}
+
+          {/* Candidate Info modal — deep-dive A&R review view */}
+          {scoutV3InfoCandidate && (() => {
+            const c = scoutV3InfoCandidate;
+            const score = c.score == null ? null : Math.round(c.score);
+            const scoreTone = score == null ? { fg: C.ts, bg: C.sa }
+              : score >= 75 ? { fg: C.gn, bg: C.gb }
+              : score >= 50 ? { fg: C.bu, bg: C.bb }
+              : { fg: C.ts, bg: C.sa };
+            const allDims = c.weightSnapshot && typeof c.weightSnapshot === "object"
+              ? Object.entries(c.weightSnapshot)
+                  .filter(([k, v]) => typeof v === "number" && !k.startsWith("_"))
+                  .sort(([, a], [, b]) => b - a)
+              : [];
+            const topTracksRaw = c.weightSnapshot && Array.isArray(c.weightSnapshot._topTracks) ? c.weightSnapshot._topTracks : [];
+            return (
+              <div
+                onClick={() => setScoutV3InfoCandidate(null)}
+                style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "flex-start", justifyContent: "center", zIndex: 1000, padding: 24, overflowY: "auto" }}
+              >
+                <div
+                  onClick={e => e.stopPropagation()}
+                  style={{ ...cS, width: "min(880px, 96vw)", padding: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}
+                >
+                  {/* Header */}
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, padding: "20px 24px", borderBottom: `1px solid ${C.bd}` }}>
+                    <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                      <span style={{ fontSize: 26, fontWeight: 800, letterSpacing: "-0.03em" }}>{c.displayName}</span>
+                      {c.artistRole && <span style={{ ...mkP(true, C.bu, C.bb), cursor: "default", fontSize: 11 }}>{c.artistRole}</span>}
+                      {c.source && <span style={{ ...mkP(true, C.ts, C.sa), cursor: "default", fontSize: 10 }}>{c.source}</span>}
+                      {score != null && (
+                        <span style={{ background: scoreTone.bg, color: scoreTone.fg, padding: "6px 14px", borderRadius: 999, fontSize: 14, fontWeight: 800 }}>{score}</span>
+                      )}
+                    </div>
+                    <button onClick={() => setScoutV3InfoCandidate(null)} style={{ background: "transparent", border: "none", fontSize: 22, cursor: "pointer", color: C.ts, lineHeight: 1 }}>×</button>
+                  </div>
+
+                  {/* Body */}
+                  <div style={{ padding: "20px 24px", display: "grid", gap: 18, maxHeight: "70vh", overflowY: "auto" }}>
+                    {/* Spotify embed — taller than the card view since this is the deep-dive */}
+                    {c.spotifyArtistId && (
+                      <iframe
+                        src={`https://open.spotify.com/embed/artist/${c.spotifyArtistId}?utm_source=gemfinder`}
+                        height={352}
+                        frameBorder="0"
+                        allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
+                        loading="lazy"
+                        style={{ borderRadius: 12, border: "none", width: "100%", minHeight: 352 }}
+                        title={`${c.displayName} on Spotify`}
+                      />
+                    )}
+
+                    {/* AI bio with quote-mark callout */}
+                    {c.aiSummary && (
+                      <div style={{ fontSize: 14, color: C.tt, lineHeight: 1.7, padding: "14px 18px", background: C.sa, borderRadius: 10, borderLeft: `4px solid ${C.bu}` }}>
+                        💬 {c.aiSummary}
+                      </div>
+                    )}
+
+                    {/* Two-column body: metrics on left, links + contact on right */}
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18 }}>
+                      {/* Metrics column */}
+                      <div style={{ display: "grid", gap: 12 }}>
+                        <div>
+                          <div style={{ fontSize: 11, color: C.ts, fontWeight: 700, marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 }}>📊 Reach</div>
+                          <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "4px 12px", fontSize: 13, padding: "10px 12px", background: C.sa, borderRadius: 8 }}>
+                            <span style={{ color: C.ts }}>Spotify followers</span>
+                            <span style={{ fontWeight: 700, textAlign: "right" }}>{c.spotifyMonthlyListeners ? c.spotifyMonthlyListeners.toLocaleString() : <span style={{ color: C.ts }}>—</span>}</span>
+                            <span style={{ color: C.ts }}>Instagram</span>
+                            <span style={{ fontWeight: 700, textAlign: "right" }}>{c.instagramFollowers ? c.instagramFollowers.toLocaleString() : <span style={{ color: C.ts }}>—</span>}</span>
+                            <span style={{ color: C.ts }}>TikTok</span>
+                            <span style={{ fontWeight: 700, textAlign: "right" }}>{c.tiktokFollowers ? c.tiktokFollowers.toLocaleString() : <span style={{ color: C.ts }}>—</span>}</span>
+                            <span style={{ color: C.ts }}>YouTube</span>
+                            <span style={{ fontWeight: 700, textAlign: "right" }}>{c.youtubeSubscribers ? c.youtubeSubscribers.toLocaleString() : <span style={{ color: C.ts }}>—</span>}</span>
+                            <span style={{ color: C.ts }}>SoundCloud</span>
+                            <span style={{ fontWeight: 700, textAlign: "right" }}>{c.soundcloudFollowers ? c.soundcloudFollowers.toLocaleString() : <span style={{ color: C.ts }}>—</span>}</span>
+                          </div>
+                        </div>
+
+                        {/* Top tracks */}
+                        {topTracksRaw.length > 0 && (
+                          <div>
+                            <div style={{ fontSize: 11, color: C.ts, fontWeight: 700, marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 }}>🎵 Top tracks</div>
+                            <div style={{ display: "grid", gap: 4, fontSize: 12, padding: "10px 12px", background: C.sa, borderRadius: 8 }}>
+                              {topTracksRaw.slice(0, 5).map((t, i) => (
+                                <div key={i} style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+                                  {t.spotifyUrl ? (
+                                    <a href={t.spotifyUrl} target="_blank" rel="noopener noreferrer" style={{ color: C.bu, textDecoration: "none", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>"{t.name}"</a>
+                                  ) : (
+                                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>"{t.name}"</span>
+                                  )}
+                                  <span style={{ color: C.ts, flexShrink: 0 }}>pop {t.popularity}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Score breakdown - all dimensions */}
+                        {allDims.length > 0 && (
+                          <div>
+                            <div style={{ fontSize: 11, color: C.ts, fontWeight: 700, marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 }}>⚖️ Score breakdown</div>
+                            <div style={{ display: "grid", gridTemplateColumns: "auto 1fr auto", gap: "4px 10px", fontSize: 11, padding: "10px 12px", background: C.sa, borderRadius: 8, alignItems: "center" }}>
+                              {allDims.map(([k, v]) => {
+                                const pct = Math.max(0, Math.min(100, Math.round(v)));
+                                return (
+                                  <div key={k} style={{ display: "contents" }}>
+                                    <span style={{ color: C.ts }}>{k.replace(/_/g, " ")}</span>
+                                    <div style={{ height: 6, background: C.bd, borderRadius: 3, overflow: "hidden" }}>
+                                      <div style={{ height: "100%", width: `${pct}%`, background: pct >= 75 ? C.gn : pct >= 50 ? C.bu : C.ts, transition: "width 0.3s" }} />
+                                    </div>
+                                    <span style={{ fontWeight: 700, textAlign: "right" }}>{pct}</span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Links + contact column */}
+                      <div style={{ display: "grid", gap: 12 }}>
+                        <div>
+                          <div style={{ fontSize: 11, color: C.ts, fontWeight: 700, marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 }}>🔗 Links</div>
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                            {c.spotifyUrl && <a href={c.spotifyUrl} target="_blank" rel="noopener noreferrer" style={{ ...actionBtn(false, "neutral"), textDecoration: "none", fontSize: 12 }}>Spotify ↗</a>}
+                            {!c.spotifyArtistId && <a href={`https://open.spotify.com/search/${encodeURIComponent(c.displayName)}`} target="_blank" rel="noopener noreferrer" style={{ ...actionBtn(false, "neutral"), textDecoration: "none", fontSize: 12 }}>🔍 Search Spotify ↗</a>}
+                            {c.instagramHandle && <a href={`https://instagram.com/${c.instagramHandle}`} target="_blank" rel="noopener noreferrer" style={{ ...actionBtn(false, "neutral"), textDecoration: "none", fontSize: 12 }}>IG @{c.instagramHandle} ↗</a>}
+                            {c.tiktokHandle && <a href={`https://tiktok.com/@${c.tiktokHandle}`} target="_blank" rel="noopener noreferrer" style={{ ...actionBtn(false, "neutral"), textDecoration: "none", fontSize: 12 }}>TikTok ↗</a>}
+                            {c.youtubeHandle && <a href={`https://youtube.com/@${c.youtubeHandle}`} target="_blank" rel="noopener noreferrer" style={{ ...actionBtn(false, "neutral"), textDecoration: "none", fontSize: 12 }}>YouTube ↗</a>}
+                            {c.bandcampUrl && <a href={c.bandcampUrl} target="_blank" rel="noopener noreferrer" style={{ ...actionBtn(false, "neutral"), textDecoration: "none", fontSize: 12 }}>Bandcamp ↗</a>}
+                            {c.soundcloudHandle && <a href={`https://soundcloud.com/${c.soundcloudHandle}`} target="_blank" rel="noopener noreferrer" style={{ ...actionBtn(false, "neutral"), textDecoration: "none", fontSize: 12 }}>SoundCloud ↗</a>}
+                            {c.musicbrainzId && <a href={`https://musicbrainz.org/artist/${c.musicbrainzId}`} target="_blank" rel="noopener noreferrer" style={{ ...actionBtn(false, "neutral"), textDecoration: "none", fontSize: 11, opacity: 0.6 }}>MusicBrainz</a>}
+                          </div>
+                        </div>
+
+                        {/* Contact info */}
+                        <div>
+                          <div style={{ fontSize: 11, color: C.ts, fontWeight: 700, marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 }}>📧 Contact</div>
+                          <div style={{ padding: "10px 12px", background: C.sa, borderRadius: 8, fontSize: 12, display: "grid", gap: 4 }}>
+                            {c.primaryEmail ? (
+                              <div>
+                                <a href={`mailto:${c.primaryEmail}`} style={{ color: C.bu, textDecoration: "none", fontWeight: 700 }}>{c.primaryEmail}</a>
+                                {c.contactType && <span style={{ color: C.ts, marginLeft: 6 }}>({c.contactType})</span>}
+                              </div>
+                            ) : (
+                              <div style={{ color: C.ts }}>No direct contact email on file</div>
+                            )}
+                            {c.contactName && <div style={{ color: C.ts }}>{c.contactName}</div>}
+                            {c.locations && c.locations.length > 0 && (
+                              <div style={{ color: C.ts }}>📍 {c.locations.join(" · ")}</div>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Genres */}
+                        {(c.primaryGenre || (c.genres && c.genres.length > 0)) && (
+                          <div>
+                            <div style={{ fontSize: 11, color: C.ts, fontWeight: 700, marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 }}>🎸 Genres</div>
+                            <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                              {[c.primaryGenre, ...(c.genres || []).filter(g => g !== c.primaryGenre)].filter(Boolean).map(g => (
+                                <span key={g} style={{ ...mkP(false, C.ts, C.sa), fontSize: 11, cursor: "default" }}>{g}</span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Provenance */}
+                        <div>
+                          <div style={{ fontSize: 11, color: C.ts, fontWeight: 700, marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 }}>🔍 Provenance</div>
+                          <div style={{ padding: "10px 12px", background: C.sa, borderRadius: 8, fontSize: 11, color: C.ts, lineHeight: 1.6 }}>
+                            <div>Added via <strong>{c.source}</strong> by {c.addedBy}</div>
+                            <div>Enrichment: {c.enrichmentStatus || "—"}</div>
+                            {c.createdAt && <div>Added on {new Date(c.createdAt).toLocaleString()}</div>}
+                            {c.hunterRunId && (
+                              <button
+                                onClick={() => { setScoutV3HunterExpandedRunId(c.hunterRunId); setScoutV3Tab("runs"); setScoutV3InfoCandidate(null); }}
+                                style={{ background: "transparent", border: "none", padding: 0, color: C.bu, textDecoration: "underline", cursor: "pointer", fontSize: 11, marginTop: 4 }}
+                              >
+                                View source run →
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Action footer — sticky, big buttons */}
+                  <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", padding: "16px 24px", borderTop: `1px solid ${C.bd}`, background: C.sa }}>
+                    <button onClick={() => setScoutV3InfoCandidate(null)} style={{ ...actionBtn(false, "neutral"), fontSize: 14, padding: "10px 18px" }}>Close</button>
+                    <button onClick={() => { const target = c; setScoutV3InfoCandidate(null); setScoutV3RejectTarget(target); }} style={{ ...actionBtn(false, "danger"), fontSize: 14, padding: "10px 18px" }}>✗ Reject</button>
+                    <button onClick={() => { const target = c; setScoutV3InfoCandidate(null); setScoutV3ApproveTarget(target); }} style={{ ...actionBtn(true, "accent"), fontSize: 14, padding: "10px 18px" }}>✓ Approve into Kickoff</button>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Hunter weights slider modal */}
           {scoutV3HunterWeightsOpen && (() => {
