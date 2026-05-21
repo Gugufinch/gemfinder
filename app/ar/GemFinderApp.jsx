@@ -3733,6 +3733,11 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   // Info modal: full-detail view of one candidate for A&R deep-dive review
   const [scoutV3InfoCandidate, setScoutV3InfoCandidate] = useState(null);
   const [scoutV3InfoReenriching, setScoutV3InfoReenriching] = useState(false);
+  // CSV bulk-add state
+  const [scoutV3AddMode, setScoutV3AddMode] = useState("single");   // "single" | "csv"
+  const [scoutV3BulkCsvText, setScoutV3BulkCsvText] = useState("");
+  const [scoutV3BulkResults, setScoutV3BulkResults] = useState(null);
+  const [scoutV3BulkSubmitting, setScoutV3BulkSubmitting] = useState(false);
   const [scoutV3HunterPollTick, setScoutV3HunterPollTick] = useState(0);
   const [scoutV3HunterWeightsOpen, setScoutV3HunterWeightsOpen] = useState(false);
   const [scoutV3HunterWeightsLoading, setScoutV3HunterWeightsLoading] = useState(false);
@@ -14277,8 +14282,179 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
           {scoutV3AddModalOpen && (
             <div onClick={() => setScoutV3AddModalOpen(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "flex-start", justifyContent: "center", zIndex: 1000, padding: 24, overflowY: "auto" }}>
               <div onClick={e => e.stopPropagation()} style={{ ...cS, padding: 24, maxWidth: 720, width: "100%" }}>
-                <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 14 }}>Add candidate</div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, gap: 8, flexWrap: "wrap" }}>
+                  <div style={{ fontSize: 18, fontWeight: 800 }}>Add candidate{scoutV3AddMode === "csv" ? "s (CSV bulk)" : ""}</div>
+                  <div style={{ display: "flex", gap: 4 }}>
+                    <button
+                      onClick={() => { setScoutV3AddMode("single"); setScoutV3BulkResults(null); }}
+                      style={{ ...actionBtn(scoutV3AddMode === "single", "accent"), fontSize: 11 }}
+                    >
+                      Single
+                    </button>
+                    <button
+                      onClick={() => { setScoutV3AddMode("csv"); }}
+                      style={{ ...actionBtn(scoutV3AddMode === "csv", "accent"), fontSize: 11 }}
+                    >
+                      📋 CSV bulk
+                    </button>
+                  </div>
+                </div>
 
+                {scoutV3AddMode === "csv" ? (
+                  <div style={{ display: "grid", gap: 12 }}>
+                    <div style={{ fontSize: 12, color: C.ts, lineHeight: 1.6 }}>
+                      Paste CSV with a header row. Supported columns (any order, case-insensitive):
+                      <code style={{ background: C.sa, padding: "2px 6px", borderRadius: 4, marginLeft: 4, fontSize: 11 }}>
+                        displayName, spotifyUrl, instagramHandle, tiktokHandle, youtubeHandle, soundcloudHandle, bandcampUrl, primaryEmail, primaryGenre, artistRole
+                      </code>
+                      . Only <strong>displayName</strong> is required.
+                    </div>
+                    <textarea
+                      value={scoutV3BulkCsvText}
+                      onChange={e => setScoutV3BulkCsvText(e.target.value)}
+                      placeholder={`displayName,spotifyUrl,instagramHandle,primaryEmail\nWednesday,https://open.spotify.com/artist/...,wednesdayband,booking@example.com\nMJ Lenderman,https://open.spotify.com/artist/...,mjlenderman,`}
+                      style={{ width: "100%", minHeight: 220, padding: 12, border: `1px solid ${C.bd}`, borderRadius: 8, fontFamily: "ui-monospace, SF Mono, Menlo, monospace", fontSize: 12, lineHeight: 1.5, resize: "vertical" }}
+                    />
+
+                    {scoutV3BulkResults && (
+                      <div style={{ ...cS, padding: "14px 16px", display: "grid", gap: 8 }}>
+                        <div style={{ fontSize: 13, fontWeight: 700 }}>Results</div>
+                        <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 6, fontSize: 12 }}>
+                          <div>
+                            <div style={{ color: C.ts }}>Total</div>
+                            <div style={{ fontWeight: 700, fontSize: 18 }}>{scoutV3BulkResults.summary.total}</div>
+                          </div>
+                          <div>
+                            <div style={{ color: C.gn }}>Added</div>
+                            <div style={{ fontWeight: 700, fontSize: 18, color: C.gn }}>{scoutV3BulkResults.summary.succeeded}</div>
+                          </div>
+                          <div>
+                            <div style={{ color: C.ts }}>Duplicates</div>
+                            <div style={{ fontWeight: 700, fontSize: 18 }}>{scoutV3BulkResults.summary.duplicates}</div>
+                          </div>
+                          <div>
+                            <div style={{ color: C.ts }}>Invalid</div>
+                            <div style={{ fontWeight: 700, fontSize: 18 }}>{scoutV3BulkResults.summary.validationErrors}</div>
+                          </div>
+                          <div>
+                            <div style={{ color: C.rd }}>Errors</div>
+                            <div style={{ fontWeight: 700, fontSize: 18, color: C.rd }}>{scoutV3BulkResults.summary.errors}</div>
+                          </div>
+                        </div>
+                        <div style={{ maxHeight: 280, overflowY: "auto", border: `1px solid ${C.bd}`, borderRadius: 6, fontSize: 11 }}>
+                          {scoutV3BulkResults.results.map((r, i) => {
+                            const statusColor =
+                              r.status === "success" ? C.gn :
+                              r.status === "duplicate" ? C.bu :
+                              r.status === "validation_error" ? C.ts :
+                              C.rd;
+                            const statusLabel =
+                              r.status === "success" ? "✓ Added" :
+                              r.status === "duplicate" ? "⊘ Duplicate" :
+                              r.status === "validation_error" ? "✗ Invalid" :
+                              "⚠️ Error";
+                            return (
+                              <div key={i} style={{ display: "grid", gridTemplateColumns: "60px 100px 1fr", gap: 8, padding: "6px 10px", borderTop: i === 0 ? "none" : `1px solid ${C.bd}`, alignItems: "start" }}>
+                                <span style={{ color: C.ts }}>Row {r.rowIndex + 1}</span>
+                                <span style={{ color: statusColor, fontWeight: 700 }}>{statusLabel}</span>
+                                <div>
+                                  <div style={{ fontWeight: 600 }}>{r.displayName}</div>
+                                  {r.status === "duplicate" && (
+                                    <div style={{ color: C.ts, fontSize: 10, marginTop: 2 }}>
+                                      Reason: <strong>{r.reason}</strong>
+                                      {r.matchedRecord?.location && ` — in ${r.matchedRecord.location}`}
+                                      {r.matchedRecord?.displayName && r.matchedRecord.displayName !== r.displayName && ` (matched: ${r.matchedRecord.displayName})`}
+                                    </div>
+                                  )}
+                                  {r.status === "validation_error" && Array.isArray(r.details) && (
+                                    <div style={{ color: C.rd, fontSize: 10, marginTop: 2 }}>
+                                      {r.details.map((d, j) => (
+                                        <div key={j}>{d.path || "(root)"}: {d.message}</div>
+                                      ))}
+                                    </div>
+                                  )}
+                                  {r.status === "error" && (
+                                    <div style={{ color: C.rd, fontSize: 10, marginTop: 2 }}>{r.details}</div>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+                      <button onClick={() => { setScoutV3AddModalOpen(false); setScoutV3BulkResults(null); setScoutV3BulkCsvText(""); }} style={{ ...actionBtn(false, "neutral"), fontSize: 13 }}>Close</button>
+                      <button
+                        onClick={async () => {
+                          if (!selectedWorkspace?.id || scoutV3BulkSubmitting) return;
+                          const text = scoutV3BulkCsvText.trim();
+                          if (!text) { window.alert("Paste some CSV first."); return; }
+
+                          // Parse CSV using the existing helper
+                          const rows = parseCSVGrid(text);
+                          if (rows.length < 2) { window.alert("CSV needs a header row + at least one data row."); return; }
+                          const headers = rows[0].map(h => h.toLowerCase().trim());
+                          const candidates = rows.slice(1).filter(r => r.some(cell => cell && cell.trim())).map(row => {
+                            const get = (...names) => {
+                              for (const n of names) {
+                                const idx = headers.indexOf(n.toLowerCase());
+                                if (idx >= 0 && row[idx]) return row[idx].trim();
+                              }
+                              return undefined;
+                            };
+                            const cand = {
+                              displayName: get("displayname", "name", "artistname", "artist") || "",
+                              spotifyUrl: get("spotifyurl", "spotify"),
+                              instagramHandle: get("instagramhandle", "instagram", "ig")?.replace(/^@/, "").replace(/^https?:\/\/(?:www\.)?instagram\.com\//, "").split(/[\/?#]/)[0],
+                              tiktokHandle: get("tiktokhandle", "tiktok")?.replace(/^@/, "").replace(/^https?:\/\/(?:www\.)?tiktok\.com\/@?/, "").split(/[\/?#]/)[0],
+                              youtubeHandle: get("youtubehandle", "youtube"),
+                              soundcloudHandle: get("soundcloudhandle", "soundcloud"),
+                              bandcampUrl: get("bandcampurl", "bandcamp"),
+                              primaryEmail: get("primaryemail", "email", "contactemail"),
+                              primaryGenre: get("primarygenre", "genre"),
+                              artistRole: get("artistrole", "role"),
+                              source: "csv-bulk",
+                            };
+                            // Strip undefined fields so zod's .optional() works cleanly
+                            Object.keys(cand).forEach(k => cand[k] === undefined && delete cand[k]);
+                            return cand;
+                          });
+
+                          if (candidates.length === 0) { window.alert("No data rows found below the header."); return; }
+
+                          setScoutV3BulkSubmitting(true);
+                          try {
+                            const res = await fetch(`/api/ar/scout/candidates/bulk?workspaceId=${encodeURIComponent(selectedWorkspace.id)}`, {
+                              method: "POST",
+                              credentials: "include",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({ candidates }),
+                            });
+                            const data = await res.json();
+                            if (!data.ok) {
+                              window.alert(`Bulk add failed: ${data.error || "unknown error"}`);
+                            } else {
+                              setScoutV3BulkResults(data);
+                              // Trigger a queue refetch so the new candidates appear
+                              setScoutV3HunterPollTick(n => n + 1);
+                            }
+                          } catch (err) {
+                            window.alert(`Bulk add failed: ${err.message}`);
+                          } finally {
+                            setScoutV3BulkSubmitting(false);
+                          }
+                        }}
+                        disabled={scoutV3BulkSubmitting || !scoutV3BulkCsvText.trim()}
+                        style={{ ...actionBtn(true, "accent"), fontSize: 13, opacity: scoutV3BulkSubmitting ? 0.6 : 1 }}
+                      >
+                        {scoutV3BulkSubmitting ? "Processing…" : "📤 Upload CSV"}
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                <>
                 <div style={{ display: "grid", gap: 10 }}>
                   <label style={{ display: "grid", gap: 4, padding: "10px 12px", background: C.al, borderRadius: 10, border: `1px solid ${C.ac}30` }}>
                     <span style={{ fontSize: 11, color: C.ac, fontWeight: 700 }}>⚡ Paste any URL to auto-fill</span>
@@ -14392,6 +14568,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                   <button onClick={() => setScoutV3AddModalOpen(false)} style={actionBtn(false, "neutral")}>Cancel</button>
                   <button onClick={submitScoutV3Add} style={actionBtn(false, "accent")} disabled={!scoutV3AddForm.displayName.trim()}>Add to queue</button>
                 </div>
+                </>
+                )}
               </div>
             </div>
           )}
