@@ -3721,6 +3721,11 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
   const [scoutV3AddModalOpen, setScoutV3AddModalOpen] = useState(false);
   const [scoutV3ApproveTarget, setScoutV3ApproveTarget] = useState(null);
   const [scoutV3RejectTarget, setScoutV3RejectTarget] = useState(null);
+  // Bulk-action state. Selection is a Set of candidate IDs; bulk dialogs are
+  // null when closed, or an object describing the in-flight batch when open.
+  const [scoutV3Selection, setScoutV3Selection] = useState(() => new Set());
+  const [scoutV3BulkApprove, setScoutV3BulkApprove] = useState(null);  // { count, projectId, note, submitting, results }
+  const [scoutV3BulkReject, setScoutV3BulkReject] = useState(null);    // { count, reasonCode, reasonNote, submitting, results }
   const [scoutV3CollisionTarget, setScoutV3CollisionTarget] = useState(null);
   const [scoutV3ApproveNote, setScoutV3ApproveNote] = useState("");
   const [scoutV3ApproveProjectId, setScoutV3ApproveProjectId] = useState("");
@@ -13412,6 +13417,89 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       }
     };
 
+    // Bulk operations: loop the existing single-candidate endpoints sequentially.
+    // This is intentionally simple — N round trips instead of one — to avoid
+    // adding a new server endpoint. If batch sizes grow (>50), worth refactoring
+    // to a real bulk endpoint. For typical operator batches (5-15) sequential
+    // is fine and the per-row outcome reporting is more granular.
+    const submitScoutV3BulkApprove = async () => {
+      if (!scoutV3BulkApprove?.projectId) return;
+      const ids = Array.from(scoutV3Selection);
+      const projectId = scoutV3BulkApprove.projectId;
+      const note = scoutV3BulkApprove.note || undefined;
+      setScoutV3BulkApprove(prev => prev ? { ...prev, submitting: true } : prev);
+      const results = { ok: [], failed: [] };
+      for (const id of ids) {
+        // Pull the candidate from current state so we have a name for error messages.
+        const cand = scoutV3Candidates.find(c => c.id === id);
+        const name = cand?.displayName || `candidate ${id.slice(0, 8)}`;
+        try {
+          const res = await fetch(`/api/ar/scout/candidates/${id}?workspaceId=${selectedWorkspace.id}`, {
+            method: "PATCH",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ action: "approve", projectId, note }),
+          });
+          if (res.ok) {
+            results.ok.push(name);
+            setScoutV3Candidates(prev => prev.filter(c => c.id !== id));
+          } else if (res.status === 409) {
+            const data = await res.json().catch(() => ({}));
+            results.failed.push({ name, reason: `Already in Kickoff: ${data.match?.matchedRecord?.displayName || "match"}` });
+          } else {
+            results.failed.push({ name, reason: `Server returned ${res.status}` });
+          }
+        } catch (err) {
+          results.failed.push({ name, reason: err.message || "network error" });
+        }
+      }
+      setScoutV3LastProjectId(projectId);
+      if (typeof window !== "undefined") localStorage.setItem("scoutV3LastProjectId", projectId);
+      setScoutV3Selection(new Set());
+      setScoutV3BulkApprove(prev => prev ? { ...prev, submitting: false, results } : prev);
+      flash(
+        results.failed.length === 0
+          ? `Bulk approved: ${results.ok.length} → Kickoff`
+          : `Bulk approve: ${results.ok.length} approved · ${results.failed.length} failed (see details)`,
+        results.failed.length === 0 ? "ok" : "err",
+      );
+    };
+
+    const submitScoutV3BulkReject = async () => {
+      if (!scoutV3BulkReject) return;
+      const ids = Array.from(scoutV3Selection);
+      const reasonCode = scoutV3BulkReject.reasonCode;
+      const reasonNote = scoutV3BulkReject.reasonNote || undefined;
+      setScoutV3BulkReject(prev => prev ? { ...prev, submitting: true } : prev);
+      const results = { ok: [], failed: [] };
+      for (const id of ids) {
+        const cand = scoutV3Candidates.find(c => c.id === id);
+        const name = cand?.displayName || `candidate ${id.slice(0, 8)}`;
+        try {
+          const res = await fetch(`/api/ar/scout/candidates/${id}?workspaceId=${selectedWorkspace.id}`, {
+            method: "PATCH",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ action: "reject", reasonCode, reasonNote }),
+          });
+          if (res.ok) {
+            results.ok.push(name);
+            setScoutV3Candidates(prev => prev.filter(c => c.id !== id));
+          } else {
+            results.failed.push({ name, reason: `Server returned ${res.status}` });
+          }
+        } catch (err) {
+          results.failed.push({ name, reason: err.message || "network error" });
+        }
+      }
+      setScoutV3Selection(new Set());
+      setScoutV3BulkReject(prev => prev ? { ...prev, submitting: false, results } : prev);
+      flash(
+        results.failed.length === 0
+          ? `Bulk rejected: ${results.ok.length} → rejection log`
+          : `Bulk reject: ${results.ok.length} rejected · ${results.failed.length} failed (see details)`,
+        results.failed.length === 0 ? "ok" : "err",
+      );
+    };
+
     const SCOUT_V3_REJECT_REASONS = [
       { code: "already_signed", label: "Already signed" },
       { code: "wrong_genre", label: "Wrong genre" },
@@ -13609,6 +13697,38 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                   )}
                 </div>
 
+                {/* Bulk-action bar — appears when 1+ candidates are selected.
+                    Sticky-feeling at the top of the queue so the operator can
+                    keep scrolling without losing the action affordance. */}
+                {scoutV3Selection.size > 0 && (
+                  <div style={{ ...cS, padding: "10px 14px", display: "flex", alignItems: "center", gap: 10, fontSize: 12, background: C.al, borderColor: `${C.ac}33` }}>
+                    <span style={{ fontWeight: 700, color: C.ac }}>{scoutV3Selection.size} selected</span>
+                    <span style={{ color: C.ts }}>·</span>
+                    <button
+                      onClick={() => {
+                        const projects = selectedWorkspace?.projects || proj?.workspaceProjects || [];
+                        const defaultPid = scoutV3LastProjectId || projects[0]?.id || "";
+                        setScoutV3BulkApprove({ count: scoutV3Selection.size, projectId: defaultPid, note: "", submitting: false, results: null });
+                      }}
+                      style={{ ...actionBtn(true, "accent"), fontSize: 12 }}
+                    >
+                      ✓ Approve all → Kickoff
+                    </button>
+                    <button
+                      onClick={() => setScoutV3BulkReject({ count: scoutV3Selection.size, reasonCode: "not_viable", reasonNote: "", submitting: false, results: null })}
+                      style={{ ...actionBtn(false, "danger"), fontSize: 12 }}
+                    >
+                      ✗ Reject all
+                    </button>
+                    <button
+                      onClick={() => setScoutV3Selection(new Set())}
+                      style={{ marginLeft: "auto", background: "transparent", border: "none", color: C.ts, textDecoration: "underline", cursor: "pointer", fontSize: 11 }}
+                    >
+                      Clear selection
+                    </button>
+                  </div>
+                )}
+
                 {(() => {
                   // Apply all filters + sort to derive the visible candidate list.
                   const minScoreNum = scoutV3QueueMinScore === "" ? null : parseInt(scoutV3QueueMinScore, 10);
@@ -13657,15 +13777,71 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                     return { fg: C.rd, bg: C.rb, border: `${C.rd}33`, label: "cold" };
                   };
 
+                  // Bulk-selection toggle. Click anywhere on the checkbox flips
+                  // membership in the Set without mutating the original (React
+                  // needs a new Set reference to re-render).
+                  const toggleSelection = (id) => {
+                    setScoutV3Selection(prev => {
+                      const next = new Set(prev);
+                      if (next.has(id)) next.delete(id);
+                      else next.add(id);
+                      return next;
+                    });
+                  };
+                  const allVisibleSelected = sortedVisible.length > 0 && sortedVisible.every(c => scoutV3Selection.has(c.id));
+                  const toggleSelectAll = () => {
+                    setScoutV3Selection(prev => {
+                      if (allVisibleSelected) {
+                        const next = new Set(prev);
+                        sortedVisible.forEach(c => next.delete(c.id));
+                        return next;
+                      }
+                      const next = new Set(prev);
+                      sortedVisible.forEach(c => next.add(c.id));
+                      return next;
+                    });
+                  };
+
                   // Compact view: dense rows, one line per candidate
                   if (scoutV3QueueView === "compact") {
                     return (
                       <div style={{ ...cS, overflow: "hidden" }}>
+                        {/* Select-all header row */}
+                        {sortedVisible.length > 0 && (
+                          <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 14px", fontSize: 11, background: C.sa, borderBottom: `1px solid ${C.bd}`, color: C.ts, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                            <input
+                              type="checkbox"
+                              checked={allVisibleSelected}
+                              onChange={toggleSelectAll}
+                              title={allVisibleSelected ? "Deselect all visible" : "Select all visible"}
+                              style={{ cursor: "pointer", margin: 0 }}
+                            />
+                            <span>Select all ({sortedVisible.length})</span>
+                          </div>
+                        )}
                         {sortedVisible.map((c, i) => {
                           const score = c.score == null ? null : Math.round(c.score);
                           const scoreTone = tierFor(score);
+                          const isSelected = scoutV3Selection.has(c.id);
                           return (
-                            <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", fontSize: 13, borderTop: i === 0 ? "none" : `1px solid ${C.bd}` }}>
+                            <div
+                              key={c.id}
+                              style={{
+                                display: "flex",
+                                alignItems: "center",
+                                gap: 10,
+                                padding: "10px 14px",
+                                fontSize: 13,
+                                borderTop: i === 0 ? "none" : `1px solid ${C.bd}`,
+                                background: isSelected ? `${C.ac}10` : "transparent",
+                              }}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => toggleSelection(c.id)}
+                                style={{ cursor: "pointer", margin: 0 }}
+                              />
                               <span style={{ fontWeight: 700 }}>{c.displayName}</span>
                               {score != null && (
                                 <span style={{ background: scoreTone.bg, color: scoreTone.fg, padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700 }}>{score}</span>
@@ -13709,7 +13885,24 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                     : [];
                   const artistImageUrl = c.weightSnapshot?._imageUrl;
                   return (
-                  <div key={`scoutv3-card-${c.id}`} style={{ ...cS, padding: "20px 22px", borderLeft: `3px solid ${scoreTone.border}` }}>
+                  <div
+                    key={`scoutv3-card-${c.id}`}
+                    style={{
+                      ...cS,
+                      padding: "20px 22px",
+                      borderLeft: `3px solid ${scoreTone.border}`,
+                      background: scoutV3Selection.has(c.id) ? `${C.ac}08` : (cS.background || C.sf),
+                      position: "relative",
+                    }}
+                  >
+                    {/* Bulk-select checkbox: top-left, doesn't interfere with card content. */}
+                    <input
+                      type="checkbox"
+                      checked={scoutV3Selection.has(c.id)}
+                      onChange={() => toggleSelection(c.id)}
+                      title="Add to bulk selection"
+                      style={{ position: "absolute", top: 14, left: 14, cursor: "pointer", margin: 0, zIndex: 1 }}
+                    />
                     {/* Header row: name, role, source, score */}
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
                       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
@@ -14925,6 +15118,173 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                       ✗ Reject
                     </button>
                   </div>
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* Bulk approve modal */}
+          {scoutV3BulkApprove && (() => {
+            const state = scoutV3BulkApprove;
+            const projects = selectedWorkspace?.projects || proj?.workspaceProjects || [];
+            const isDone = !!state.results;
+            return (
+              <div onClick={() => { if (!state.submitting) setScoutV3BulkApprove(null); }} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "flex-start", justifyContent: "center", zIndex: 1000, padding: 24 }}>
+                <div onClick={e => e.stopPropagation()} style={{ ...cS, padding: 24, maxWidth: 520, width: "100%", marginTop: 80 }}>
+                  <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 8 }}>
+                    {isDone ? "Bulk approve results" : `Approve ${state.count} candidates → Kickoff`}
+                  </div>
+                  {!isDone && (
+                    <>
+                      <div style={{ fontSize: 12, color: C.ts, marginBottom: 16, lineHeight: 1.5 }}>
+                        Each selected candidate becomes a Kickoff talent record at stage "prospect". Already-in-Kickoff matches are reported as failures, not duplicated.
+                      </div>
+                      <label style={{ display: "grid", gap: 4, marginBottom: 12 }}>
+                        <span style={{ fontSize: 11, color: C.ts, fontWeight: 600 }}>Land all in project</span>
+                        <select
+                          value={state.projectId}
+                          onChange={e => setScoutV3BulkApprove(prev => prev ? { ...prev, projectId: e.target.value } : prev)}
+                          style={iS}
+                          disabled={state.submitting}
+                        >
+                          {projects.length === 0 && <option value="">(no projects)</option>}
+                          {projects.map(p => <option key={p.id} value={p.id}>{p.name || p.id}</option>)}
+                        </select>
+                      </label>
+                      <label style={{ display: "grid", gap: 4, marginBottom: 16 }}>
+                        <span style={{ fontSize: 11, color: C.ts, fontWeight: 600 }}>Note (applied to all)</span>
+                        <textarea
+                          value={state.note}
+                          onChange={e => setScoutV3BulkApprove(prev => prev ? { ...prev, note: e.target.value } : prev)}
+                          style={{ ...iS, minHeight: 60, resize: "vertical" }}
+                          placeholder="Optional — carries into Kickoff as the decision note"
+                          disabled={state.submitting}
+                        />
+                      </label>
+                      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+                        <button onClick={() => setScoutV3BulkApprove(null)} style={actionBtn(false, "neutral")} disabled={state.submitting}>Cancel</button>
+                        <button
+                          onClick={submitScoutV3BulkApprove}
+                          style={{ ...actionBtn(false, "accent"), opacity: state.submitting ? 0.6 : 1 }}
+                          disabled={!state.projectId || state.submitting}
+                        >
+                          {state.submitting ? `Approving ${state.count}…` : `✓ Approve ${state.count} into Kickoff`}
+                        </button>
+                      </div>
+                    </>
+                  )}
+                  {isDone && (
+                    <>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
+                        <div style={{ padding: 12, borderRadius: 12, background: `${C.gn}10`, border: `1px solid ${C.gn}33` }}>
+                          <div style={{ fontSize: 11, color: C.ts, textTransform: "uppercase", letterSpacing: 0.5 }}>Approved</div>
+                          <div style={{ fontSize: 22, fontWeight: 800, color: C.gn, marginTop: 4 }}>{state.results.ok.length}</div>
+                        </div>
+                        <div style={{ padding: 12, borderRadius: 12, background: state.results.failed.length > 0 ? `${C.rd}10` : C.sa, border: `1px solid ${state.results.failed.length > 0 ? C.rd : C.bd}33` }}>
+                          <div style={{ fontSize: 11, color: C.ts, textTransform: "uppercase", letterSpacing: 0.5 }}>Failed</div>
+                          <div style={{ fontSize: 22, fontWeight: 800, color: state.results.failed.length > 0 ? C.rd : C.tt, marginTop: 4 }}>{state.results.failed.length}</div>
+                        </div>
+                      </div>
+                      {state.results.failed.length > 0 && (
+                        <div style={{ marginBottom: 16 }}>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: C.tx, marginBottom: 8 }}>Failures:</div>
+                          <div style={{ border: `1px solid ${C.bd}`, borderRadius: 10, maxHeight: 220, overflowY: "auto" }}>
+                            {state.results.failed.map((f, i) => (
+                              <div key={`bulk-app-fail-${i}`} style={{ padding: "8px 12px", borderTop: i === 0 ? "none" : `1px solid ${C.bd}`, fontSize: 12 }}>
+                                <div style={{ color: C.tx, fontWeight: 600 }}>{f.name}</div>
+                                <div style={{ color: C.ts, marginTop: 2 }}>{f.reason}</div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                        <button onClick={() => setScoutV3BulkApprove(null)} style={{ ...actionBtn(true, "accent"), fontSize: 13 }}>Close</button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* Bulk reject modal */}
+          {scoutV3BulkReject && (() => {
+            const state = scoutV3BulkReject;
+            const requiresNote = state.reasonCode === "other";
+            const canSubmit = (!requiresNote || state.reasonNote.trim().length > 0) && !state.submitting;
+            const isDone = !!state.results;
+            return (
+              <div onClick={() => { if (!state.submitting) setScoutV3BulkReject(null); }} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "flex-start", justifyContent: "center", zIndex: 1000, padding: 24 }}>
+                <div onClick={e => e.stopPropagation()} style={{ ...cS, padding: 24, maxWidth: 520, width: "100%", marginTop: 80 }}>
+                  <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 14 }}>
+                    {isDone ? "Bulk reject results" : `Reject ${state.count} candidates`}
+                  </div>
+                  {!isDone && (
+                    <>
+                      <label style={{ display: "grid", gap: 4, marginBottom: 12 }}>
+                        <span style={{ fontSize: 11, color: C.ts, fontWeight: 600 }}>Reason (applied to all) *</span>
+                        <select
+                          value={state.reasonCode}
+                          onChange={e => setScoutV3BulkReject(prev => prev ? { ...prev, reasonCode: e.target.value } : prev)}
+                          style={iS}
+                          disabled={state.submitting}
+                        >
+                          {SCOUT_V3_REJECT_REASONS.map(r => <option key={r.code} value={r.code}>{r.label}</option>)}
+                        </select>
+                      </label>
+                      <label style={{ display: "grid", gap: 4, marginBottom: 16 }}>
+                        <span style={{ fontSize: 11, color: C.ts, fontWeight: 600 }}>Note (optional)</span>
+                        <textarea
+                          value={state.reasonNote}
+                          onChange={e => setScoutV3BulkReject(prev => prev ? { ...prev, reasonNote: e.target.value } : prev)}
+                          style={{ ...iS, minHeight: 60, resize: "vertical" }}
+                          placeholder={requiresNote ? "Required for 'Other' reason" : "Optional context"}
+                          disabled={state.submitting}
+                        />
+                      </label>
+                      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+                        <button onClick={() => setScoutV3BulkReject(null)} style={actionBtn(false, "neutral")} disabled={state.submitting}>Cancel</button>
+                        <button
+                          onClick={submitScoutV3BulkReject}
+                          style={{ ...actionBtn(false, "danger"), opacity: state.submitting ? 0.6 : 1 }}
+                          disabled={!canSubmit}
+                        >
+                          {state.submitting ? `Rejecting ${state.count}…` : `✗ Reject ${state.count}`}
+                        </button>
+                      </div>
+                    </>
+                  )}
+                  {isDone && (
+                    <>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
+                        <div style={{ padding: 12, borderRadius: 12, background: `${C.gn}10`, border: `1px solid ${C.gn}33` }}>
+                          <div style={{ fontSize: 11, color: C.ts, textTransform: "uppercase", letterSpacing: 0.5 }}>Rejected</div>
+                          <div style={{ fontSize: 22, fontWeight: 800, color: C.gn, marginTop: 4 }}>{state.results.ok.length}</div>
+                        </div>
+                        <div style={{ padding: 12, borderRadius: 12, background: state.results.failed.length > 0 ? `${C.rd}10` : C.sa, border: `1px solid ${state.results.failed.length > 0 ? C.rd : C.bd}33` }}>
+                          <div style={{ fontSize: 11, color: C.ts, textTransform: "uppercase", letterSpacing: 0.5 }}>Failed</div>
+                          <div style={{ fontSize: 22, fontWeight: 800, color: state.results.failed.length > 0 ? C.rd : C.tt, marginTop: 4 }}>{state.results.failed.length}</div>
+                        </div>
+                      </div>
+                      {state.results.failed.length > 0 && (
+                        <div style={{ marginBottom: 16 }}>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: C.tx, marginBottom: 8 }}>Failures:</div>
+                          <div style={{ border: `1px solid ${C.bd}`, borderRadius: 10, maxHeight: 220, overflowY: "auto" }}>
+                            {state.results.failed.map((f, i) => (
+                              <div key={`bulk-rej-fail-${i}`} style={{ padding: "8px 12px", borderTop: i === 0 ? "none" : `1px solid ${C.bd}`, fontSize: 12 }}>
+                                <div style={{ color: C.tx, fontWeight: 600 }}>{f.name}</div>
+                                <div style={{ color: C.ts, marginTop: 2 }}>{f.reason}</div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                        <button onClick={() => setScoutV3BulkReject(null)} style={{ ...actionBtn(true, "accent"), fontSize: 13 }}>Close</button>
+                      </div>
+                    </>
+                  )}
                 </div>
               </div>
             );
