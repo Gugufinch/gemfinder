@@ -29,6 +29,14 @@ vi.mock('@/lib/gemfinder/hunter-runs-store', () => ({
 }));
 vi.mock('@/lib/gemfinder/scout-candidate-store', () => ({
   createCandidate: vi.fn(async (c: any) => c),
+  // listKnownCanonicalNames is called by orchestrator to feed LLM exclusion list;
+  // empty array → no candidates filtered out by "already shown" memory.
+  listKnownCanonicalNames: vi.fn(async () => []),
+  // emitEvent is fire-and-forget activity logging. Tests don't need to assert
+  // the events themselves — they assert pipeline behavior — so a no-op stub
+  // is enough. Returning a resolved promise so `void emitEvent(...)` doesn't
+  // bubble up an unhandled rejection.
+  emitEvent: vi.fn(async () => undefined),
 }));
 
 import { runPipeline } from './orchestrator';

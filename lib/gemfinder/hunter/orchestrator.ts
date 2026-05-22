@@ -12,7 +12,7 @@ import { computeScore } from './scoring';
 import { isBlocked } from '@/lib/gemfinder/scout-blocklist';
 import { buildIdentity, canonicalizeName } from '@/lib/gemfinder/scout/identity';
 import { updateRunSummary, setRunStatus } from '@/lib/gemfinder/hunter-runs-store';
-import { createCandidate, listKnownCanonicalNames } from '@/lib/gemfinder/scout-candidate-store';
+import { createCandidate, listKnownCanonicalNames, emitEvent } from '@/lib/gemfinder/scout-candidate-store';
 
 export type RunPipelineInput = {
   runId: string;
@@ -218,11 +218,38 @@ export async function runPipeline(input: RunPipelineInput): Promise<HunterRunSum
     scored.sort((a, b) => b.finalScore - a.finalScore);
     const topN = scored.slice(0, criteria.targetCount);
 
+    // Phase E summary event — marks the boundary the operator was getting
+    // stuck on (47 scored, 0 added, status still 'running'). Surfaces who
+    // made the cut so the activity log explains the silence between scoring
+    // and the queue inserts.
+    void emitEvent({
+      workspaceId,
+      runId,
+      phase: 'meta',
+      status: 'success',
+      message: `Scoring complete — picking top ${topN.length} of ${scored.length} for deep research`,
+      data: {
+        scoredCount: scored.length,
+        survivorCount: topN.length,
+        topSurvivors: topN.slice(0, 10).map((sc) => ({
+          name: sc.enriched.displayName,
+          score: sc.finalScore,
+        })),
+      },
+    });
+
     // Phase E.5: DEEP RESEARCH (deferred from Phase C). Now that we know which
     // candidates actually made the cut, run the expensive Gemini grounded
     // research call on JUST these survivors. Saves 60-80% of Gemini quota vs
     // the old "research everyone" approach. Cached for 30 days so re-runs are
     // free. Failures degrade gracefully — candidate keeps its Phase-C data.
+    void emitEvent({
+      workspaceId,
+      runId,
+      phase: 'meta',
+      status: 'started',
+      message: `Phase E.5: running deep research on ${topN.length} survivors`,
+    });
     const deepResearchPromises = topN.map(async (sc) => {
       try {
         // Re-enrich WITH deep research; merge new findings into the existing
@@ -316,15 +343,55 @@ export async function runPipeline(input: RunPipelineInput): Promise<HunterRunSum
         };
         await createCandidate(candidate);
         summary.added++;
+        // Per-insert event so the operator sees candidates landing in the queue
+        // live, instead of staring at "Added: 0" until Phase F finishes the
+        // whole loop. Tagged with score so the timeline reads as a leaderboard.
+        void emitEvent({
+          workspaceId,
+          runId,
+          candidateId: candidate.id,
+          phase: 'meta',
+          status: 'success',
+          message: `✓ Added "${candidate.displayName}" to queue (score ${Math.round(sc.finalScore)})`,
+          data: {
+            score: sc.finalScore,
+            primaryGenre: candidate.primaryGenre,
+            spotifyArtistId: candidate.spotifyArtistId,
+          },
+        });
       } catch (err) {
         summary.errors.push({
           candidateName: sc.enriched.displayName,
           stage: 'insert',
           message: err instanceof Error ? err.message : String(err),
         });
+        void emitEvent({
+          workspaceId,
+          runId,
+          phase: 'meta',
+          status: 'failed',
+          message: `Insert failed for "${sc.enriched.displayName}": ${err instanceof Error ? err.message : String(err)}`,
+        });
       }
     }
     await updateRunSummary(runId, { added: summary.added, errors: summary.errors });
+
+    // Closing capstone event — gives the activity log a clear "we're done"
+    // marker even if the run summary stats below don't immediately update
+    // in the UI (status flip + summary write happen in quick succession).
+    void emitEvent({
+      workspaceId,
+      runId,
+      phase: 'meta',
+      status: 'success',
+      message: `🏁 Run complete: ${summary.added} added · ${summary.gatedOut} gated · ${summary.skippedBlocked} blocked · ${summary.errors.length} errors`,
+      data: {
+        added: summary.added,
+        gatedOut: summary.gatedOut,
+        skippedBlocked: summary.skippedBlocked,
+        errors: summary.errors.length,
+      },
+    });
 
     // Phase G: finalize
     await setRunStatus(runId, 'complete');

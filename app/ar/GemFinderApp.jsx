@@ -14645,18 +14645,26 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                             );
                           })()}
 
-                          {/* Gated reasons (if any) */}
-                          {detail.summary.gatedReasons?.length > 0 && (
-                            <div>
-                              <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>Gated out ({detail.summary.gatedReasons.length}):</div>
+                          {/* Gated reasons — ALWAYS render so the operator
+                              knows the section exists. Empty state explains
+                              what gate-outs mean and why this run has none. */}
+                          <div>
+                            <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>
+                              Gated out ({detail.summary.gatedReasons?.length || 0}):
+                            </div>
+                            {detail.summary.gatedReasons?.length > 0 ? (
                               <div style={{ fontSize: 11, color: C.ts, lineHeight: 1.6, maxHeight: 120, overflowY: "auto" }}>
                                 {detail.summary.gatedReasons.slice(0, 50).map((g, i) => (
                                   <div key={i}>{g.candidateName || "(unnamed)"} — {g.reason}</div>
                                 ))}
                                 {detail.summary.gatedReasons.length > 50 && <div>… and {detail.summary.gatedReasons.length - 50} more</div>}
                               </div>
-                            </div>
-                          )}
+                            ) : (
+                              <div style={{ fontSize: 11, color: C.tt, fontStyle: "italic" }}>
+                                No candidates gated out yet. Gates check size cap (over 250k Spotify followers), recency, and contact viability.
+                              </div>
+                            )}
+                          </div>
 
                           {/* Errors (if any) */}
                           {detail.summary.errors?.length > 0 && (
@@ -14677,13 +14685,24 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                             </div>
                           )}
 
-                          {/* Added artists — inline list of candidates this run inserted into the queue.
-                              Lets the operator review WHO came out of the run without leaving the Runs tab. */}
-                          {scoutV3HunterRunAddedCandidates.length > 0 && (
-                            <div>
-                              <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>
-                                ✨ Added to queue ({scoutV3HunterRunAddedCandidates.length}):
+                          {/* Added artists — always render the section header so the
+                              operator never wonders "did anything actually get added?".
+                              Empty state explains the timing (running vs complete). */}
+                          <div>
+                            <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>
+                              ✨ Added to queue ({scoutV3HunterRunAddedCandidates.length}):
+                            </div>
+                            {scoutV3HunterRunAddedCandidates.length === 0 ? (
+                              <div style={{ fontSize: 11, color: C.tt, fontStyle: "italic", lineHeight: 1.5 }}>
+                                {detail.status === "running" ? (
+                                  <>Survivors don't land in the queue until Phase F (final inserts). Watch the activity log for "✓ Added <em>name</em>" events.</>
+                                ) : detail.status === "complete" ? (
+                                  <>This run finished without adding anyone to the queue. Likely cause: all top-N survivors hit the blocklist (already in Kickoff or previously rejected). Check the activity log for details.</>
+                                ) : (
+                                  <>No candidates added.</>
+                                )}
                               </div>
+                            ) : (
                               <div style={{ display: "grid", gap: 6, maxHeight: 320, overflowY: "auto" }}>
                                 {scoutV3HunterRunAddedCandidates.map(ac => {
                                   const score = ac.score == null ? null : Math.round(ac.score);
@@ -14714,8 +14733,8 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                                   );
                                 })}
                               </div>
-                            </div>
-                          )}
+                            )}
+                          </div>
 
                           {/* Run-actions footer */}
                           <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", paddingTop: 10, borderTop: `1px solid ${C.bd}`, flexWrap: "wrap" }}>
