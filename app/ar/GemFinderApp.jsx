@@ -5964,6 +5964,52 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     @media (max-width:1160px){.gf-project-shell{grid-template-columns:1fr}.gf-project-sidebar{position:static;height:auto;border-right:none;border-bottom:1px solid ${C.bd}}.gf-project-main-inner{padding:24px 20px 32px}.gf-project-hero{grid-template-columns:1fr}.gf-project-overview-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.gf-project-nav-hint{max-width:none}}
     @media (max-width:860px){.gf-detail-profile-grid{grid-template-columns:1fr}.gf-detail-intel-grid{grid-template-columns:1fr}.gf-detail-tabs{top:8px}.gf-detail-sticky-footer{bottom:10px}.gf-project-overview-grid{grid-template-columns:1fr}.gf-project-headline{font-size:34px}}
   `;
+  // Defensive social-platform URL builder. The Scout candidate handles come
+  // from many sources (LLM-extracted from deep research, MB relations, manual
+  // operator input) and can arrive as bare handles ("jermaine"), @-prefixed
+  // ("@jermaine"), full URLs ("https://instagram.com/jermaine/"), or even
+  // URLs with tracking params. Naive concatenation produced broken URLs like
+  // "https://youtube.com/@https://youtube.com/foo" — this helper fixes that.
+  //
+  // The canonical version + tests live in lib/gemfinder/scout/social-urls.ts;
+  // duplicated inline here because GemFinderApp.jsx doesn't import from lib.
+  const SOCIAL_HOSTS = {
+    instagram:  { host: "instagram.com",    handlePrefix: "" },
+    tiktok:     { host: "tiktok.com",       handlePrefix: "@" },
+    youtube:    { host: "youtube.com",      handlePrefix: "@" },
+    soundcloud: { host: "soundcloud.com",   handlePrefix: "" },
+    spotify:    { host: "open.spotify.com", handlePrefix: "" },
+  };
+  const sanitizeUrlInput = (raw) => {
+    const s = (raw ?? "").trim();
+    if (!s) return null;
+    if (/^https?:\/\//i.test(s)) return s;
+    if (/^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}\//i.test(s)) return `https://${s}`;
+    return null;
+  };
+  const buildSocialUrl = (platform, handle, urlFallback) => {
+    const fromUrl = sanitizeUrlInput(urlFallback);
+    if (fromUrl) return fromUrl;
+    const cleanHandle = (handle ?? "").trim();
+    if (!cleanHandle) return null;
+    const fromHandleAsUrl = sanitizeUrlInput(cleanHandle);
+    if (fromHandleAsUrl) return fromHandleAsUrl;
+    const cfg = SOCIAL_HOSTS[platform];
+    if (!cfg) return null;
+    const slug = cleanHandle.replace(/^@+/, "").replace(/[/?#].*$/, "").trim();
+    if (!slug) return null;
+    return `https://${cfg.host}/${cfg.handlePrefix}${slug}`;
+  };
+  const displayHandle = (handle) => {
+    const s = (handle ?? "").trim();
+    if (!s) return null;
+    if (/^https?:\/\//i.test(s) || /^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}\//i.test(s)) {
+      const m = s.match(/[^/?#]+(?=\/?(?:[?#].*)?$)/);
+      if (m) return m[0].replace(/^@+/, "");
+    }
+    return s.replace(/^@+/, "");
+  };
+
   const actionBtn = (active = false, tint = "neutral") => {
     const tone = {
       neutral: { fg: C.ts, bg: C.sf, bd: C.bd },
@@ -15391,16 +15437,44 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                         <div>
                           <div style={{ fontSize: 11, color: C.ts, fontWeight: 700, marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 }}>📊 Reach</div>
                           <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "4px 12px", fontSize: 13, padding: "10px 12px", background: C.sa, borderRadius: 8 }}>
-                            <span style={{ color: C.ts }}>Spotify followers</span>
-                            <span style={{ fontWeight: 700, textAlign: "right" }}>{c.spotifyMonthlyListeners ? c.spotifyMonthlyListeners.toLocaleString() : <span style={{ color: C.ts }}>—</span>}</span>
-                            <span style={{ color: C.ts }}>Instagram</span>
-                            <span style={{ fontWeight: 700, textAlign: "right" }}>{c.instagramFollowers ? c.instagramFollowers.toLocaleString() : <span style={{ color: C.ts }}>—</span>}</span>
-                            <span style={{ color: C.ts }}>TikTok</span>
-                            <span style={{ fontWeight: 700, textAlign: "right" }}>{c.tiktokFollowers ? c.tiktokFollowers.toLocaleString() : <span style={{ color: C.ts }}>—</span>}</span>
-                            <span style={{ color: C.ts }}>YouTube</span>
-                            <span style={{ fontWeight: 700, textAlign: "right" }}>{c.youtubeSubscribers ? c.youtubeSubscribers.toLocaleString() : <span style={{ color: C.ts }}>—</span>}</span>
-                            <span style={{ color: C.ts }}>SoundCloud</span>
-                            <span style={{ fontWeight: 700, textAlign: "right" }}>{c.soundcloudFollowers ? c.soundcloudFollowers.toLocaleString() : <span style={{ color: C.ts }}>—</span>}</span>
+                            {(() => {
+                              // Each row renders one of three states:
+                              //   1. count present (number) → bold count, right-aligned
+                              //   2. count missing but handle/URL present → "@handle · not scraped"
+                              //   3. neither → "—"
+                              // State 2 is the new bit: previously the operator saw "—"
+                              // even when an IG handle was clearly on file, making it
+                              // look like the data was missing when really the scrape
+                              // hadn't run (or failed). Use Number.isFinite to also
+                              // accept 0 as a real value (rare but possible).
+                              // Spotify has no @handle — surface "linked, no count"
+                              // as a special case when we have an artist ID but no
+                              // follower number. All others use the cleaned handle.
+                              const spotifyPartial = c.spotifyArtistId ? "linked · no count yet" : null;
+                              const rows = [
+                                { label: "Spotify", count: c.spotifyMonthlyListeners, partial: spotifyPartial },
+                                { label: "Instagram", count: c.instagramFollowers, partial: displayHandle(c.instagramHandle) ? `@${displayHandle(c.instagramHandle)} · not scraped` : null },
+                                { label: "TikTok", count: c.tiktokFollowers, partial: displayHandle(c.tiktokHandle) ? `@${displayHandle(c.tiktokHandle)} · not scraped` : null },
+                                { label: "YouTube", count: c.youtubeSubscribers, partial: (displayHandle(c.youtubeHandle) || c.youtubeUrl) ? `${displayHandle(c.youtubeHandle) ? `@${displayHandle(c.youtubeHandle)}` : "linked"} · not scraped` : null },
+                                { label: "SoundCloud", count: c.soundcloudFollowers, partial: (displayHandle(c.soundcloudHandle) || c.soundcloudUrl) ? `${displayHandle(c.soundcloudHandle) ? `@${displayHandle(c.soundcloudHandle)}` : "linked"} · not scraped` : null },
+                              ];
+                              return rows.map(r => {
+                                const hasCount = Number.isFinite(r.count);
+                                return (
+                                  <div key={`reach-${r.label}`} style={{ display: "contents" }}>
+                                    <span style={{ color: C.ts }}>{r.label}{hasCount ? " followers" : ""}</span>
+                                    <span style={{ fontWeight: hasCount ? 700 : 500, textAlign: "right", color: hasCount ? C.tx : C.ts, fontSize: hasCount ? 13 : 11 }}>
+                                      {hasCount
+                                        ? r.count.toLocaleString()
+                                        : r.partial
+                                          ? <span style={{ color: C.ts, fontStyle: "italic" }}>{r.partial}</span>
+                                          : <span style={{ color: C.tt }}>—</span>
+                                      }
+                                    </span>
+                                  </div>
+                                );
+                              });
+                            })()}
                           </div>
                         </div>
 
@@ -15450,14 +15524,32 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                         <div>
                           <div style={{ fontSize: 11, color: C.ts, fontWeight: 700, marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 }}>🔗 Links</div>
                           <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                            {c.spotifyUrl && <a href={c.spotifyUrl} target="_blank" rel="noopener noreferrer" style={{ ...actionBtn(false, "neutral"), textDecoration: "none", fontSize: 12 }}>Spotify ↗</a>}
-                            {!c.spotifyArtistId && <a href={`https://open.spotify.com/search/${encodeURIComponent(c.displayName)}`} target="_blank" rel="noopener noreferrer" style={{ ...actionBtn(false, "neutral"), textDecoration: "none", fontSize: 12 }}>🔍 Search Spotify ↗</a>}
-                            {c.instagramHandle && <a href={`https://instagram.com/${c.instagramHandle}`} target="_blank" rel="noopener noreferrer" style={{ ...actionBtn(false, "neutral"), textDecoration: "none", fontSize: 12 }}>IG @{c.instagramHandle} ↗</a>}
-                            {c.tiktokHandle && <a href={`https://tiktok.com/@${c.tiktokHandle}`} target="_blank" rel="noopener noreferrer" style={{ ...actionBtn(false, "neutral"), textDecoration: "none", fontSize: 12 }}>TikTok ↗</a>}
-                            {c.youtubeHandle && <a href={`https://youtube.com/@${c.youtubeHandle}`} target="_blank" rel="noopener noreferrer" style={{ ...actionBtn(false, "neutral"), textDecoration: "none", fontSize: 12 }}>YouTube ↗</a>}
-                            {c.bandcampUrl && <a href={c.bandcampUrl} target="_blank" rel="noopener noreferrer" style={{ ...actionBtn(false, "neutral"), textDecoration: "none", fontSize: 12 }}>Bandcamp ↗</a>}
-                            {c.soundcloudHandle && <a href={`https://soundcloud.com/${c.soundcloudHandle}`} target="_blank" rel="noopener noreferrer" style={{ ...actionBtn(false, "neutral"), textDecoration: "none", fontSize: 12 }}>SoundCloud ↗</a>}
-                            {c.musicbrainzId && <a href={`https://musicbrainz.org/artist/${c.musicbrainzId}`} target="_blank" rel="noopener noreferrer" style={{ ...actionBtn(false, "neutral"), textDecoration: "none", fontSize: 11, opacity: 0.6 }}>MusicBrainz</a>}
+                            {(() => {
+                              // Build platform URLs defensively. The order here is the
+                              // visual order in the chip row. Each chip only renders if
+                              // buildSocialUrl returns non-null — so a missing handle
+                              // doesn't print an empty button. Tested edge cases:
+                              // handle-stored-as-URL, handle with @, handle with tracking
+                              // params. See lib/gemfinder/scout/social-urls.test.ts.
+                              const igUrl = buildSocialUrl("instagram", c.instagramHandle);
+                              const ttUrl = buildSocialUrl("tiktok", c.tiktokHandle);
+                              const ytUrl = buildSocialUrl("youtube", c.youtubeHandle, c.youtubeUrl);
+                              const scUrl = buildSocialUrl("soundcloud", c.soundcloudHandle, c.soundcloudUrl);
+                              const chip = { ...actionBtn(false, "neutral"), textDecoration: "none", fontSize: 12 };
+                              const igLabel = displayHandle(c.instagramHandle);
+                              return (
+                                <>
+                                  {c.spotifyUrl && <a href={c.spotifyUrl} target="_blank" rel="noopener noreferrer" style={chip}>Spotify ↗</a>}
+                                  {!c.spotifyArtistId && <a href={`https://open.spotify.com/search/${encodeURIComponent(c.displayName)}`} target="_blank" rel="noopener noreferrer" style={chip}>🔍 Search Spotify ↗</a>}
+                                  {igUrl && <a href={igUrl} target="_blank" rel="noopener noreferrer" style={chip}>IG{igLabel ? ` @${igLabel}` : ""} ↗</a>}
+                                  {ttUrl && <a href={ttUrl} target="_blank" rel="noopener noreferrer" style={chip}>TikTok ↗</a>}
+                                  {ytUrl && <a href={ytUrl} target="_blank" rel="noopener noreferrer" style={chip}>YouTube ↗</a>}
+                                  {c.bandcampUrl && <a href={c.bandcampUrl} target="_blank" rel="noopener noreferrer" style={chip}>Bandcamp ↗</a>}
+                                  {scUrl && <a href={scUrl} target="_blank" rel="noopener noreferrer" style={chip}>SoundCloud ↗</a>}
+                                  {c.musicbrainzId && <a href={`https://musicbrainz.org/artist/${c.musicbrainzId}`} target="_blank" rel="noopener noreferrer" style={{ ...chip, fontSize: 11, opacity: 0.6 }}>MusicBrainz</a>}
+                                </>
+                              );
+                            })()}
                           </div>
                         </div>
 
