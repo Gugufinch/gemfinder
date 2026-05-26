@@ -4467,12 +4467,29 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     () => uniqStrings(liveCrmBaseProfiles.flatMap(profile => profile.sources || []).filter(Boolean)),
     [liveCrmBaseProfiles]
   );
+  // Team roster augmentation — the workspace's teamUsers PLUS the signed-in
+  // user, even when that user has no assignments yet. Owner-filter dropdowns
+  // historically built their option list ONLY from owners who actually owned
+  // a record, which meant an admin (like Greg) could vanish from team filters
+  // on a workspace until someone assigned them something. This roster fixes
+  // that: union (discovered owners) + (teamUsers) + (me) → always see myself.
+  const augmentedTeamRoster = useMemo(() => {
+    const base = Array.isArray(proj?.teamUsers) && proj.teamUsers.length
+      ? proj.teamUsers
+      : DEFAULT_TEAM_USERS;
+    const me = resolveSessionUserName(authEmail, authUserId, base);
+    return uniqStrings([...base, me].filter(Boolean));
+  }, [proj?.teamUsers, authEmail, authUserId]);
+
   const liveCrmOwnerOptions = useMemo(
-    () => uniqStrings(liveCrmBaseProfiles.flatMap(profile => [
-      ...(profile.marketingAssignments || []).map(item => item.owner),
-      ...(profile.arRecords || []).map(item => item.owner),
-    ].filter(Boolean))).sort((a, b) => a.localeCompare(b)),
-    [liveCrmBaseProfiles]
+    () => uniqStrings([
+      ...liveCrmBaseProfiles.flatMap(profile => [
+        ...(profile.marketingAssignments || []).map(item => item.owner),
+        ...(profile.arRecords || []).map(item => item.owner),
+      ]),
+      ...augmentedTeamRoster,
+    ].filter(Boolean)).sort((a, b) => a.localeCompare(b)),
+    [liveCrmBaseProfiles, augmentedTeamRoster]
   );
   const liveCrmStatusOptions = useMemo(
     () => uniqStrings(liveCrmBaseProfiles.flatMap(profile =>
@@ -4703,8 +4720,11 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     [kickoffBaseProfiles]
   );
   const kickoffOwnerOptions = useMemo(
-    () => uniqStrings(kickoffBaseProfiles.flatMap(profile => profile.arRecords.map(record => record.owner).filter(Boolean))).sort((a, b) => a.localeCompare(b)),
-    [kickoffBaseProfiles]
+    () => uniqStrings([
+      ...kickoffBaseProfiles.flatMap(profile => profile.arRecords.map(record => record.owner)),
+      ...augmentedTeamRoster,
+    ].filter(Boolean)).sort((a, b) => a.localeCompare(b)),
+    [kickoffBaseProfiles, augmentedTeamRoster]
   );
   const kickoffProfiles = useMemo(() => {
     const query = kickoffQuery.trim().toLowerCase();
@@ -5719,8 +5739,11 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       .sort((a, b) => (b.kickoff + b.liveAssignments + b.completedAssignments) - (a.kickoff + a.liveAssignments + a.completedAssignments) || a.owner.localeCompare(b.owner));
   }, [kickoffProfiles, liveCrmProfiles]);
   const workspaceReportOwnerOptions = useMemo(
-    () => workspaceReportBaseRows.map(row => row.owner).sort((a, b) => a.localeCompare(b)),
-    [workspaceReportBaseRows]
+    () => uniqStrings([
+      ...workspaceReportBaseRows.map(row => row.owner),
+      ...augmentedTeamRoster,
+    ].filter(Boolean)).sort((a, b) => a.localeCompare(b)),
+    [workspaceReportBaseRows, augmentedTeamRoster]
   );
   const workspaceReportRows = useMemo(() => {
     const filteredRows = workspaceReportOwnerFilter === "all"
