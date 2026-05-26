@@ -370,7 +370,11 @@ const SEQUENCES = [
 ];
 const SEQ_MAP = Object.fromEntries(SEQUENCES.map(s => [s.id, s]));
 
-const DEFAULT_TEAM_USERS = ["Greg", "Vinny", "Brad", "Jen", "JB"];
+// Baseline team roster — always available in Owner pickers regardless of
+// workspace customization. Workspaces can ADD their own specialists via
+// proj.teamUsers but cannot REMOVE these names. If you need to retire a
+// person globally, edit this list. Add new global team members here.
+const DEFAULT_TEAM_USERS = ["Greg", "Vinny", "Brad", "Jen", "JB", "Dakota"];
 const ALL_USER_VIEW = "__all__";
 const UNASSIGNED_USER_VIEW = "__unassigned__";
 
@@ -4467,16 +4471,21 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     () => uniqStrings(liveCrmBaseProfiles.flatMap(profile => profile.sources || []).filter(Boolean)),
     [liveCrmBaseProfiles]
   );
-  // Team roster augmentation — the workspace's teamUsers PLUS the signed-in
-  // user, even when that user has no assignments yet. Owner-filter dropdowns
-  // historically built their option list ONLY from owners who actually owned
-  // a record, which meant an admin (like Greg) could vanish from team filters
-  // on a workspace until someone assigned them something. This roster fixes
-  // that: union (discovered owners) + (teamUsers) + (me) → always see myself.
+  // Team roster augmentation — the union of:
+  //   (1) DEFAULT_TEAM_USERS (the baseline that should ALWAYS be available)
+  //   (2) proj.teamUsers (workspace-specific specialists added on top)
+  //   (3) the resolved signed-in user (so admins like Greg always see themselves)
+  //
+  // Workspace teamUsers is ADDITIVE: a workspace can add specialists but
+  // cannot drop baseline names. This was the root of the "Greg disappeared
+  // from Songfinch" bug — that workspace had a customized teamUsers array
+  // that omitted Greg, and the old code used it as a replacement rather
+  // than an addition. Now they stack.
   const augmentedTeamRoster = useMemo(() => {
-    const base = Array.isArray(proj?.teamUsers) && proj.teamUsers.length
-      ? proj.teamUsers
-      : DEFAULT_TEAM_USERS;
+    const base = uniqStrings([
+      ...DEFAULT_TEAM_USERS,
+      ...(Array.isArray(proj?.teamUsers) ? proj.teamUsers : []),
+    ]);
     const me = resolveSessionUserName(authEmail, authUserId, base);
     return uniqStrings([...base, me].filter(Boolean));
   }, [proj?.teamUsers, authEmail, authUserId]);
@@ -19629,7 +19638,9 @@ Requirements:
                       <option value="__view__">Current view ({workspaceUser === ALL_USER_VIEW ? "All" : workspaceUser === UNASSIGNED_USER_VIEW ? "Unassigned" : workspaceUser})</option>
                       <option value="all">All owners</option>
                       <option value="">Unassigned only</option>
-                      {(proj?.teamUsers || DEFAULT_TEAM_USERS).map(u => <option key={u} value={u}>{u}</option>)}
+                      {/* Uses augmentedTeamRoster so admins + baseline names
+                          always appear, not just workspace-customized teamUsers. */}
+                      {augmentedTeamRoster.map(u => <option key={u} value={u}>{u}</option>)}
                     </select>
                   </label>
                   <label style={{ fontSize: 11, color: C.tt, display: "grid", gap: 4 }}>
