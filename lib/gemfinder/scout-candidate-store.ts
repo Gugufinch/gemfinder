@@ -568,6 +568,8 @@ export type HunterEventPhase =
   | 'top_tracks'     // Spotify top tracks fetch
   | 'ig_scrape'      // Instagram follower scrape via Steel
   | 'tt_scrape'      // TikTok follower scrape via Steel
+  | 'yt_scrape'      // YouTube subscriber scrape via Steel
+  | 'sc_scrape'      // SoundCloud follower scrape via Steel
   | 'score'          // Score recomputation
   | 'cache';         // Cache hit/miss
 

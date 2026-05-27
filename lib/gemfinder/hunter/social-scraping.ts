@@ -122,6 +122,14 @@ function ttCacheUrl(handle: string): string {
   return `tt:${handle}`;
 }
 
+function ytCacheUrl(handle: string): string {
+  return `yt:${handle}`;
+}
+
+function scCacheUrl(handle: string): string {
+  return `sc:${handle}`;
+}
+
 function htmlToFakeScrapeResult(html: string, url: string): SteelScrapeResult {
   return { url, pageHtml: html, scrapedAt: new Date().toISOString() };
 }
@@ -209,6 +217,82 @@ function extractTikTokFollowers(html: string): number | null {
 }
 
 // ---------------------------------------------------------------------------
+// YouTube subscriber extraction
+// ---------------------------------------------------------------------------
+
+export function extractYouTubeSubscribers(html: string): number | null {
+  // Strategy 1: ytInitialData has subscriberCountText.simpleText or .runs[0].text
+  //   Examples: "12.4K subscribers", "1.2M subscribers", "934 subscribers"
+  // We match BOTH the simpleText form and the runs form because YouTube
+  // randomly picks between them depending on locale + rendering path.
+  const simpleTextMatch = /"subscriberCountText"\s*:\s*\{[^}]*"simpleText"\s*:\s*"([^"]+)"/.exec(html);
+  if (simpleTextMatch) {
+    const n = parseFollowerString(simpleTextMatch[1]);
+    if (n !== null) return n;
+  }
+  const runsMatch = /"subscriberCountText"\s*:\s*\{[^}]*"runs"\s*:\s*\[\s*\{\s*"text"\s*:\s*"([^"]+)"/.exec(html);
+  if (runsMatch) {
+    const n = parseFollowerString(runsMatch[1]);
+    if (n !== null) return n;
+  }
+
+  // Strategy 2: meta tag <meta itemprop="subscriberCount" content="12400">
+  const metaMatch = /<meta\s[^>]*itemprop=["']subscriberCount["'][^>]*content=["'](\d+)["']/i.exec(html)
+    ?? /<meta\s[^>]*content=["'](\d+)["'][^>]*itemprop=["']subscriberCount["']/i.exec(html);
+  if (metaMatch) {
+    const n = parseInt(metaMatch[1], 10);
+    if (!isNaN(n)) return n;
+  }
+
+  // Strategy 3: meta description hint ("Subscribe to my channel · 12K subscribers")
+  const descMatch = /<meta\s[^>]*name=["']description["'][^>]*content=["']([^"']+)["']/i.exec(html);
+  if (descMatch) {
+    const subRe = /([\d,.]+[KkMm]?)\s*subscribers/i.exec(descMatch[1]);
+    if (subRe) {
+      const n = parseFollowerString(subRe[1]);
+      if (n !== null) return n;
+    }
+  }
+
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// SoundCloud follower extraction
+// ---------------------------------------------------------------------------
+
+export function extractSoundCloudFollowers(html: string): number | null {
+  // Strategy 1: hydration JSON. SoundCloud injects a __sc_hydration block at
+  // the bottom of the page with the artist profile object containing
+  // "followers_count":12400. This is the most reliable signal — meta tags
+  // are inconsistent across user vs band profiles.
+  const hydrationMatch = /"followers_count"\s*:\s*(\d+)/.exec(html);
+  if (hydrationMatch) {
+    const n = parseInt(hydrationMatch[1], 10);
+    if (!isNaN(n)) return n;
+  }
+
+  // Strategy 2: meta tag <meta property="soundcloud:user:followers_count" content="12400">
+  const metaMatch = /<meta\s[^>]*property=["']soundcloud:user:followers_count["'][^>]*content=["'](\d+)["']/i.exec(html);
+  if (metaMatch) {
+    const n = parseInt(metaMatch[1], 10);
+    if (!isNaN(n)) return n;
+  }
+
+  // Strategy 3: description-style fallback ("950 followers")
+  const descMatch = /<meta\s[^>]*name=["']description["'][^>]*content=["']([^"']+)["']/i.exec(html);
+  if (descMatch) {
+    const fRe = /([\d,.]+[KkMm]?)\s*Followers/i.exec(descMatch[1]);
+    if (fRe) {
+      const n = parseFollowerString(fRe[1]);
+      if (n !== null) return n;
+    }
+  }
+
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
@@ -286,6 +370,85 @@ export async function fetchTiktokFollowers(handle: string): Promise<number | nul
   const followers = extractTikTokFollowers(html);
   if (followers === null) {
     console.warn('[HUNTER_SOCIAL] TT no follower count found for', handle);
+  }
+  return followers;
+}
+
+export async function fetchYoutubeSubscribers(handle: string): Promise<number | null> {
+  // YouTube handles can be /@name (new) or /channel/UC... (legacy). The handle
+  // we get from MB/LLM is the @-stripped form. Use /@handle which YouTube
+  // redirects appropriately for both old and new channel URLs.
+  const url = `https://www.youtube.com/@${handle}`;
+  const cacheKey = ytCacheUrl(handle);
+
+  let cached: SteelScrapeResult | null = null;
+  try {
+    cached = await getCached(SOCIAL_WORKSPACE, cacheKey);
+  } catch (err) {
+    console.warn('[HUNTER_SOCIAL] YT cache lookup failed for', handle, err);
+  }
+
+  let html: string | null = null;
+  if (cached) {
+    html = cached.pageHtml;
+  } else {
+    try {
+      html = await fetchHtml(url);
+    } catch (err) {
+      console.warn('[HUNTER_SOCIAL] YT fetch failed for', handle, err);
+      return null;
+    }
+    if (html) {
+      const result = htmlToFakeScrapeResult(html, cacheKey);
+      putCached(SOCIAL_WORKSPACE, cacheKey, result).catch((err) =>
+        console.warn('[HUNTER_SOCIAL] YT putCached failed for', handle, err)
+      );
+    }
+  }
+
+  if (!html) return null;
+
+  const subs = extractYouTubeSubscribers(html);
+  if (subs === null) {
+    console.warn('[HUNTER_SOCIAL] YT no subscriber count found for', handle);
+  }
+  return subs;
+}
+
+export async function fetchSoundcloudFollowers(handle: string): Promise<number | null> {
+  const url = `https://soundcloud.com/${handle}`;
+  const cacheKey = scCacheUrl(handle);
+
+  let cached: SteelScrapeResult | null = null;
+  try {
+    cached = await getCached(SOCIAL_WORKSPACE, cacheKey);
+  } catch (err) {
+    console.warn('[HUNTER_SOCIAL] SC cache lookup failed for', handle, err);
+  }
+
+  let html: string | null = null;
+  if (cached) {
+    html = cached.pageHtml;
+  } else {
+    try {
+      html = await fetchHtml(url);
+    } catch (err) {
+      console.warn('[HUNTER_SOCIAL] SC fetch failed for', handle, err);
+      return null;
+    }
+    if (html) {
+      const result = htmlToFakeScrapeResult(html, cacheKey);
+      putCached(SOCIAL_WORKSPACE, cacheKey, result).catch((err) =>
+        console.warn('[HUNTER_SOCIAL] SC putCached failed for', handle, err)
+      );
+    }
+  }
+
+  if (!html) return null;
+
+  const followers = extractSoundCloudFollowers(html);
+  if (followers === null) {
+    console.warn('[HUNTER_SOCIAL] SC no follower count found for', handle);
   }
   return followers;
 }

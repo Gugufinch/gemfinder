@@ -4,7 +4,7 @@ import { getArtistById, parseSpotifyArtistId, searchArtistByName, getTopTracks }
 import { researchArtist } from '@/lib/gemfinder/hunter/deep-research';
 import { scrapeWebsite } from '@/lib/gemfinder/hunter/steel';
 import { getCached, putCached } from '@/lib/gemfinder/hunter/scrape-cache';
-import { fetchInstagramFollowers, fetchTiktokFollowers } from '@/lib/gemfinder/hunter/social-scraping';
+import { fetchInstagramFollowers, fetchTiktokFollowers, fetchYoutubeSubscribers, fetchSoundcloudFollowers } from '@/lib/gemfinder/hunter/social-scraping';
 import type { EnrichedCandidate } from '@/lib/gemfinder/types';
 import { emitEvent } from '@/lib/gemfinder/scout-candidate-store';
 import type { HunterEventPhase, HunterEventStatus } from '@/lib/gemfinder/scout-candidate-store';
@@ -491,10 +491,14 @@ export async function enrichCandidate(
     }
   }
 
-  // Step 7b: social follower scraping — run IG + TikTok in parallel with a
-  // 15-second timeout each so a slow scrape can't block the whole enrichment.
+  // Step 7b: social follower scraping — run IG + TikTok + YouTube + SoundCloud
+  // in parallel with a 15-second timeout each so a slow scrape can't block the
+  // whole enrichment. Each one fires only if the corresponding handle is
+  // present on the candidate; missing handles silently skip their scrape.
   let igFollowers: number | undefined;
   let ttFollowers: number | undefined;
+  let ytSubs: number | undefined;
+  let scFollowers: number | undefined;
   const socialPromises: Promise<void>[] = [];
 
   if (extracted.instagramHandle) {
@@ -547,6 +551,56 @@ export async function enrichCandidate(
     );
   }
 
+  if (extracted.youtubeHandle) {
+    const ytHandle = extracted.youtubeHandle;
+    emit('yt_scrape', 'started', `Scraping YouTube @${ytHandle}…`);
+    socialPromises.push(
+      Promise.race([
+        fetchYoutubeSubscribers(ytHandle),
+        new Promise<null>((r) => setTimeout(() => r(null), 15_000)),
+      ]).then((n) => {
+        if (typeof n === 'number') {
+          ytSubs = n;
+          emit('yt_scrape', 'success', `YouTube @${ytHandle}: ${n.toLocaleString()} subscribers`, {
+            handle: ytHandle,
+            subscribers: n,
+          });
+        } else {
+          emit('yt_scrape', 'skipped', `YouTube @${ytHandle} returned no subscriber count (timeout or scrape blocked)`);
+        }
+      })
+        .catch((err) => {
+          console.warn('[HUNTER_ENRICH] YT fetch failed:', err);
+          emit('yt_scrape', 'failed', `YouTube fetch errored: ${err instanceof Error ? err.message : String(err)}`);
+        })
+    );
+  }
+
+  if (extracted.soundcloudHandle) {
+    const scHandle = extracted.soundcloudHandle;
+    emit('sc_scrape', 'started', `Scraping SoundCloud /${scHandle}…`);
+    socialPromises.push(
+      Promise.race([
+        fetchSoundcloudFollowers(scHandle),
+        new Promise<null>((r) => setTimeout(() => r(null), 15_000)),
+      ]).then((n) => {
+        if (typeof n === 'number') {
+          scFollowers = n;
+          emit('sc_scrape', 'success', `SoundCloud /${scHandle}: ${n.toLocaleString()} followers`, {
+            handle: scHandle,
+            followers: n,
+          });
+        } else {
+          emit('sc_scrape', 'skipped', `SoundCloud /${scHandle} returned no follower count (timeout or scrape blocked)`);
+        }
+      })
+        .catch((err) => {
+          console.warn('[HUNTER_ENRICH] SC fetch failed:', err);
+          emit('sc_scrape', 'failed', `SoundCloud fetch errored: ${err instanceof Error ? err.message : String(err)}`);
+        })
+    );
+  }
+
   await Promise.allSettled(socialPromises);
 
   // Step 8: inferredRole
@@ -593,6 +647,8 @@ export async function enrichCandidate(
     spotifyImageUrl,
     instagramFollowers: igFollowers,
     tiktokFollowers: ttFollowers,
+    youtubeSubscribers: ytSubs,
+    soundcloudFollowers: scFollowers,
     scrapedContactEmail,
     scrapedManagerInfo,
     scrapedToursInfo,
@@ -617,6 +673,8 @@ export async function enrichCandidate(
     hasSpotify: !!spotifyArtistId,
     hasIg: typeof igFollowers === 'number',
     hasTt: typeof ttFollowers === 'number',
+    hasYt: typeof ytSubs === 'number',
+    hasSc: typeof scFollowers === 'number',
     hasContactEmail: !!scrapedContactEmail,
     contactReadiness,
     genreCount: genres.length,

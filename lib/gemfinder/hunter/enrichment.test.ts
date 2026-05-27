@@ -26,6 +26,8 @@ vi.mock('@/lib/gemfinder/hunter/scrape-cache', () => ({
 vi.mock('@/lib/gemfinder/hunter/social-scraping', () => ({
   fetchInstagramFollowers: vi.fn(async () => null),
   fetchTiktokFollowers: vi.fn(async () => null),
+  fetchYoutubeSubscribers: vi.fn(async () => null),
+  fetchSoundcloudFollowers: vi.fn(async () => null),
 }));
 vi.mock('@/lib/gemfinder/hunter/deep-research', () => ({
   researchArtist: vi.fn(async () => null),

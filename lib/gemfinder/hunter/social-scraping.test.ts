@@ -14,7 +14,15 @@ vi.mock('@/lib/gemfinder/hunter/scrape-cache', () => ({
   putCached: vi.fn(async () => undefined),
 }));
 
-import { parseFollowerString, fetchInstagramFollowers, fetchTiktokFollowers } from '@/lib/gemfinder/hunter/social-scraping';
+import {
+  parseFollowerString,
+  fetchInstagramFollowers,
+  fetchTiktokFollowers,
+  fetchYoutubeSubscribers,
+  fetchSoundcloudFollowers,
+  extractYouTubeSubscribers,
+  extractSoundCloudFollowers,
+} from '@/lib/gemfinder/hunter/social-scraping';
 import * as scrapeCache from '@/lib/gemfinder/hunter/scrape-cache';
 
 // ---------------------------------------------------------------------------
@@ -298,5 +306,176 @@ describe('fetchTiktokFollowers', () => {
     const result = await fetchTiktokFollowers('cachedtt');
     expect(result).toBe(99000);
     expect(global.fetch).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// YouTube subscriber extraction — strategy-by-strategy verification
+// ---------------------------------------------------------------------------
+
+describe('extractYouTubeSubscribers', () => {
+  it('parses ytInitialData simpleText "12.4K subscribers"', () => {
+    const html = `<script>var ytInitialData = {"subscriberCountText":{"simpleText":"12.4K subscribers"}};</script>`;
+    expect(extractYouTubeSubscribers(html)).toBe(12400);
+  });
+
+  it('parses ytInitialData runs[0].text "1.2M subscribers"', () => {
+    const html = `<script>var ytInitialData = {"subscriberCountText":{"runs":[{"text":"1.2M subscribers"}]}};</script>`;
+    expect(extractYouTubeSubscribers(html)).toBe(1_200_000);
+  });
+
+  it('parses meta itemprop="subscriberCount" content="934"', () => {
+    const html = `<meta itemprop="subscriberCount" content="934">`;
+    expect(extractYouTubeSubscribers(html)).toBe(934);
+  });
+
+  it('parses meta description fallback "Subscribe · 12K subscribers"', () => {
+    const html = `<meta name="description" content="Subscribe to my channel · 12K subscribers, daily uploads">`;
+    expect(extractYouTubeSubscribers(html)).toBe(12_000);
+  });
+
+  it('returns null when no subscriber pattern matches', () => {
+    expect(extractYouTubeSubscribers('<html><body>Empty</body></html>')).toBeNull();
+  });
+
+  it('prefers ytInitialData over meta description (the more authoritative source)', () => {
+    const html = `<meta name="description" content="Subscribe · 50K subscribers">
+                  <script>var ytInitialData = {"subscriberCountText":{"simpleText":"125K subscribers"}};</script>`;
+    expect(extractYouTubeSubscribers(html)).toBe(125_000);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SoundCloud follower extraction — strategy-by-strategy verification
+// ---------------------------------------------------------------------------
+
+describe('extractSoundCloudFollowers', () => {
+  it('parses hydration JSON "followers_count":12400', () => {
+    const html = `<script>window.__sc_hydration = [{"data":{"followers_count":12400}}];</script>`;
+    expect(extractSoundCloudFollowers(html)).toBe(12400);
+  });
+
+  it('parses meta property soundcloud:user:followers_count', () => {
+    const html = `<meta property="soundcloud:user:followers_count" content="8500">`;
+    expect(extractSoundCloudFollowers(html)).toBe(8500);
+  });
+
+  it('parses meta description fallback "1.5K Followers"', () => {
+    const html = `<meta name="description" content="Producer · 1.5K Followers · 22 tracks">`;
+    expect(extractSoundCloudFollowers(html)).toBe(1500);
+  });
+
+  it('returns null when no follower pattern matches', () => {
+    expect(extractSoundCloudFollowers('<html><body>Empty</body></html>')).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// fetchYoutubeSubscribers (network/cache integration)
+// ---------------------------------------------------------------------------
+
+describe('fetchYoutubeSubscribers', () => {
+  beforeEach(() => {
+    process.env.STEEL_API_KEY = 'test-key';
+    vi.mocked(scrapeCache.getCached).mockResolvedValue(null);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('hits Steel, parses subscribers, caches result', async () => {
+    const html = `<script>var ytInitialData = {"subscriberCountText":{"simpleText":"15K subscribers"}};</script>`;
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ pageHtml: html }),
+    } as Response);
+
+    const result = await fetchYoutubeSubscribers('artistchannel');
+    expect(result).toBe(15_000);
+    expect(scrapeCache.putCached).toHaveBeenCalledWith(
+      expect.any(String),
+      'yt:artistchannel',
+      expect.objectContaining({ pageHtml: html }),
+    );
+  });
+
+  it('returns null when no subscriber count found + warns', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ pageHtml: '<html><body>Empty channel</body></html>' }),
+    } as Response);
+    const result = await fetchYoutubeSubscribers('nocount');
+    expect(result).toBeNull();
+    expect(console.warn).toHaveBeenCalledWith('[HUNTER_SOCIAL] YT no subscriber count found for', 'nocount');
+  });
+
+  it('returns null when STEEL_API_KEY is missing', async () => {
+    delete process.env.STEEL_API_KEY;
+    const result = await fetchYoutubeSubscribers('artist');
+    expect(result).toBeNull();
+  });
+
+  it('returns cached result without hitting Steel', async () => {
+    const cachedHtml = `<script>var ytInitialData = {"subscriberCountText":{"simpleText":"50K subscribers"}};</script>`;
+    vi.mocked(scrapeCache.getCached).mockResolvedValue({
+      url: 'yt:cached',
+      pageHtml: cachedHtml,
+      scrapedAt: '2026-01-01T00:00:00Z',
+    });
+    global.fetch = vi.fn();
+    const result = await fetchYoutubeSubscribers('cached');
+    expect(result).toBe(50_000);
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// fetchSoundcloudFollowers (network/cache integration)
+// ---------------------------------------------------------------------------
+
+describe('fetchSoundcloudFollowers', () => {
+  beforeEach(() => {
+    process.env.STEEL_API_KEY = 'test-key';
+    vi.mocked(scrapeCache.getCached).mockResolvedValue(null);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('hits Steel, parses followers, caches result', async () => {
+    const html = `<script>{"followers_count":8500}</script>`;
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ pageHtml: html }),
+    } as Response);
+
+    const result = await fetchSoundcloudFollowers('producerHandle');
+    expect(result).toBe(8500);
+    expect(scrapeCache.putCached).toHaveBeenCalledWith(
+      expect.any(String),
+      'sc:producerHandle',
+      expect.objectContaining({ pageHtml: html }),
+    );
+  });
+
+  it('returns null when no follower count found', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ pageHtml: '<html><body>Not found</body></html>' }),
+    } as Response);
+    const result = await fetchSoundcloudFollowers('nocount');
+    expect(result).toBeNull();
+  });
+
+  it('returns null when STEEL_API_KEY is missing', async () => {
+    delete process.env.STEEL_API_KEY;
+    const result = await fetchSoundcloudFollowers('artist');
+    expect(result).toBeNull();
   });
 });
