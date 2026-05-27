@@ -76,7 +76,7 @@ export async function searchArtistsViaLLM(
     throw new Error(`[HUNTER_LLM] could not extract JSON from Gemini response (first 200 chars: ${responseText.slice(0, 200).replace(/\n/g, ' ')})`);
   }
 
-  let parsed: { artists?: Array<{ name: string; genres?: string[]; rationale?: string }> };
+  let parsed: { artists?: Array<{ name: string; genres?: string[]; rationale?: string; spotifyUrl?: string }> };
   try {
     parsed = JSON.parse(jsonStr);
   } catch (err) {
@@ -103,13 +103,27 @@ export async function searchArtistsViaLLM(
   // empty id; Spotify search-by-name kicks in instead.
   const mapped: MBArtist[] = items
     .filter((a) => a && typeof a.name === 'string' && a.name.trim().length > 0)
-    .map((a) => ({
-      id: '',  // sentinel: "no MB lookup possible"
-      name: a.name.trim(),
-      type: 'Person' as const,
-      tags: (a.genres ?? []).slice(0, 5).map((name) => ({ name: name.toLowerCase(), count: 1 })),
-      _aiHint: typeof a.rationale === 'string' ? a.rationale : undefined,
-    }));
+    .map((a) => {
+      // Sanitize the LLM-provided spotifyUrl: must be a non-empty string AND
+      // look plausibly like a Spotify URL (anything else is the LLM having
+      // hallucinated "null" or a literal "https://open.spotify.com/search/..."
+      // search-link, neither of which we want to feed to parseSpotifyArtistId).
+      const rawUrl = typeof a.spotifyUrl === 'string' ? a.spotifyUrl.trim() : '';
+      const llmSpotifyUrl =
+        rawUrl &&
+        rawUrl !== 'null' &&
+        /open\.spotify\.com\/artist\//i.test(rawUrl)
+          ? rawUrl
+          : undefined;
+      return {
+        id: '',  // sentinel: "no MB lookup possible"
+        name: a.name.trim(),
+        type: 'Person' as const,
+        tags: (a.genres ?? []).slice(0, 5).map((name) => ({ name: name.toLowerCase(), count: 1 })),
+        _aiHint: typeof a.rationale === 'string' ? a.rationale : undefined,
+        _llmSpotifyUrl: llmSpotifyUrl,
+      };
+    });
 
   // Write to cache (fire-and-forget). Cache the PRE-exclusion-filter list so
   // future hits can apply the then-current exclude set.
@@ -201,7 +215,7 @@ async function putCachedDiscovery(criteria: HunterCriteria, candidates: MBArtist
  * Returns the parsed object if recovery succeeds, or null if no prefix is
  * salvageable.
  */
-function recoverPartialArtists(jsonStr: string): { artists?: Array<{ name: string; genres?: string[]; rationale?: string }> } | null {
+function recoverPartialArtists(jsonStr: string): { artists?: Array<{ name: string; genres?: string[]; rationale?: string; spotifyUrl?: string }> } | null {
   // Find the position of the first `"artists":[` so we know where to insert the close.
   const artistsMatch = jsonStr.match(/"artists"\s*:\s*\[/);
   if (!artistsMatch || artistsMatch.index === undefined) return null;

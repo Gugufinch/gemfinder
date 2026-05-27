@@ -341,9 +341,21 @@ export async function enrichCandidate(
   let spotifyPopularity: number | undefined;
   let spotifyGenres: string[] | undefined;
   let spotifyArtistId: string | undefined;
+  let spotifyImageUrl: string | undefined;
 
-  if (extracted.spotifyUrl) {
-    spotifyArtistId = parseSpotifyArtistId(extracted.spotifyUrl) ?? undefined;
+  // Source priority for Spotify ID:
+  //   1. MB relation URL (most authoritative — verified by MusicBrainz)
+  //   2. LLM-cited URL (Gemini grounded its name claim with a spotify link)
+  //   3. Name search fallback (last resort, can mismatch on stage names)
+  //
+  // The LLM URL was added when the discovery prompt started requiring
+  // verifiable IDs. When present, we skip the name-search step entirely
+  // and pick up a verified Spotify ID without the fuzzy-match risk.
+  const spotifyUrlForLookup = extracted.spotifyUrl || mbArtist._llmSpotifyUrl;
+  const spotifySourceLabel = extracted.spotifyUrl ? 'by_id (mb)' : 'by_id (llm)';
+
+  if (spotifyUrlForLookup) {
+    spotifyArtistId = parseSpotifyArtistId(spotifyUrlForLookup) ?? undefined;
     if (spotifyArtistId) {
       emit('spotify', 'started', `Looking up Spotify artist by ID: ${spotifyArtistId.slice(0, 8)}…`);
       let sp = null;
@@ -357,12 +369,13 @@ export async function enrichCandidate(
         spotifyFollowers = sp.followers.total;
         spotifyPopularity = sp.popularity;
         spotifyGenres = sp.genres;
+        spotifyImageUrl = sp.images?.[0]?.url;
         emit('spotify', 'success', `Spotify resolved by ID: ${sp.followers.total.toLocaleString()} followers, popularity ${sp.popularity}`, {
           spotifyArtistId,
           followers: sp.followers.total,
           popularity: sp.popularity,
           genres: sp.genres,
-          source: 'by_id',
+          source: spotifySourceLabel,
         });
       }
     }
@@ -374,7 +387,6 @@ export async function enrichCandidate(
   // best-effort match. Without this, the size_cap gate can't fire for any
   // artist whose MB entry is incomplete — exactly the failure mode that
   // surfaced megastars to Greg's first hunt.
-  let spotifyImageUrl: string | undefined;
   if (spotifyFollowers === undefined) {
     emit('spotify', 'started', `Falling back to Spotify name search for "${mbArtist.name}"`);
     let sp = null;
@@ -588,13 +600,16 @@ export async function enrichCandidate(
     contactReadiness,
     aiSummary: finalBio,
     // Verification: the candidate is "unverified" when we couldn't confirm
-    // they exist via ANY external source. MB ID, Spotify ID match, or a
-    // successful deep-research call all count as verification. Without any
-    // of these, we're trusting only the LLM's discovery output — which is
-    // exactly how phantom artists like "Jermaine Butler · score 52, no
-    // Spotify ID, no IG followers" end up in the queue.
+    // they exist via ANY external source. MB ID, a successful Spotify
+    // lookup (via either MB-relation OR LLM-cited URL OR name search), or
+    // a successful deep-research call all count as verification. Without
+    // any of these, we're trusting only the LLM's bare name claim — how
+    // phantom artists like "Jermaine Butler · score 52, no Spotify ID,
+    // no IG followers" end up in the queue.
     //
     // The minimumEvidenceGate uses this flag to reject before scoring.
+    // spotifyArtistId being set means at least one of the three Spotify
+    // paths succeeded (and Spotify confirmed the artist exists).
     unverified: !mbArtist.id && !spotifyArtistId && !deep,
   };
 

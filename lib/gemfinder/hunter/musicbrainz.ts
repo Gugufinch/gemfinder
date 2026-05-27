@@ -16,6 +16,12 @@ export type MBArtist = {
   // enrichment to become the candidate's aiSummary (the "why this artist?"
   // line on the review card). Empty for MB-sourced candidates.
   _aiHint?: string;
+  // Internal: LLM-cited Spotify URL, populated by llm-agent when the discovery
+  // prompt elicits a verifiable spotify identifier. enrichCandidate uses this
+  // (via parseSpotifyArtistId) BEFORE the name-search fallback, saving one
+  // Spotify API call per candidate and avoiding fuzzy-match misses where the
+  // stage name doesn't exactly match the legal name. Validated downstream.
+  _llmSpotifyUrl?: string;
 };
 
 // Process-wide token bucket: 1 req/sec.

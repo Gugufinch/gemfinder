@@ -704,4 +704,128 @@ describe('enrichCandidate', () => {
       expect(result.spotifyUrl).toBe('https://open.spotify.com/artist/deepfound123');
     });
   });
+
+  // -------------------------------------------------------------------------
+  // LLM-cited Spotify URL — the new pre-name-search verification path. When
+  // the discovery prompt elicits a spotifyUrl from Gemini, we use it
+  // directly instead of falling back to fuzzy name search. Saves a Spotify
+  // API call and avoids stage-name vs legal-name mismatches.
+  // -------------------------------------------------------------------------
+  describe('LLM-cited Spotify URL (_llmSpotifyUrl)', () => {
+    const llmArtist: SpotifyArtist = {
+      id: 'llmcitedSpId01',
+      name: 'Jermaine from the South',
+      followers: { total: 8500 },
+      popularity: 28,
+      genres: ['hip-hop', 'creole'],
+      images: [{ url: 'https://i.scdn.co/img/jermaine.jpg', height: 640, width: 640 }],
+      external_urls: {},
+    };
+
+    it('uses _llmSpotifyUrl when present and MB has no relations', async () => {
+      vi.mocked(spotify.getArtistById).mockResolvedValueOnce(llmArtist);
+      // LLM-sourced candidate: id='' (no MB), name from LLM, _llmSpotifyUrl from
+      // the new parser. With this URL present, name-search MUST NOT fire.
+      const candidate = minimalArtist({
+        id: '',
+        name: 'Jermaine Butler',
+        _llmSpotifyUrl: 'https://open.spotify.com/artist/llmcitedSpId01',
+      });
+      const result = await enrichCandidate('ws-1', candidate);
+      expect(result.spotifyArtistId).toBe('llmcitedSpId01');
+      expect(result.spotifyFollowers).toBe(8500);
+      expect(result.spotifyPopularity).toBe(28);
+      expect(spotify.searchArtistByName).not.toHaveBeenCalled();
+    });
+
+    it('LLM URL succeeds → candidate is marked verified (unverified=false)', async () => {
+      vi.mocked(spotify.getArtistById).mockResolvedValueOnce(llmArtist);
+      const candidate = minimalArtist({
+        id: '',
+        name: 'Jermaine Butler',
+        _llmSpotifyUrl: 'https://open.spotify.com/artist/llmcitedSpId01',
+      });
+      const result = await enrichCandidate('ws-1', candidate);
+      // spotifyArtistId is now set → unverified should be false. This is the
+      // big win: Bug 1's gate won't reject this candidate.
+      expect(result.unverified).toBe(false);
+    });
+
+    it('captures spotifyImageUrl from the LLM-URL path (previously only by_name set it)', async () => {
+      vi.mocked(spotify.getArtistById).mockResolvedValueOnce(llmArtist);
+      const result = await enrichCandidate('ws-1', minimalArtist({
+        id: '',
+        name: 'Jermaine Butler',
+        _llmSpotifyUrl: 'https://open.spotify.com/artist/llmcitedSpId01',
+      }));
+      expect(result.spotifyImageUrl).toBe('https://i.scdn.co/img/jermaine.jpg');
+    });
+
+    it('MB relation URL takes precedence over _llmSpotifyUrl', async () => {
+      // When both sources have a URL, MB wins (more authoritative — actually
+      // verified by MusicBrainz editors, not just LLM-cited).
+      const mbArtistObj: SpotifyArtist = {
+        id: 'mbSpId01',
+        name: 'Different Artist',
+        followers: { total: 12000 },
+        popularity: 40,
+        genres: [],
+        images: [],
+        external_urls: {},
+      };
+      vi.mocked(spotify.getArtistById).mockResolvedValueOnce(mbArtistObj);
+      const candidate = minimalArtist({
+        id: 'mb-real',
+        name: 'Artist',
+        relations: [
+          { type: 'spotify', url: { resource: 'https://open.spotify.com/artist/mbSpId01' } },
+        ],
+        _llmSpotifyUrl: 'https://open.spotify.com/artist/llmDifferentId',
+      });
+      const result = await enrichCandidate('ws-1', candidate);
+      expect(result.spotifyArtistId).toBe('mbSpId01');
+      // Verify the MB ID was preferred — getArtistById should have been called
+      // with the MB URL's ID, not the LLM's.
+      expect(spotify.getArtistById).toHaveBeenCalledWith('mbSpId01');
+    });
+
+    it('malformed _llmSpotifyUrl falls back to name search', async () => {
+      // parseSpotifyArtistId returns null for garbage URLs. When that happens
+      // with a URL provided, we should fall through to name search rather
+      // than treat the failed-parse as a successful lookup.
+      vi.mocked(spotify.parseSpotifyArtistId).mockImplementationOnce(() => null);
+      vi.mocked(spotify.searchArtistByName).mockResolvedValueOnce({
+        id: 'nameSearchId',
+        name: 'Artist Found By Name',
+        followers: { total: 1500 },
+        popularity: 12,
+        genres: ['indie'],
+        images: [],
+        external_urls: {},
+      });
+      const candidate = minimalArtist({
+        id: '',
+        name: 'Artist',
+        _llmSpotifyUrl: 'not-a-real-url',
+      });
+      const result = await enrichCandidate('ws-1', candidate);
+      expect(spotify.searchArtistByName).toHaveBeenCalledWith('Artist');
+      expect(result.spotifyArtistId).toBe('nameSearchId');
+    });
+
+    it('absent _llmSpotifyUrl → legacy name-search path still works', async () => {
+      vi.mocked(spotify.searchArtistByName).mockResolvedValueOnce({
+        id: 'nameSearchId',
+        name: 'Artist',
+        followers: { total: 2000 },
+        popularity: 15,
+        genres: [],
+        images: [],
+        external_urls: {},
+      });
+      const result = await enrichCandidate('ws-1', minimalArtist({ id: '', name: 'Artist' }));
+      expect(spotify.searchArtistByName).toHaveBeenCalledWith('Artist');
+      expect(result.spotifyArtistId).toBe('nameSearchId');
+    });
+  });
 });
