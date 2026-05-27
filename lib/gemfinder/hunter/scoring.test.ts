@@ -254,6 +254,57 @@ describe('recencyScore', () => {
     const currentYear = new Date().getFullYear();
     expect(recencyScore(currentYear - 1, recencyDim)).toBe(50);
   });
+
+  // -------------------------------------------------------------------------
+  // Recency multiplier: actively-releasing artists get a boost. The multiplier
+  // is +5% per additional recent release beyond the first, capped at +20%
+  // (count >= 5 plateaus at 1.2x). Cap is applied AFTER the score so we never
+  // exceed 100.
+  // -------------------------------------------------------------------------
+
+  it('single recent release → baseline score (no multiplier applied)', () => {
+    const currentYear = new Date().getFullYear();
+    // 1 year ago, count=1 → 50 * 1.00 = 50
+    expect(recencyScore(currentYear - 1, recencyDim, 1)).toBe(50);
+  });
+
+  it('two recent releases → +5% multiplier', () => {
+    const currentYear = new Date().getFullYear();
+    // 1 year ago, count=2 → 50 * 1.05 = 52.5 → rounds to 53
+    expect(recencyScore(currentYear - 1, recencyDim, 2)).toBe(53);
+  });
+
+  it('five recent releases → +20% multiplier (cap)', () => {
+    const currentYear = new Date().getFullYear();
+    // 1 year ago, count=5 → 50 * 1.20 = 60
+    expect(recencyScore(currentYear - 1, recencyDim, 5)).toBe(60);
+  });
+
+  it('ten recent releases → still +20% (cap holds)', () => {
+    const currentYear = new Date().getFullYear();
+    // 1 year ago, count=10 → 50 * 1.20 = 60 (no super-boost)
+    expect(recencyScore(currentYear - 1, recencyDim, 10)).toBe(60);
+  });
+
+  it('current year + multiple releases → still capped at 100 (no super-scoring)', () => {
+    const currentYear = new Date().getFullYear();
+    // Score 100 * 1.20 = 120 → clamped to 100. Prevents the multiplier from
+    // breaking the dim's [0, 100] semantics.
+    expect(recencyScore(currentYear, recencyDim, 5)).toBe(100);
+  });
+
+  it('stale year + many releases → still 0 (multiplier can\'t resurrect a 0 score)', () => {
+    const currentYear = new Date().getFullYear();
+    // 3 years ago, beyond the window. 0 * anything = 0.
+    expect(recencyScore(currentYear - 3, recencyDim, 5)).toBe(0);
+  });
+
+  it('undefined count → treated as count=1 (legacy behavior preserved)', () => {
+    const currentYear = new Date().getFullYear();
+    // 1 year ago, count undefined → 50 (no boost). Critical: legacy
+    // candidates without the recentReleaseCount field still score correctly.
+    expect(recencyScore(currentYear - 1, recencyDim, undefined)).toBe(50);
+  });
 });
 
 // ---------------------------------------------------------------------------

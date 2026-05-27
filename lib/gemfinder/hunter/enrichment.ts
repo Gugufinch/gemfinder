@@ -306,8 +306,20 @@ export async function enrichCandidate(
     ? deep.isLiving
     : !mbArtist['life-span']?.end;
 
-  // Step 3: recentReleaseYear
+  // Step 3: recentReleaseYear + recentReleaseCount
+  //
+  // Two signals from one pass over release-groups:
+  //   - recentReleaseYear: the MAX year (latest release). Single point in time.
+  //   - recentReleaseCount: how many releases landed in the last 24 months.
+  //     Distinguishes "one EP last year" (count=1) from "EP + 2 singles in
+  //     the past year" (count=3). Used by recencyScore as a multiplier.
+  //
+  // 24 months is the activity window we care about for A&R — artists who
+  // released once and went quiet aren't actively pitching anymore.
   let recentReleaseYear: number | undefined;
+  let recentReleaseCount = 0;
+  const ACTIVITY_WINDOW_MS = 24 * 30 * 24 * 60 * 60 * 1000;  // ~24 months
+  const cutoffMs = Date.now() - ACTIVITY_WINDOW_MS;
   for (const rg of mbArtist['release-groups'] ?? []) {
     const dateStr = rg['first-release-date'];
     if (!dateStr) continue;
@@ -315,6 +327,13 @@ export async function enrichCandidate(
     if (!isNaN(year) && year > 0) {
       if (recentReleaseYear === undefined || year > recentReleaseYear) {
         recentReleaseYear = year;
+      }
+      // Try to parse a full date for the activity-window check. MB sometimes
+      // gives year-only ("2024"), month ("2024-06"), or full ("2024-06-15").
+      // Year-only releases land on Jan 1 of that year for the cutoff math.
+      const releaseMs = Date.parse(dateStr.length === 4 ? `${dateStr}-01-01` : dateStr);
+      if (!isNaN(releaseMs) && releaseMs >= cutoffMs) {
+        recentReleaseCount++;
       }
     }
   }
@@ -632,6 +651,7 @@ export async function enrichCandidate(
     isLiving,
     recentReleaseYear: finalReleaseYear,
     releaseGroupCount: mbArtist['release-groups']?.length,
+    recentReleaseCount,
     spotifyUrl: extracted.spotifyUrl,
     spotifyArtistId,
     bandcampUrl: extracted.bandcampUrl,

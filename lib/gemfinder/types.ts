@@ -386,6 +386,12 @@ export type EnrichedCandidate = {
   isLiving: boolean;
   recentReleaseYear?: number;
   releaseGroupCount?: number;  // Backup megastar signal for gates when Spotify follower data is missing.
+  // Count of release groups whose first-release-date falls within the last 24
+  // months. Distinguishes "released one EP in 2024" from "actively releasing
+  // — EP in 2024, single in 2025, another single in 2025". Used by the recency
+  // scorer to multiply the baseline year-based score for actively releasing
+  // artists. Undefined/0 = no recent releases (baseline behavior).
+  recentReleaseCount?: number;
   spotifyUrl?: string;
   spotifyArtistId?: string;
   bandcampUrl?: string;

@@ -54,12 +54,29 @@ export function geographyScore(country: string | undefined, dim: HunterWeightGeo
   return dim.targetRegions.includes(country) ? dim.match : dim.other;
 }
 
-export function recencyScore(year: number | undefined, dim: HunterWeightLog): number {
+export function recencyScore(
+  year: number | undefined,
+  dim: HunterWeightLog,
+  // Optional: count of releases within the activity window. When > 1, applies
+  // a multiplier (5% per additional release, capped at +20%) to reward
+  // actively-releasing artists vs. one-and-done releases. Cap protects
+  // against catalog spammers (singles-per-week artists) skewing the score.
+  recentReleaseCount?: number,
+): number {
   if (!year) return dim.missing_baseline;
   const yearsAgo = new Date().getFullYear() - year;
   const maxYears = (dim.days_window ?? 730) / 365;
   if (yearsAgo > maxYears) return 0;
-  return Math.round(100 * (1 - yearsAgo / maxYears));
+  const baseScore = 100 * (1 - yearsAgo / maxYears);
+  // Multiplier: 1.00 baseline, +0.05 per release beyond the first, max +0.20.
+  // count=1 → 1.00, count=2 → 1.05, count=3 → 1.10, count=4 → 1.15, count≥5 → 1.20.
+  const extraReleases = Math.max(0, (recentReleaseCount ?? 1) - 1);
+  const multiplier = 1 + Math.min(0.20, extraReleases * 0.05);
+  // Cap at 100 — multiplier can't push past the dimension ceiling. A single
+  // current-year release scores 100; multiple current-year releases still
+  // score 100 (no super-scoring), but a 1-year-stale + multiple-releases
+  // shape can now reach where a 1-year-stale + single-release plateaus.
+  return Math.round(Math.min(100, baseScore * multiplier));
 }
 
 // ---------------------------------------------------------------------------
@@ -128,7 +145,11 @@ function perDimensionScore(
     case 'role_match':
       return valueMapScore(candidate.inferredRole, dimConfig as HunterWeightValueMap);
     case 'recency':
-      return recencyScore(candidate.recentReleaseYear, dimConfig as HunterWeightLog);
+      return recencyScore(
+        candidate.recentReleaseYear,
+        dimConfig as HunterWeightLog,
+        candidate.recentReleaseCount,
+      );
     default:
       // Fail loud on schema drift — a silent 0 would pull final scores down
       // without any signal that a new HunterWeights dim was added but not wired.
