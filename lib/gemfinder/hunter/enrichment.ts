@@ -410,7 +410,14 @@ export async function enrichCandidate(
     emit('spotify', 'started', `Falling back to Spotify name search for "${mbArtist.name}"`);
     let sp = null;
     try {
-      sp = await searchArtistByName(mbArtist.name);
+      // Pass MB tags as a genre hint so the fuzzy picker breaks ties in
+      // favor of artists whose Spotify genres overlap with the source's
+      // discovery context. Catches "Jermaine Butler" (author) vs "Jermaine
+      // from the South" (artist) where the author has more followers but
+      // no music genres.
+      sp = await searchArtistByName(mbArtist.name, {
+        hintGenres: (mbArtist.tags ?? []).map((t) => t.name),
+      });
     } catch (err) {
       console.warn('[HUNTER_ENRICH] spotify name search failed for', mbArtist.name + ':', err);
       emit('spotify', 'failed', `Spotify name search failed: ${err instanceof Error ? err.message : String(err)}`);
