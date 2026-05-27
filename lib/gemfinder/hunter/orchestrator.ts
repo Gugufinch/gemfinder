@@ -250,6 +250,32 @@ export async function runPipeline(input: RunPipelineInput): Promise<HunterRunSum
       status: 'started',
       message: `Phase E.5: running deep research on ${topN.length} survivors`,
     });
+
+    // Batch progress tracking. Phase E.5 fires N parallel enrichCandidate
+    // calls; each candidate emits its own per-phase events, but without a
+    // batch-level "X of N complete" event the operator stares at the activity
+    // log watching unrelated candidates churn and can't tell how close the
+    // run is to done. We emit a meta:success progress event every N
+    // candidates (or at completion) so the timeline reads "Phase E.5: 12 / 25
+    // researched" updates.
+    let deepResearchDone = 0;
+    const total = topN.length;
+    const PROGRESS_INTERVAL = Math.max(1, Math.floor(total / 5));  // 5 progress ticks across the batch, min 1
+    const reportProgress = () => {
+      deepResearchDone++;
+      // Fire on every PROGRESS_INTERVAL hit OR on the final candidate.
+      if (deepResearchDone % PROGRESS_INTERVAL === 0 || deepResearchDone === total) {
+        void emitEvent({
+          workspaceId,
+          runId,
+          phase: 'meta',
+          status: 'success',
+          message: `Phase E.5 progress: ${deepResearchDone} / ${total} researched`,
+          data: { done: deepResearchDone, total },
+        });
+      }
+    };
+
     const deepResearchPromises = topN.map(async (sc) => {
       try {
         // Re-enrich WITH deep research; merge new findings into the existing
@@ -274,6 +300,11 @@ export async function runPipeline(input: RunPipelineInput): Promise<HunterRunSum
           stage: 'deferred_deep_research',
           message: msg,
         });
+      } finally {
+        // Increment + maybe-emit AFTER the candidate finishes (success or
+        // failure both count toward "we got through this one"). finally
+        // guarantees progress fires even if the try block re-throws.
+        reportProgress();
       }
     });
     await Promise.allSettled(deepResearchPromises);
