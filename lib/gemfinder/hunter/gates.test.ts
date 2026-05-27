@@ -383,4 +383,106 @@ describe('gate ordering', () => {
       expect(evaluateGates(tiny, weights, notBlocked, criteria)).toEqual({ pass: true });
     });
   });
+
+  // ───────────────────────────────────────────────────────────────────────
+  // Minimum-evidence gate (Bug 1 fix): rejects unverified candidates that
+  // also have <2 reach dimensions confirmed. Without this, phantom LLM-
+  // sourced names (no MB ID, no Spotify match, deep-research skipped) sail
+  // through MIN_SCORE_FLOOR=35 and pollute the queue at ~score 68.
+  // ───────────────────────────────────────────────────────────────────────
+  describe('minimum-evidence gate (unverified candidates)', () => {
+    const weights = withGates({ require_genre_match: false, require_living: false, require_reachable: false });
+
+    it('🐛 BUG 1 FIX: unverified + zero reach data → rejected with low_evidence reason', () => {
+      // The Jermaine Butler shape: LLM-sourced, no MB ID, name search returned
+      // no Spotify match, IG handle never scraped, no other follower data.
+      const phantom: EnrichedCandidate = {
+        ...baseCandidate,
+        musicbrainzId: '',
+        spotifyArtistId: undefined,
+        spotifyFollowers: undefined,
+        instagramFollowers: undefined,
+        tiktokFollowers: undefined,
+        youtubeSubscribers: undefined,
+        soundcloudFollowers: undefined,
+        unverified: true,
+      };
+      const result = evaluateGates(phantom, weights, notBlocked);
+      expect(result.pass).toBe(false);
+      if (!result.pass) expect(result.reason).toMatch(/^low_evidence:unverified_with_0_reach_dims/);
+    });
+
+    it('unverified + 1 reach dim → STILL rejected (threshold is 2)', () => {
+      const onlyIg: EnrichedCandidate = {
+        ...baseCandidate,
+        musicbrainzId: '',
+        spotifyArtistId: undefined,
+        instagramFollowers: 5000,
+        unverified: true,
+      };
+      const result = evaluateGates(onlyIg, weights, notBlocked);
+      expect(result.pass).toBe(false);
+      if (!result.pass) expect(result.reason).toMatch(/^low_evidence:unverified_with_1_reach_dims/);
+    });
+
+    it('unverified + 2 reach dims (IG + TT scraped) → PASSES the gate', () => {
+      // A real emerging artist who's active on IG + TikTok but doesn't have
+      // a Spotify presence yet. We want these to come through.
+      const realButObscure: EnrichedCandidate = {
+        ...baseCandidate,
+        musicbrainzId: '',
+        spotifyArtistId: undefined,
+        instagramFollowers: 5000,
+        tiktokFollowers: 8000,
+        unverified: true,
+      };
+      const result = evaluateGates(realButObscure, weights, notBlocked);
+      expect(result.pass).toBe(true);
+    });
+
+    it('VERIFIED candidate with zero reach data → PASSES (verified bypasses the gate)', () => {
+      // Has MB ID and Spotify match — that's enough verification. Even if
+      // Steel scrapes fail, we know it's a real artist.
+      const verified: EnrichedCandidate = {
+        ...baseCandidate,
+        musicbrainzId: 'mb-real-uuid',
+        spotifyArtistId: 'spotify-real-id',
+        spotifyFollowers: undefined,
+        instagramFollowers: undefined,
+        unverified: false,
+      };
+      const result = evaluateGates(verified, weights, notBlocked);
+      expect(result.pass).toBe(true);
+    });
+
+    it('zero=0 follower count COUNTS as a reach dimension (not treated as missing)', () => {
+      // Edge: stored 0 should be "confirmed, just small" — Number.isFinite
+      // distinguishes 0 from undefined. With IG=0 + TT=0 that's 2 dims
+      // confirmed; should pass.
+      const zeroes: EnrichedCandidate = {
+        ...baseCandidate,
+        musicbrainzId: '',
+        spotifyArtistId: undefined,
+        instagramFollowers: 0,
+        tiktokFollowers: 0,
+        unverified: true,
+      };
+      const result = evaluateGates(zeroes, weights, notBlocked);
+      expect(result.pass).toBe(true);
+    });
+
+    it('unverified=undefined (legacy candidates pre-Bug 2 fix) → bypasses the gate', () => {
+      // Defensive: candidates enriched before the unverified flag existed
+      // shouldn't get caught by this new gate. Only candidates with
+      // unverified=true (explicitly set) trigger it.
+      const legacy: EnrichedCandidate = {
+        ...baseCandidate,
+        musicbrainzId: '',
+        spotifyArtistId: undefined,
+        // unverified left undefined (the legacy case)
+      };
+      const result = evaluateGates(legacy, weights, notBlocked);
+      expect(result.pass).toBe(true);
+    });
+  });
 });

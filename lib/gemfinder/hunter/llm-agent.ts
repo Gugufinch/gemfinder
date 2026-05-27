@@ -445,13 +445,14 @@ MUST be:
 - A living music recording artist (NOT novelists, voice actors, classical composers)
 - Active with releases since 2022
 - 1,000 to 1,000,000 Spotify monthly listeners (we want emerging-to-mid-tier; megastars >1M are agency-locked)
+- VERIFIABLE: you must be able to cite at least ONE of: a Spotify artist URL, a MusicBrainz ID, an Instagram/TikTok handle they actively use, or a recent press article (Pitchfork, FADER, Stereogum, NPR, etc.) that names them by their exact artist name. If you cannot cite any of these, SKIP that name and find another. Do NOT invent names or pad the list with plausible-sounding artists you can't verify. Returning fewer real candidates is better than returning made-up ones.
 
 Variety: don't repeat the same indie-buzz names. Mix career stages in the 1K-100K range. For broad genres, span subgenres.
 
-Per artist, rationale should reference what you actually found in search (a 2024 review, a festival slot, a recent EP). Generic "rising act" filler is rejected. KEEP RATIONALES UNDER 40 WORDS — one tight sentence, not a paragraph.
+Per artist, the rationale MUST include the verification source — e.g., "Pitchfork 2024 review of [album]" or "active IG @handle with [N] followers" or "open.spotify.com/artist/[id]". Generic "rising act" filler with no citable source is rejected. KEEP RATIONALES UNDER 50 WORDS — one tight sentence with the citation.
 
-Output ONLY this JSON, no prose, no markdown fences:
-{"artists":[{"name":"...","genres":["..."],"rationale":"specific real reason"}]}`;
+Output ONLY this JSON, no prose, no markdown fences. spotifyUrl is optional but include it when you have it (the downstream pipeline will Spotify-search by name as a fallback):
+{"artists":[{"name":"...","genres":["..."],"spotifyUrl":"https://open.spotify.com/artist/... or null","rationale":"specific real reason WITH verification source"}]}`;
 
 function buildPrompt(criteria: HunterCriteria, excludeNames: string[] = []): string {
   const parts: string[] = [];

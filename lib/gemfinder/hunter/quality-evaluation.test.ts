@@ -63,6 +63,7 @@ const baseCriteria: HunterCriteria = {
   source: 'llm',
   genres: ['indie pop'],
   regions: ['US'],
+  roleTarget: 'both',
   targetCount: 25,
 };
 
@@ -77,9 +78,9 @@ describe('megastar gate effectiveness', () => {
       spotifyFollowers: 90_000_000,
       spotifyPopularity: 99,
     });
-    const result = evaluateGates(taylor, DEFAULT_HUNTER_WEIGHTS, { blocked: false, reason: '', matchedRecord: null }, baseCriteria);
+    const result = evaluateGates(taylor, DEFAULT_HUNTER_WEIGHTS, { blocked: false }, baseCriteria);
     expect(result.pass).toBe(false);
-    expect(result.reason).toMatch(/size_cap|too_big|popularity/i);
+    if (!result.pass) expect(result.reason).toMatch(/size_cap|too_big|popularity/i);
   });
 
   it('Phoebe Bridgers-shaped candidate (2M Spotify) is gated by default size cap', () => {
@@ -88,7 +89,7 @@ describe('megastar gate effectiveness', () => {
       spotifyFollowers: 2_000_000,
       spotifyPopularity: 75,
     });
-    const result = evaluateGates(phoebe, DEFAULT_HUNTER_WEIGHTS, { blocked: false, reason: '', matchedRecord: null }, baseCriteria);
+    const result = evaluateGates(phoebe, DEFAULT_HUNTER_WEIGHTS, { blocked: false }, baseCriteria);
     expect(result.pass).toBe(false);
   });
 
@@ -97,7 +98,7 @@ describe('megastar gate effectiveness', () => {
       spotifyFollowers: 50_000,
       spotifyPopularity: 40,
     });
-    const result = evaluateGates(sweetSpot, DEFAULT_HUNTER_WEIGHTS, { blocked: false, reason: '', matchedRecord: null }, baseCriteria);
+    const result = evaluateGates(sweetSpot, DEFAULT_HUNTER_WEIGHTS, { blocked: false }, baseCriteria);
     expect(result.pass).toBe(true);
   });
 
@@ -111,7 +112,7 @@ describe('megastar gate effectiveness', () => {
       scrapedContactEmail: undefined,
       contactReadiness: 'none',
     });
-    const result = evaluateGates(emerging, DEFAULT_HUNTER_WEIGHTS, { blocked: false, reason: '', matchedRecord: null }, baseCriteria);
+    const result = evaluateGates(emerging, DEFAULT_HUNTER_WEIGHTS, { blocked: false }, baseCriteria);
     expect(result.pass).toBe(true);  // documents the current state — improvement opportunity
   });
 });

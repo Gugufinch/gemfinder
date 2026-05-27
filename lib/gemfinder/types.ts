@@ -413,4 +413,13 @@ export type EnrichedCandidate = {
   inferredRole: 'performer' | 'curator' | 'unknown';
   contactReadiness: 'direct' | 'manager' | 'agency' | 'booking' | 'social_only' | 'none';
   aiSummary?: string;  // Short "why this artist?" line (LLM rationale or operator-added note)
+  // True when enrichment couldn't verify the artist exists via ANY external
+  // source. Set when:
+  //   - No MusicBrainz ID was provided (LLM-sourced candidate)
+  //   - Spotify name search returned no match
+  //   - Deep research was skipped (Phase C light enrichment)
+  // The minimum-evidence gate uses this to reject phantom artists before
+  // they waste Steel scrape cycles or pollute the queue with score-68
+  // candidates that have no verifiable reach data.
+  unverified?: boolean;
 };

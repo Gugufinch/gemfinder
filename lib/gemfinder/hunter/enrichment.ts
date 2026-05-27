@@ -587,6 +587,15 @@ export async function enrichCandidate(
     inferredRole,
     contactReadiness,
     aiSummary: finalBio,
+    // Verification: the candidate is "unverified" when we couldn't confirm
+    // they exist via ANY external source. MB ID, Spotify ID match, or a
+    // successful deep-research call all count as verification. Without any
+    // of these, we're trusting only the LLM's discovery output — which is
+    // exactly how phantom artists like "Jermaine Butler · score 52, no
+    // Spotify ID, no IG followers" end up in the queue.
+    //
+    // The minimumEvidenceGate uses this flag to reject before scoring.
+    unverified: !mbArtist.id && !spotifyArtistId && !deep,
   };
 
   emit('meta', 'success', `Enrichment complete for "${mbArtist.name}"`, {
@@ -596,6 +605,7 @@ export async function enrichCandidate(
     hasContactEmail: !!scrapedContactEmail,
     contactReadiness,
     genreCount: genres.length,
+    unverified: candidate.unverified,
   });
 
   return candidate;
