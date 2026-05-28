@@ -295,6 +295,85 @@ export async function listWorkspaceProjectSnapshots(limit = 10): Promise<Array<{
   }));
 }
 
+/**
+ * Fetch ONE snapshot's full payload by snapshot_id. Unlike the list function
+ * which strips down to metadata for cheap browsing, this returns the entire
+ * projects JSONB blob — used for both raw-extract recovery (curl + grep for
+ * notes) and the restore flow (read snapshot → write it back as live state).
+ *
+ * Returns null if the snapshot doesn't exist OR there's no database
+ * configured (local dev mode without DATABASE_URL).
+ */
+export async function getWorkspaceSnapshotById(
+  snapshotId: string
+): Promise<{
+  snapshotId: string;
+  createdAt: string;
+  reason: string | null;
+  projects: unknown[];
+} | null> {
+  if (!hasDatabase()) return null;
+  await ensureSchema();
+  const res = await getPool().query(
+    `select snapshot_id, created_at, reason, value
+     from gemfinder_workspace_snapshots
+     where state_key = $1 and snapshot_id = $2
+     limit 1`,
+    [WORKSPACE_STATE_KEY, snapshotId]
+  );
+  const row = res.rows[0] as
+    | { snapshot_id: string; created_at: Date | string; reason: string | null; value: { projects?: unknown[] } }
+    | undefined;
+  if (!row) return null;
+  return {
+    snapshotId: String(row.snapshot_id),
+    createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at),
+    reason: row.reason ?? null,
+    projects: normalizeProjects(row.value?.projects),
+  };
+}
+
+/**
+ * Restore a snapshot as the live workspace state.
+ *
+ * Reversibility design: BEFORE the write, captures the current state as a
+ * fresh snapshot tagged "before_restore:<targetSnapshotId>". This means
+ * every restore is itself reversible — if Dakota's snapshot turns out to
+ * be wrong, the admin can immediately restore the just-before-restore
+ * snapshot to undo. No data is ever truly destroyed by this flow.
+ *
+ * Uses the SAME saveWorkspaceProjects path as a regular save, so the
+ * etag invariants hold: the live state's updated_at advances, any
+ * concurrent client gets a 409 next time it tries to save with a stale
+ * etag, and gets prompted to reload to see the restored state.
+ *
+ * Returns the new etag (live state's new updated_at) so the caller can
+ * surface it back to the client.
+ */
+export async function restoreWorkspaceSnapshot(
+  snapshotId: string,
+  options?: { reason?: string }
+): Promise<{ etag: string | null; restoredProjectCount: number }> {
+  if (!hasDatabase()) {
+    throw new Error('Snapshot restore requires DATABASE_URL');
+  }
+  const snapshot = await getWorkspaceSnapshotById(snapshotId);
+  if (!snapshot) {
+    throw new Error(`Snapshot not found: ${snapshotId}`);
+  }
+  // saveWorkspaceProjects(..., { reason }) captures a fresh snapshot of the
+  // CURRENT pre-restore state under the reason we provide here — that's
+  // what makes the restore reversible. No expectedEtag because restores
+  // are admin-only deliberate writes; we don't want a concurrent operator
+  // save to 409 the restore.
+  const reason = options?.reason || `restore_from:${snapshotId}`;
+  const result = await saveWorkspaceProjects(snapshot.projects, { reason });
+  return {
+    etag: result.etag,
+    restoredProjectCount: snapshot.projects.length,
+  };
+}
+
 export async function addTalentToProject(
   workspaceId: string,
   projectId: string,

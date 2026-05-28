@@ -3754,6 +3754,18 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     try { window.localStorage.setItem("scoutV3.queueView", v); } catch { /* swallow: storage failure is non-fatal */ }
   };
   const [scoutV3Rejections, setScoutV3Rejections] = useState([]);
+  // Admin snapshots browser/restore state (admin-only). Modal lists recent
+  // gemfinder_workspace_snapshots rows so admins can recover from data-loss
+  // events (concurrent-write overwrites) by restoring a prior state. Each
+  // restore captures the pre-restore state as a fresh snapshot, so restores
+  // are themselves reversible.
+  const [snapshotsModalOpen, setSnapshotsModalOpen] = useState(false);
+  const [snapshotsList, setSnapshotsList] = useState([]);
+  const [snapshotsLoading, setSnapshotsLoading] = useState(false);
+  const [snapshotDetail, setSnapshotDetail] = useState(null);  // { snapshotId, createdAt, projects, reason } when previewing
+  const [snapshotDetailLoading, setSnapshotDetailLoading] = useState(false);
+  const [snapshotRestoreTarget, setSnapshotRestoreTarget] = useState(null);  // metadata of snapshot pending restore confirm
+  const [snapshotRestoring, setSnapshotRestoring] = useState(false);
   const [scoutV3AddModalOpen, setScoutV3AddModalOpen] = useState(false);
   const [scoutV3ApproveTarget, setScoutV3ApproveTarget] = useState(null);
   const [scoutV3RejectTarget, setScoutV3RejectTarget] = useState(null);
@@ -6859,6 +6871,84 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
     if (isAdmin) return true;
     flash("Admin role required", "err");
     return false;
+  };
+
+  // Snapshot browser helpers (admin-only). All fetches return shape
+  // { ok, ... }; on failure flash an error and bail. The list endpoint is
+  // /api/ar/admin/snapshots; detail is /api/ar/admin/snapshots/<id>;
+  // restore is POST /api/ar/admin/snapshots/<id>/restore.
+  const openSnapshotsModal = async () => {
+    if (!requireAdmin()) return;
+    setSnapshotsModalOpen(true);
+    setSnapshotsLoading(true);
+    try {
+      const res = await fetch("/api/ar/admin/snapshots?limit=25", { credentials: "include" });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && Array.isArray(data.snapshots)) {
+        setSnapshotsList(data.snapshots);
+      } else {
+        flash(data.error || "Failed to load snapshots", "err");
+      }
+    } catch (err) {
+      flash(err.message || "Network error loading snapshots", "err");
+    } finally {
+      setSnapshotsLoading(false);
+    }
+  };
+
+  const viewSnapshotDetail = async (snapshotId) => {
+    if (!requireAdmin()) return;
+    setSnapshotDetailLoading(true);
+    setSnapshotDetail({ snapshotId, loading: true });
+    try {
+      const res = await fetch(`/api/ar/admin/snapshots/${encodeURIComponent(snapshotId)}`, { credentials: "include" });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.snapshot) {
+        setSnapshotDetail(data.snapshot);
+      } else {
+        flash(data.error || "Failed to load snapshot", "err");
+        setSnapshotDetail(null);
+      }
+    } catch (err) {
+      flash(err.message || "Network error loading snapshot", "err");
+      setSnapshotDetail(null);
+    } finally {
+      setSnapshotDetailLoading(false);
+    }
+  };
+
+  const submitSnapshotRestore = async () => {
+    if (!snapshotRestoreTarget?.snapshotId) return;
+    if (!requireAdmin()) return;
+    const targetId = snapshotRestoreTarget.snapshotId;
+    setSnapshotRestoring(true);
+    try {
+      const res = await fetch(`/api/ar/admin/snapshots/${encodeURIComponent(targetId)}/restore`, {
+        method: "POST",
+        credentials: "include",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        flash(data.error || "Restore failed", "err");
+        return;
+      }
+      // Restore replaced the live state. Refresh local projects from the
+      // server so the UI reflects the restored snapshot, and update the
+      // etag anchor so the next save goes through cleanly.
+      const reloaded = await apiGetProjects();
+      if (reloaded.ok) {
+        setProjects(reloaded.projects.map(normalizeProject));
+        projectsEtagRef.current = reloaded.etag || null;
+      }
+      flash(`✓ Restored ${data.restoredProjectCount} projects from snapshot`);
+      setSnapshotRestoreTarget(null);
+      setSnapshotsModalOpen(false);
+      setSnapshotDetail(null);
+    } catch (err) {
+      flash(err.message || "Network error during restore", "err");
+    } finally {
+      setSnapshotRestoring(false);
+    }
   };
 
   useEffect(() => {
@@ -12721,6 +12811,154 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
           </div>
         </div>
       )}
+      {/* Snapshots browser modal — admin-only recovery tool */}
+      {snapshotsModalOpen && (
+        <div
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 130 }}
+          onClick={e => { if (e.target === e.currentTarget) { setSnapshotsModalOpen(false); setSnapshotDetail(null); } }}
+        >
+          <div style={{ background: C.sf, borderRadius: 18, padding: "22px 26px", width: 720, maxWidth: "calc(100vw - 32px)", maxHeight: "calc(100vh - 80px)", overflowY: "auto", boxShadow: "0 25px 70px rgba(0,0,0,0.2)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
+              <div style={{ fontSize: 18, fontWeight: 800, color: C.tx }}>🗂 Workspace Snapshots</div>
+              <button onClick={() => { setSnapshotsModalOpen(false); setSnapshotDetail(null); }} style={{ background: "transparent", border: "none", color: C.ts, cursor: "pointer", fontSize: 18 }}>×</button>
+            </div>
+            <div style={{ fontSize: 12, color: C.ts, marginBottom: 16, lineHeight: 1.5 }}>
+              Every workspace save automatically captures a snapshot of the pre-write state.
+              Restoring a snapshot replaces the live state — and itself creates a new snapshot of
+              whatever was current, so restores are always reversible.
+            </div>
+            {snapshotsLoading && (
+              <div style={{ padding: 24, textAlign: "center", color: C.ts, fontSize: 13 }}>Loading snapshots…</div>
+            )}
+            {!snapshotsLoading && snapshotsList.length === 0 && (
+              <div style={{ padding: 24, textAlign: "center", color: C.tt, fontSize: 13, fontStyle: "italic" }}>
+                No snapshots found. They appear here after the first workspace save.
+              </div>
+            )}
+            {!snapshotsLoading && snapshotsList.length > 0 && (
+              <div style={{ display: "grid", gap: 8, marginBottom: 16 }}>
+                {snapshotsList.map(snap => {
+                  // Decode reason into a friendlier prefix when it's one of the
+                  // common patterns (before_save, before_restore:X, restore_from:X).
+                  const reason = snap.reason || "";
+                  const isRestoreSource = reason.startsWith("restore_from:");
+                  const isPreRestore = reason.startsWith("before_restore:");
+                  const tone = isRestoreSource
+                    ? { bg: `${C.ab}15`, fg: C.ab, label: "Restore" }
+                    : isPreRestore
+                      ? { bg: `${C.bu}15`, fg: C.bu, label: "Pre-restore" }
+                      : { bg: C.sa, fg: C.ts, label: "Auto" };
+                  return (
+                    <div
+                      key={`snap-${snap.snapshotId}`}
+                      style={{
+                        padding: "10px 14px",
+                        borderRadius: 10,
+                        border: `1px solid ${C.bd}`,
+                        background: C.sf,
+                        display: "grid",
+                        gridTemplateColumns: "1fr auto auto",
+                        gap: 10,
+                        alignItems: "center",
+                      }}
+                    >
+                      <div>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: C.tx, fontFamily: "monospace" }}>
+                          {new Date(snap.createdAt).toLocaleString()}
+                        </div>
+                        <div style={{ fontSize: 11, color: C.ts, marginTop: 2, display: "flex", gap: 6, flexWrap: "wrap" }}>
+                          <span style={{ background: tone.bg, color: tone.fg, padding: "1px 7px", borderRadius: 999, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.3 }}>{tone.label}</span>
+                          <span>{snap.projectCount} projects</span>
+                          {reason && <span style={{ fontFamily: "monospace", color: C.tt }}>· {reason}</span>}
+                        </div>
+                      </div>
+                      <button onClick={() => viewSnapshotDetail(snap.snapshotId)} style={{ ...actionBtn(false, "neutral"), fontSize: 11 }}>View</button>
+                      <button onClick={() => setSnapshotRestoreTarget(snap)} style={{ ...actionBtn(false, "danger"), fontSize: 11 }}>Restore</button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+      {/* Snapshot preview modal — JSON inspector */}
+      {snapshotDetail && (
+        <div
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 140 }}
+          onClick={e => { if (e.target === e.currentTarget) setSnapshotDetail(null); }}
+        >
+          <div style={{ background: C.sf, borderRadius: 18, padding: "22px 26px", width: 820, maxWidth: "calc(100vw - 32px)", maxHeight: "calc(100vh - 80px)", display: "flex", flexDirection: "column", boxShadow: "0 25px 70px rgba(0,0,0,0.25)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
+              <div style={{ fontSize: 16, fontWeight: 800, color: C.tx }}>Snapshot preview</div>
+              <button onClick={() => setSnapshotDetail(null)} style={{ background: "transparent", border: "none", color: C.ts, cursor: "pointer", fontSize: 18 }}>×</button>
+            </div>
+            {snapshotDetailLoading && (
+              <div style={{ padding: 24, textAlign: "center", color: C.ts, fontSize: 13 }}>Loading snapshot data…</div>
+            )}
+            {!snapshotDetailLoading && snapshotDetail.projects && (
+              <>
+                <div style={{ fontSize: 12, color: C.ts, marginBottom: 10, lineHeight: 1.5 }}>
+                  Created <strong>{new Date(snapshotDetail.createdAt).toLocaleString()}</strong> ·
+                  reason <span style={{ fontFamily: "monospace" }}>{snapshotDetail.reason || "(none)"}</span> ·
+                  {Array.isArray(snapshotDetail.projects) ? snapshotDetail.projects.length : 0} projects
+                </div>
+                <pre style={{
+                  flex: 1,
+                  overflow: "auto",
+                  padding: "12px 14px",
+                  background: C.bg,
+                  border: `1px solid ${C.bd}`,
+                  borderRadius: 10,
+                  fontFamily: "monospace",
+                  fontSize: 11,
+                  lineHeight: 1.5,
+                  color: C.tx,
+                  margin: 0,
+                  maxHeight: "60vh",
+                }}>
+                  {JSON.stringify(snapshotDetail.projects, null, 2)}
+                </pre>
+                <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 12 }}>
+                  <button onClick={() => setSnapshotDetail(null)} style={{ ...actionBtn(false, "neutral"), fontSize: 12 }}>Close</button>
+                  <button
+                    onClick={() => setSnapshotRestoreTarget({ snapshotId: snapshotDetail.snapshotId, createdAt: snapshotDetail.createdAt, reason: snapshotDetail.reason })}
+                    style={{ ...actionBtn(false, "danger"), fontSize: 12 }}
+                  >
+                    Restore this snapshot
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+      {/* Restore confirmation modal — clear about reversibility */}
+      {snapshotRestoreTarget && (
+        <div
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 150 }}
+          onClick={e => { if (e.target === e.currentTarget && !snapshotRestoring) setSnapshotRestoreTarget(null); }}
+        >
+          <div style={{ background: C.sf, borderRadius: 16, padding: "22px 26px", width: 480, maxWidth: "calc(100vw - 32px)", boxShadow: "0 25px 70px rgba(0,0,0,0.3)" }}>
+            <div style={{ fontSize: 18, fontWeight: 800, color: C.tx, marginBottom: 10 }}>Restore this snapshot?</div>
+            <div style={{ fontSize: 13, color: C.ts, lineHeight: 1.6, marginBottom: 14 }}>
+              This will replace the current live workspace state with the snapshot from{" "}
+              <strong style={{ color: C.tx }}>{new Date(snapshotRestoreTarget.createdAt).toLocaleString()}</strong>.
+            </div>
+            <div style={{ fontSize: 12, color: C.ts, lineHeight: 1.6, padding: "10px 12px", background: C.bg, borderRadius: 10, marginBottom: 16 }}>
+              <strong style={{ color: C.tx }}>This action is reversible.</strong> A new snapshot of the current state will be captured automatically before the restore writes — you can roll it back from this same modal.
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+              <button onClick={() => setSnapshotRestoreTarget(null)} style={actionBtn(false, "neutral")} disabled={snapshotRestoring}>
+                Cancel
+              </button>
+              <button onClick={submitSnapshotRestore} style={{ ...actionBtn(true, "danger"), opacity: snapshotRestoring ? 0.6 : 1 }} disabled={snapshotRestoring}>
+                {snapshotRestoring ? "Restoring…" : "Restore snapshot"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 
@@ -13700,6 +13938,20 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
                   >
                     👤 Manage users →
                   </a>
+                )}
+                {/* Admin-only: snapshot browser. Each save automatically
+                    captures a pre-write snapshot of the workspace state; this
+                    button surfaces them for recovery from concurrent-write
+                    overwrites (e.g., when Dakota's notes got clobbered by
+                    Greg's stale-memory save). */}
+                {isAdmin && (
+                  <button
+                    onClick={openSnapshotsModal}
+                    style={{ ...actionBtn(false, "neutral"), fontSize: 11 }}
+                    title="Browse workspace snapshots — admin recovery tool"
+                  >
+                    🗂 Snapshots
+                  </button>
                 )}
               </div>
             </div>
