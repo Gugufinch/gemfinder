@@ -1,0 +1,304 @@
+{
+  "name": "Marketing Creative Production",
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        -1120,
+        -180
+      ],
+      "id": "94688be3-88d6-4e09-af13-85a18e2d9782",
+      "name": "Execute Sub-workflow Trigger"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -1120,
+        180
+      ],
+      "id": "5ca8b256-f747-4da7-a59f-c1d5f99ea1d2",
+      "name": "Manual Trigger"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "return {\n  json: {\n    strategy_status: 'ready_for_production',\n    campaign_meta: {\n      campaign_brief: 'Create an Instagram-first creative package that can also support broader marketing execution.',\n      product_name: 'Example product',\n      target_audience: 'Women 18-30 interested in lifestyle and beauty content.',\n      campaign_goal: 'Drive clicks and conversions while building a consistent visual identity.',\n      platform: 'instagram',\n      visual_mode: 'synthetic_original',\n      identity_mode: 'original_brand_talent'\n    },\n    sales: {\n      summary: 'Lead with a bundle offer and a direct click CTA.',\n      primary_offer: 'Starter bundle with limited-time pricing',\n      cta: 'Tap to shop',\n      conversion_angle: 'Soft-luxury lifestyle framing with a clear offer.',\n      proof_points: ['Customer testimonials available', 'Bundle saves compared to single-item purchase'],\n      risks: ['Price sensitivity', 'Trust barrier for first-time buyers'],\n      recommended_actions: ['Use social proof in captions', 'Keep CTA visible in every asset']\n    },\n    marketing: {\n      summary: 'Instagram-first lifestyle hooks with reusable caption angles.',\n      target_segments: ['Lifestyle shoppers', 'Beauty-adjacent audience', 'Aspirational casual content audience'],\n      hooks: ['Soft routine energy', 'What I actually reach for', 'Everyday luxury without trying too hard'],\n      caption_angles: ['Routine angle', 'Favorite-find angle', 'Lifestyle diary angle', 'Low-effort glam angle', 'Beach day angle', 'Car selfie angle'],\n      hashtag_clusters: ['#lifestylecreator #softluxury #beautyfinds', '#everydaystyle #routinecontent #itgirlenergy'],\n      channel_notes: ['Use 4:5 crops for feed', 'Keep the first line of the caption punchy'],\n      recommended_actions: ['Prioritize save-worthy captions', 'Test short hooks on static assets']\n    },\n    product: {\n      summary: 'Use soft natural light, polished but casual styling, and clean backgrounds.',\n      visual_style: 'soft luxury lifestyle with natural light',\n      scene_concepts: ['car selfie', 'beach portrait', 'clean indoor mirror shot', 'cafe close-up', 'sunlit casual portrait', 'travel lifestyle frame'],\n      prompt_components: ['soft natural light', 'polished casual styling', 'clean skin texture', 'neutral palette', 'high-end but candid feel'],\n      negative_prompt: 'distorted hands, extra fingers, warped background, text artifacts, oversmoothed skin, duplicate body parts',\n      image_prompt_templates: ['car interior portrait with soft natural light and polished casual styling', 'beach portrait with clean composition and neutral palette', 'sunlit indoor lifestyle portrait with soft luxury tone', 'mirror selfie aesthetic with minimal clean background', 'cafe lifestyle close-up with polished natural makeup', 'travel-style portrait with warm daylight and editorial framing'],\n      recommended_actions: ['Keep prompts stylistically consistent', 'Avoid overloading scenes with props']\n    },\n    creative_targets: {\n      asset_count: 6,\n      platform: 'instagram'\n    },\n    next_step: 'Pass this item into the Creative Production sub-workflow.'\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -860,
+        180
+      ],
+      "id": "be4e1124-c9f5-4bd8-962c-0d8f0c2f5f18",
+      "name": "Sample Strategy Package"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const payload = $json;\nif (!payload.sales || !payload.marketing || !payload.product) {\n  throw new Error('Incoming strategy package is missing sales, marketing, or product branches.');\n}\nconst creativeTargets = payload.creative_targets ?? {\n  asset_count: Math.max(payload.product.image_prompt_templates?.length ?? 0, payload.marketing.caption_angles?.length ?? 0, 6),\n  platform: payload.campaign_meta?.platform ?? 'instagram'\n};\nreturn {\n  json: {\n    strategy_status: payload.strategy_status ?? 'ready_for_production',\n    campaign_meta: payload.campaign_meta ?? {},\n    sales: payload.sales,\n    marketing: payload.marketing,\n    product: payload.product,\n    creative_targets: creativeTargets\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -580,
+        0
+      ],
+      "id": "e8266a74-c52d-45e6-953f-f9a7f53db9a1",
+      "name": "Normalize Strategy Package"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const payload = $json;\nconst assetCount = Math.max(payload.creative_targets?.asset_count ?? 0, 1);\nconst promptTemplates = payload.product.image_prompt_templates ?? [];\nconst hooks = payload.marketing.hooks ?? [];\nconst captionAngles = payload.marketing.caption_angles ?? [];\nconst assets = Array.from({ length: assetCount }, (_, index) => ({\n  asset_index: index + 1,\n  hook: hooks[index % Math.max(hooks.length, 1)] ?? '',\n  caption_angle: captionAngles[index % Math.max(captionAngles.length, 1)] ?? '',\n  prompt_template: promptTemplates[index % Math.max(promptTemplates.length, 1)] ?? '',\n  offer: payload.sales.primary_offer,\n  cta: payload.sales.cta\n}));\nreturn {\n  json: {\n    ...payload,\n    creative_pack: {\n      asset_count: assetCount,\n      render_defaults: {\n        aspect_ratio: '4:5',\n        batch_size: 1,\n        safety_mode: 'strict'\n      },\n      assets\n    }\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -300,
+        0
+      ],
+      "id": "7bed64f0-7189-4d9c-94e0-92480fb30bf5",
+      "name": "Creative Pack Builder"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const payload = $json;\nconst promptComponents = payload.product.prompt_components ?? [];\nconst negativePrompt = payload.product.negative_prompt ?? '';\nconst image_model_requests = (payload.creative_pack?.assets ?? []).map((asset) => ({\n  asset_index: asset.asset_index,\n  prompt: [asset.prompt_template, ...promptComponents].filter(Boolean).join(', '),\n  negative_prompt: negativePrompt,\n  aspect_ratio: payload.creative_pack.render_defaults.aspect_ratio,\n  batch_size: payload.creative_pack.render_defaults.batch_size,\n  safety_mode: payload.creative_pack.render_defaults.safety_mode,\n  metadata: {\n    hook: asset.hook,\n    caption_angle: asset.caption_angle,\n    offer: asset.offer,\n    cta: asset.cta\n  }\n}));\nreturn {\n  json: {\n    campaign_meta: payload.campaign_meta,\n    creative_pack: payload.creative_pack,\n    image_model_requests\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -20,
+        -140
+      ],
+      "id": "a3b75b16-3c2b-46d6-b4f1-f9830ca6d75f",
+      "name": "Image Model Request Builder"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const payload = $json;\nconst hashtagClusters = payload.marketing.hashtag_clusters ?? [];\nconst caption_assets = (payload.creative_pack?.assets ?? []).map((asset, index) => ({\n  asset_index: asset.asset_index,\n  caption: [asset.hook, asset.caption_angle, payload.sales.cta].filter(Boolean).join(' | '),\n  hashtag_cluster: hashtagClusters[index % Math.max(hashtagClusters.length, 1)] ?? ''\n}));\nreturn {\n  json: {\n    campaign_meta: payload.campaign_meta,\n    creative_pack: payload.creative_pack,\n    caption_assets\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -20,
+        140
+      ],
+      "id": "4e404ca8-5638-4d6c-8bc2-b4a4aaeb6254",
+      "name": "Caption Builder"
+    },
+    {
+      "parameters": {
+        "mode": "append",
+        "numberInputs": 2
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        260,
+        0
+      ],
+      "id": "9b1aa07d-bd91-476e-9648-437eb6115ab0",
+      "name": "Merge Creative Assets"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const items = $input.all();\nlet imageData = null;\nlet captionData = null;\nfor (const item of items) {\n  if (item.json.image_model_requests) imageData = item.json;\n  if (item.json.caption_assets) captionData = item.json;\n}\nif (!imageData || !captionData) {\n  throw new Error('Missing image model requests or caption assets after merge.');\n}\nconst textBlob = JSON.stringify({ image_model_requests: imageData.image_model_requests, caption_assets: captionData.caption_assets }).toLowerCase();\nconst blockedTerms = ['exact likeness', 'same as this real person', 'copy this influencer', 'celebrity clone'];\nfor (const term of blockedTerms) {\n  if (textBlob.includes(term)) {\n    throw new Error('Compliance gate blocked a mimic or impersonation signal: ' + term);\n  }\n}\nreturn [{\n  json: {\n    campaign_meta: imageData.campaign_meta,\n    creative_pack: imageData.creative_pack,\n    image_model_requests: imageData.image_model_requests,\n    caption_assets: captionData.caption_assets,\n    compliance_status: 'passed',\n    review_required: true\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        540,
+        0
+      ],
+      "id": "6b7d2711-b296-4450-aa0f-cfc7800f0249",
+      "name": "Compliance And Brand Check"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "return {\n  json: {\n    ...$json,\n    approval_status: 'pending_manual_review',\n    approval_notes: 'Replace this node with Slack, email, Airtable, or a form-based approval step.'\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        820,
+        0
+      ],
+      "id": "00e7dc0c-9670-4540-a463-9308876c2000",
+      "name": "Human Approval Placeholder"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "return {\n  json: {\n    ...$json,\n    render_queue_payload: {\n      provider: 'replace_with_image_provider',\n      assets: $json.image_model_requests,\n      note: 'Replace this placeholder with HTTP Request, queue, or custom renderer integration.'\n    }\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        0
+      ],
+      "id": "d7ed5b27-c365-4f2d-b0fd-8c125f128d7a",
+      "name": "Prepare Render Queue Payload"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "return {\n  json: {\n    status: 'production_package_ready',\n    campaign_meta: $json.campaign_meta,\n    creative_pack: $json.creative_pack,\n    image_model_requests: $json.image_model_requests,\n    caption_assets: $json.caption_assets,\n    render_queue_payload: $json.render_queue_payload,\n    compliance_status: $json.compliance_status,\n    approval_status: $json.approval_status,\n    next_actions: [\n      'Replace Prepare Render Queue Payload with your image provider or renderer.',\n      'Replace Human Approval Placeholder with your real approval process.',\n      'Add storage or Meta Graph API publishing after approval.'\n    ]\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1380,
+        0
+      ],
+      "id": "50d2b951-1c01-46d3-bf39-c9126c3adbd3",
+      "name": "Publisher Or Asset Export"
+    }
+  ],
+  "connections": {
+    "Execute Sub-workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Normalize Strategy Package",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Sample Strategy Package",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sample Strategy Package": {
+      "main": [
+        [
+          {
+            "node": "Normalize Strategy Package",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Strategy Package": {
+      "main": [
+        [
+          {
+            "node": "Creative Pack Builder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Creative Pack Builder": {
+      "main": [
+        [
+          {
+            "node": "Image Model Request Builder",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Caption Builder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Image Model Request Builder": {
+      "main": [
+        [
+          {
+            "node": "Merge Creative Assets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Caption Builder": {
+      "main": [
+        [
+          {
+            "node": "Merge Creative Assets",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Creative Assets": {
+      "main": [
+        [
+          {
+            "node": "Compliance And Brand Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compliance And Brand Check": {
+      "main": [
+        [
+          {
+            "node": "Human Approval Placeholder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Human Approval Placeholder": {
+      "main": [
+        [
+          {
+            "node": "Prepare Render Queue Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Render Queue Payload": {
+      "main": [
+        [
+          {
+            "node": "Publisher Or Asset Export",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

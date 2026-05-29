@@ -1,0 +1,793 @@
+{
+  "name": "Marketing Strategy Fanout",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -1120,
+        0
+      ],
+      "id": "0f6d7f53-1d72-466c-a2ac-153d16a9c8fe",
+      "name": "Execute Workflow Trigger"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "98a182c2-a31e-4304-b948-f4f55e2f75ca",
+              "name": "campaign_brief",
+              "value": "Create an Instagram-first marketing concept that can also support general paid and organic creative execution.",
+              "type": "string"
+            },
+            {
+              "id": "0da77fa1-40db-4f9b-b7df-f6d839f7875f",
+              "name": "product_name",
+              "value": "Example product",
+              "type": "string"
+            },
+            {
+              "id": "b57cfbbf-aaad-4df9-832e-b53710e0fe7d",
+              "name": "target_audience",
+              "value": "Women 18-30 interested in lifestyle, beauty, and aspirational casual content.",
+              "type": "string"
+            },
+            {
+              "id": "87a1ea1a-08d1-4103-9e3c-7be264090d48",
+              "name": "campaign_goal",
+              "value": "Drive clicks and conversions while building a consistent visual identity.",
+              "type": "string"
+            },
+            {
+              "id": "4fc2c55d-e64e-49c6-b4c7-eb2d97b7eb3d",
+              "name": "platform",
+              "value": "instagram",
+              "type": "string"
+            },
+            {
+              "id": "2cda0e88-58b7-42b4-b8bb-270c1254466b",
+              "name": "visual_mode",
+              "value": "synthetic_original",
+              "type": "string"
+            },
+            {
+              "id": "f79cd74d-bf5b-4a58-b8ff-7702dc4b5d5d",
+              "name": "identity_mode",
+              "value": "original_brand_talent",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -860,
+        0
+      ],
+      "id": "b1e9c425-2f72-4fdc-b146-587d1b640dbf",
+      "name": "Create User Prompt"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ 'Campaign brief: ' + $json.campaign_brief + '\\nProduct: ' + $json.product_name + '\\nTarget audience: ' + $json.target_audience + '\\nGoal: ' + $json.campaign_goal + '\\nPlatform: ' + $json.platform }}",
+        "options": {
+          "systemMessage": "You are the sales strategist in a multi-agent marketing workflow. Interpret the campaign brief from a conversion and offer perspective. Identify the strongest offer angle, CTA, proof points, likely objections, and revenue-oriented success conditions. Do not invent performance data."
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        -540,
+        -360
+      ],
+      "id": "a27ae4d0-c59b-4171-a9c5-34bc6269f0d4",
+      "name": "Sales AI Agent Prototype"
+    },
+    {
+      "parameters": {
+        "model": "gpt-4.1-mini",
+        "options": {
+          "temperature": 0.2
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatAzureOpenAi",
+      "typeVersion": 1,
+      "position": [
+        -660,
+        -160
+      ],
+      "id": "9e65b345-0d00-4ac1-aeec-69a42424c22f",
+      "name": "Sales Agent Azure OpenAI"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "ab863e46-a415-4a72-b179-2f664f4e2608",
+              "name": "branch",
+              "value": "sales",
+              "type": "string"
+            },
+            {
+              "id": "91d7cc18-3efa-4787-8d28-0d290f15fb3e",
+              "name": "agent_output",
+              "value": "={{ $json.output }}",
+              "type": "string"
+            },
+            {
+              "id": "0480d4bb-39d9-4d54-a7f6-0b4b046ae210",
+              "name": "recalled_context",
+              "value": "Replace this Set node with CRM or offer-performance recall. Sample signals: top converting offer is bundle pricing, click-through strongest on urgency messaging, objections cluster around price and trust, testimonials are available.",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -260,
+        -360
+      ],
+      "id": "1e111ad6-5026-4f8b-a4d1-4d41e2d71e4d",
+      "name": "Data Recall Sales"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ 'Agent output:\\n' + $json.agent_output + '\\n\\nRecalled sales data:\\n' + $json.recalled_context }}",
+        "hasOutputParser": true,
+        "messages": {
+          "messageValues": [
+            {
+              "message": "Produce one JSON object only. Return summary, primary_offer, cta, conversion_angle, proof_points, risks, and recommended_actions."
+            }
+          ]
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.6,
+      "position": [
+        20,
+        -360
+      ],
+      "id": "06ec20fd-1b49-4c00-b7ea-667be37b6f69",
+      "name": "Sales Structured Output"
+    },
+    {
+      "parameters": {
+        "model": "gpt-4.1-mini",
+        "options": {
+          "temperature": 0
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatAzureOpenAi",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        -140
+      ],
+      "id": "126e7d34-84a0-40ed-af00-be8ef18f9dcf",
+      "name": "Sales Parser Azure OpenAI"
+    },
+    {
+      "parameters": {
+        "schemaType": "manual",
+        "inputSchema": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"summary\": { \"type\": \"string\" },\n    \"primary_offer\": { \"type\": \"string\" },\n    \"cta\": { \"type\": \"string\" },\n    \"conversion_angle\": { \"type\": \"string\" },\n    \"proof_points\": {\n      \"type\": \"array\",\n      \"items\": { \"type\": \"string\" }\n    },\n    \"risks\": {\n      \"type\": \"array\",\n      \"items\": { \"type\": \"string\" }\n    },\n    \"recommended_actions\": {\n      \"type\": \"array\",\n      \"items\": { \"type\": \"string\" }\n    }\n  },\n  \"required\": [\"summary\", \"primary_offer\", \"cta\", \"conversion_angle\", \"proof_points\", \"risks\", \"recommended_actions\"]\n}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        140,
+        -140
+      ],
+      "id": "f596d703-a0f5-4ce5-bd70-e5f77a95d6b7",
+      "name": "Sales Output Parser"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const payload = $json.output ?? $json;\nif (!payload.primary_offer || !payload.cta || !Array.isArray(payload.proof_points)) {\n  throw new Error('Sales branch output is missing expected fields.');\n}\nreturn {\n  json: {\n    branch: 'sales',\n    validation_status: 'ok',\n    ...payload\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        280,
+        -360
+      ],
+      "id": "55bc0a8f-fef9-4f98-af2b-9b3e48ab1ef7",
+      "name": "Sales Data Processor"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ 'Campaign brief: ' + $json.campaign_brief + '\\nProduct: ' + $json.product_name + '\\nTarget audience: ' + $json.target_audience + '\\nGoal: ' + $json.campaign_goal + '\\nPlatform: ' + $json.platform }}",
+        "options": {
+          "systemMessage": "You are the marketing strategist in a multi-agent workflow. Interpret the campaign brief from an audience, hook, platform, and messaging perspective. Produce channel-native thinking for Instagram-style content and broader campaign execution. Do not invent audience data."
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        -540,
+        0
+      ],
+      "id": "ea55da2e-f54b-4ad5-a7c4-e826404f96aa",
+      "name": "Marketing AI Agent Prototype"
+    },
+    {
+      "parameters": {
+        "model": "gpt-4.1-mini",
+        "options": {
+          "temperature": 0.3
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatAzureOpenAi",
+      "typeVersion": 1,
+      "position": [
+        -660,
+        200
+      ],
+      "id": "d1e716b3-6524-47c6-8291-5436d1eff41c",
+      "name": "Marketing Agent Azure OpenAI"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "6e711a95-df5d-4441-b45d-bf39aaec4430",
+              "name": "branch",
+              "value": "marketing",
+              "type": "string"
+            },
+            {
+              "id": "670e7aa0-666d-4667-8f57-9bb7f3d15832",
+              "name": "agent_output",
+              "value": "={{ $json.output }}",
+              "type": "string"
+            },
+            {
+              "id": "3945e0d0-5fda-45a4-95f6-1572a3c30245",
+              "name": "recalled_context",
+              "value": "Replace this Set node with audience and performance recall. Sample signals: reels outperform static on reach, soft-luxury framing outperforms direct product shots, audience saves educational lifestyle captions, hashtags work better in niche clusters.",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -260,
+        0
+      ],
+      "id": "8843a3a9-a381-4fd2-a2e3-0d563f7c90af",
+      "name": "Data Recall Marketing"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ 'Agent output:\\n' + $json.agent_output + '\\n\\nRecalled marketing data:\\n' + $json.recalled_context }}",
+        "hasOutputParser": true,
+        "messages": {
+          "messageValues": [
+            {
+              "message": "Produce one JSON object only. Return summary, target_segments, hooks, caption_angles, hashtag_clusters, channel_notes, and recommended_actions."
+            }
+          ]
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.6,
+      "position": [
+        20,
+        0
+      ],
+      "id": "5145d39a-735c-4f0d-936a-82002a965fd4",
+      "name": "Marketing Structured Output"
+    },
+    {
+      "parameters": {
+        "model": "gpt-4.1-mini",
+        "options": {
+          "temperature": 0
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatAzureOpenAi",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        220
+      ],
+      "id": "9ef4967c-8af6-4b56-aa7e-4846c66868eb",
+      "name": "Marketing Parser Azure OpenAI"
+    },
+    {
+      "parameters": {
+        "schemaType": "manual",
+        "inputSchema": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"summary\": { \"type\": \"string\" },\n    \"target_segments\": {\n      \"type\": \"array\",\n      \"items\": { \"type\": \"string\" }\n    },\n    \"hooks\": {\n      \"type\": \"array\",\n      \"items\": { \"type\": \"string\" }\n    },\n    \"caption_angles\": {\n      \"type\": \"array\",\n      \"items\": { \"type\": \"string\" }\n    },\n    \"hashtag_clusters\": {\n      \"type\": \"array\",\n      \"items\": { \"type\": \"string\" }\n    },\n    \"channel_notes\": {\n      \"type\": \"array\",\n      \"items\": { \"type\": \"string\" }\n    },\n    \"recommended_actions\": {\n      \"type\": \"array\",\n      \"items\": { \"type\": \"string\" }\n    }\n  },\n  \"required\": [\"summary\", \"target_segments\", \"hooks\", \"caption_angles\", \"hashtag_clusters\", \"channel_notes\", \"recommended_actions\"]\n}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        140,
+        220
+      ],
+      "id": "ef65c87c-a03a-463d-a82d-23c91ae24529",
+      "name": "Marketing Output Parser"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const payload = $json.output ?? $json;\nif (!Array.isArray(payload.target_segments) || !Array.isArray(payload.hooks) || !Array.isArray(payload.caption_angles)) {\n  throw new Error('Marketing branch output is missing expected fields.');\n}\nreturn {\n  json: {\n    branch: 'marketing',\n    validation_status: 'ok',\n    ...payload\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        280,
+        0
+      ],
+      "id": "c7b4bdc5-3700-40fd-b4e4-cb535f89f6b8",
+      "name": "Marketing Data Processor"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ 'Campaign brief: ' + $json.campaign_brief + '\\nProduct: ' + $json.product_name + '\\nTarget audience: ' + $json.target_audience + '\\nGoal: ' + $json.campaign_goal + '\\nPlatform: ' + $json.platform + '\\nVisual mode: ' + $json.visual_mode + '\\nIdentity mode: ' + $json.identity_mode }}",
+        "options": {
+          "systemMessage": "You are the product and creative strategist in a multi-agent workflow. Interpret the campaign brief from a product storytelling and visual generation perspective. Produce scene concepts, styling rules, prompt ingredients, and repeatable creative directions for image models. Do not imitate a real person or reference a real person's likeness."
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        -540,
+        360
+      ],
+      "id": "53f95f6f-904e-48ee-a13a-8c48dd9c3892",
+      "name": "Product AI Agent Prototype"
+    },
+    {
+      "parameters": {
+        "model": "gpt-4.1-mini",
+        "options": {
+          "temperature": 0.35
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatAzureOpenAi",
+      "typeVersion": 1,
+      "position": [
+        -660,
+        560
+      ],
+      "id": "c36d1a09-a146-4106-a0ba-1df5b4d78089",
+      "name": "Product Agent Azure OpenAI"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "5630b7a8-4d69-4828-8be0-e19b6b245aeb",
+              "name": "branch",
+              "value": "product",
+              "type": "string"
+            },
+            {
+              "id": "b245b0de-aa47-4d4b-8f83-14e641761da7",
+              "name": "agent_output",
+              "value": "={{ $json.output }}",
+              "type": "string"
+            },
+            {
+              "id": "1406f2a8-01f4-4e4f-b83b-fbd3cccebf1b",
+              "name": "recalled_context",
+              "value": "Replace this Set node with product and brand-context recall. Sample signals: brand moodboard favors soft natural light, locations include car interiors, beachside settings, and clean indoor spaces, negative prompt should avoid distorted hands, text artifacts, and overprocessed skin.",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -260,
+        360
+      ],
+      "id": "80ba2d02-a042-4e94-95cc-57092e7cc0bd",
+      "name": "Data Recall Product"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ 'Agent output:\\n' + $json.agent_output + '\\n\\nRecalled product and visual data:\\n' + $json.recalled_context }}",
+        "hasOutputParser": true,
+        "messages": {
+          "messageValues": [
+            {
+              "message": "Produce one JSON object only. Return summary, visual_style, scene_concepts, prompt_components, negative_prompt, image_prompt_templates, and recommended_actions. image_prompt_templates should contain at least 6 items."
+            }
+          ]
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.6,
+      "position": [
+        20,
+        360
+      ],
+      "id": "0853825f-d4f1-4b4a-88a8-444962efcb22",
+      "name": "Product Structured Output"
+    },
+    {
+      "parameters": {
+        "model": "gpt-4.1-mini",
+        "options": {
+          "temperature": 0
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatAzureOpenAi",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        580
+      ],
+      "id": "eeecae2b-1821-4d34-b5d0-01dd991edc4a",
+      "name": "Product Parser Azure OpenAI"
+    },
+    {
+      "parameters": {
+        "schemaType": "manual",
+        "inputSchema": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"summary\": { \"type\": \"string\" },\n    \"visual_style\": { \"type\": \"string\" },\n    \"scene_concepts\": {\n      \"type\": \"array\",\n      \"items\": { \"type\": \"string\" }\n    },\n    \"prompt_components\": {\n      \"type\": \"array\",\n      \"items\": { \"type\": \"string\" }\n    },\n    \"negative_prompt\": { \"type\": \"string\" },\n    \"image_prompt_templates\": {\n      \"type\": \"array\",\n      \"items\": { \"type\": \"string\" }\n    },\n    \"recommended_actions\": {\n      \"type\": \"array\",\n      \"items\": { \"type\": \"string\" }\n    }\n  },\n  \"required\": [\"summary\", \"visual_style\", \"scene_concepts\", \"prompt_components\", \"negative_prompt\", \"image_prompt_templates\", \"recommended_actions\"]\n}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        140,
+        580
+      ],
+      "id": "441ae8a2-7533-434c-9ac6-bb5a7dd7a45a",
+      "name": "Product Output Parser"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const payload = $json.output ?? $json;\nif (!payload.visual_style || !Array.isArray(payload.scene_concepts) || !Array.isArray(payload.image_prompt_templates)) {\n  throw new Error('Product branch output is missing expected fields.');\n}\nif (payload.image_prompt_templates.length < 6) {\n  throw new Error('Product branch should produce at least 6 image prompt templates.');\n}\nreturn {\n  json: {\n    branch: 'product',\n    validation_status: 'ok',\n    ...payload\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        280,
+        360
+      ],
+      "id": "cfc40d9d-b7e8-4f54-99bc-d76ddab9f94b",
+      "name": "Product AI Data Processor"
+    },
+    {
+      "parameters": {
+        "mode": "append",
+        "numberInputs": 4
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        540,
+        0
+      ],
+      "id": "fcd3dff9-3c27-40dd-9531-4df3f91acbd8",
+      "name": "Bundle processed data"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const items = $input.all();\nconst bundle = {};\nlet meta = null;\nfor (const item of items) {\n  if (item.json.branch) {\n    bundle[item.json.branch] = item.json;\n    continue;\n  }\n  meta = {\n    campaign_brief: item.json.campaign_brief,\n    product_name: item.json.product_name,\n    target_audience: item.json.target_audience,\n    campaign_goal: item.json.campaign_goal,\n    platform: item.json.platform,\n    visual_mode: item.json.visual_mode,\n    identity_mode: item.json.identity_mode\n  };\n}\nconst required = ['sales', 'marketing', 'product'];\nconst missing = required.filter((key) => !bundle[key]);\nif (!meta) {\n  throw new Error('Campaign metadata item is missing from the merge.');\n}\nif (missing.length) {\n  throw new Error('Missing branches: ' + missing.join(', '));\n}\nconst targetAssetCount = Math.max(\n  bundle.product.image_prompt_templates?.length ?? 0,\n  bundle.marketing.caption_angles?.length ?? 0,\n  6\n);\nreturn [{\n  json: {\n    strategy_status: 'ready_for_production',\n    campaign_meta: meta,\n    sales: bundle.sales,\n    marketing: bundle.marketing,\n    product: bundle.product,\n    creative_targets: {\n      asset_count: targetAssetCount,\n      platform: meta.platform\n    },\n    next_step: 'Pass this item into the Creative Production sub-workflow.'\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        820,
+        0
+      ],
+      "id": "f8faea63-db76-4181-9f48-a48d5e0db332",
+      "name": "Create Strategy Package"
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Create User Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create User Prompt": {
+      "main": [
+        [
+          {
+            "node": "Sales AI Agent Prototype",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Marketing AI Agent Prototype",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Product AI Agent Prototype",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Bundle processed data",
+            "type": "main",
+            "index": 3
+          }
+        ]
+      ]
+    },
+    "Sales Agent Azure OpenAI": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Sales AI Agent Prototype",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sales AI Agent Prototype": {
+      "main": [
+        [
+          {
+            "node": "Data Recall Sales",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Data Recall Sales": {
+      "main": [
+        [
+          {
+            "node": "Sales Structured Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sales Parser Azure OpenAI": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Sales Structured Output",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sales Output Parser": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Sales Structured Output",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sales Structured Output": {
+      "main": [
+        [
+          {
+            "node": "Sales Data Processor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sales Data Processor": {
+      "main": [
+        [
+          {
+            "node": "Bundle processed data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Marketing Agent Azure OpenAI": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Marketing AI Agent Prototype",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Marketing AI Agent Prototype": {
+      "main": [
+        [
+          {
+            "node": "Data Recall Marketing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Data Recall Marketing": {
+      "main": [
+        [
+          {
+            "node": "Marketing Structured Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Marketing Parser Azure OpenAI": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Marketing Structured Output",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Marketing Output Parser": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Marketing Structured Output",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Marketing Structured Output": {
+      "main": [
+        [
+          {
+            "node": "Marketing Data Processor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Marketing Data Processor": {
+      "main": [
+        [
+          {
+            "node": "Bundle processed data",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Product Agent Azure OpenAI": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Product AI Agent Prototype",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Product AI Agent Prototype": {
+      "main": [
+        [
+          {
+            "node": "Data Recall Product",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Data Recall Product": {
+      "main": [
+        [
+          {
+            "node": "Product Structured Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Product Parser Azure OpenAI": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Product Structured Output",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Product Output Parser": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Product Structured Output",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Product Structured Output": {
+      "main": [
+        [
+          {
+            "node": "Product AI Data Processor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Product AI Data Processor": {
+      "main": [
+        [
+          {
+            "node": "Bundle processed data",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Bundle processed data": {
+      "main": [
+        [
+          {
+            "node": "Create Strategy Package",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}
