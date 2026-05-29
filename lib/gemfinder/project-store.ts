@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import './pg-init';  // side-effect: configure int8 + numeric type parsers process-wide
 import { Pool } from 'pg';
 import type { ScoutCandidate, AuthUserRecord } from './types';
 
