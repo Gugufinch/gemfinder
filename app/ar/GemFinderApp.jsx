@@ -3376,6 +3376,39 @@ async function apiRelabelArtistInbox(payload) {
   }
 }
 
+// Case-insensitive column picker. Returns the first non-empty value found
+// in `row` whose key matches any of `candidates` (case-insensitive, with
+// whitespace trimmed). This is what lets the importer accept either the
+// legacy template format ("Artist", "Genre/Vibe", "Internal User") OR the
+// GemFinder export format ("Talent Name", "Talent Types", "Owners") OR
+// common variants users type by hand. See lib/gemfinder/kickoff-csv-import.test.ts
+// for the full spec — the parallel-implementation tests there are the
+// authoritative source of truth for this helper.
+function pickColumn(row, candidates) {
+  const lowerKeys = Object.keys(row).reduce((acc, k) => {
+    acc[k.toLowerCase().trim()] = k;
+    return acc;
+  }, {});
+  for (const c of candidates) {
+    const matchedKey = lowerKeys[c.toLowerCase().trim()];
+    if (matchedKey && row[matchedKey]) return row[matchedKey];
+  }
+  return "";
+}
+
+// Inspect a CSV's headers without parsing rows — used by importCSV to give
+// a specific error when no rows match. Tells the operator "your file has
+// columns X, Y, Z but I'm looking for Artist / Talent Name / Name" instead
+// of a vague "No valid artists" toast that disappears in 2.5 seconds.
+function inspectCSVHeaders(text) {
+  const grid = parseCSVGrid(text);
+  if (grid.length === 0) return { headers: [], rowCount: 0 };
+  return {
+    headers: grid[0].map(h => String(h || "").trim()).filter(Boolean),
+    rowCount: Math.max(0, grid.length - 1),
+  };
+}
+
 function parseCSV(text) {
   const grid = parseCSVGrid(text);
   if (grid.length < 2) return [];
@@ -3387,25 +3420,26 @@ function parseCSV(text) {
     const vals = lines[i];
     const row = {};
     headers.forEach((h, j) => { row[h] = vals[j] || ""; });
-    const name = row["Artist"] || "";
+    // Accept aliases — see pickColumn comment above for context.
+    const name = pickColumn(row, ["Artist", "Talent Name", "Artist Name", "Name", "Talent"]);
     const canon = canonicalArtistName(name);
     if (!name || seen.has(canon)) continue;
     seen.add(canon);
-    let email = row["Emaisl"] || row["Email"] || "";
+    let email = pickColumn(row, ["Emaisl", "Email", "Primary Email", "Booking Email", "Contact Email"]);
     if (email && !email.includes("@")) email = "";
-    const socRaw = row["Social"] || "";
+    const socRaw = pickColumn(row, ["Social", "Instagram", "IG", "Handle"]);
     const soc = socRaw.startsWith("@") && !socRaw.includes("google.com") ? socRaw.replace(/^@/, "") : "";
     results.push({
       n: name,
-      g: row["Genre/Vibe"] || "",
-      l: row["Monthly Listeners"] || "",
-      h: row["Hit Track + Streams"] || "",
-      ig: row["IG/TikTok + Followers"] || "",
+      g: pickColumn(row, ["Genre/Vibe", "Genre", "Vibe", "Talent Types"]),
+      l: pickColumn(row, ["Monthly Listeners", "Spotify Listeners", "Listeners"]),
+      h: pickColumn(row, ["Hit Track + Streams", "Hit Track", "Top Track"]),
+      ig: pickColumn(row, ["IG/TikTok + Followers", "Followers", "TikTok"]),
       soc,
       e: email,
-      loc: row["Location"] || "",
-      s: (row["Sent"] || "").toUpperCase() === "TRUE",
-      o: row["Internal User"] || "",
+      loc: pickColumn(row, ["Location", "City", "Region"]),
+      s: pickColumn(row, ["Sent", "Outreach Sent"]).toUpperCase() === "TRUE",
+      o: pickColumn(row, ["Internal User", "Owner", "Owners", "Assignee"]),
     });
   }
   return results;
@@ -7928,7 +7962,29 @@ export default function App({ authUserId = "", authEmail = "", authRole = "edito
       flash(`Imported ${parsed.length} rows · ${createdCount} new · ${refreshedCount} updated · ${unchangedCount} unchanged`);
     } else {
       const p = parseCSV(t);
-      if (!p.length) { flash("No valid artists", "err"); return; }
+      if (!p.length) {
+        // Specific error when parsing returns 0 rows — distinguishes "empty
+        // file" from "headers didn't match anything I recognize." Brad's
+        // bulk-import bug was that the export-format CSV ("Talent Name",
+        // "Primary Email", etc) had no overlap with the parser's required
+        // "Artist" column → silent drop → vague "No valid artists" toast
+        // vanishing in 2.5s. This shows the operator EXACTLY what their
+        // file has and what was expected.
+        const { headers, rowCount } = inspectCSVHeaders(t);
+        if (rowCount === 0) {
+          flash("CSV is empty (only the header row was found)", "err");
+        } else if (headers.length === 0) {
+          flash("CSV has no header row — first line should be column names", "err");
+        } else {
+          const shown = headers.slice(0, 6).join(", ");
+          const more = headers.length > 6 ? ` (+${headers.length - 6} more)` : "";
+          flash(
+            `${rowCount} rows in file but no name column recognized. Your CSV has: ${shown}${more}. Expected: Artist, Talent Name, Name, or Artist Name.`,
+            "err",
+          );
+        }
+        return;
+      }
       // Build a name → existing artist map so we can show WHERE each dup matched
       // (not just "duplicate" — also which row of the existing list and what stage).
       const existingByCanon = new Map();
