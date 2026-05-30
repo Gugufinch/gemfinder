@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getAuthUserById } from '@/lib/gemfinder/auth-store';
 import { deleteGmailThreads, updateGmailThreadWorkflow } from '@/lib/gemfinder/gmail-store';
+import { getSessionUserId } from '@/lib/gemfinder/session';
 
 const schema = z.object({
   threadKey: z.string().min(1).max(240),
@@ -16,7 +17,7 @@ const deleteSchema = z.object({
 });
 
 async function requireEditorActor(req: NextRequest) {
-  const userId = req.cookies.get('ar_user')?.value || '';
+  const userId = getSessionUserId(req);
   const actor = userId ? await getAuthUserById(userId) : null;
   if (!actor || !actor.active) {
     return { actor: null, response: NextResponse.json({ error: 'Not authenticated' }, { status: 401 }) };

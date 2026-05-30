@@ -23,6 +23,7 @@ import { getWeights } from '@/lib/gemfinder/hunter/weights-store';
 import { computeScore } from '@/lib/gemfinder/hunter/scoring';
 import type { MBArtist } from '@/lib/gemfinder/hunter/musicbrainz';
 import type { ScoutCandidate } from '@/lib/gemfinder/types';
+import { getSessionUserId } from '@/lib/gemfinder/session';
 
 // Fields the re-enrich pipeline can touch — used to compute the per-field delta
 // shown in the UI's "What just happened" panel. The label is human-readable.
@@ -87,7 +88,7 @@ function computeDelta(before: ScoutCandidate, after: ScoutCandidate): DeltaRow[]
 }
 
 async function requireEditorActor(req: NextRequest) {
-  const userId = req.cookies.get('ar_user')?.value || '';
+  const userId = getSessionUserId(req);
   const actor = userId ? await getAuthUserById(userId) : null;
   if (!actor || !actor.active) {
     return { actor: null, response: NextResponse.json({ error: 'Not authenticated' }, { status: 401 }) };

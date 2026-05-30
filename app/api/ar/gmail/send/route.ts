@@ -9,6 +9,7 @@ import {
   updateGmailConnectionMetadata,
   upsertArtistInbox,
 } from '@/lib/gemfinder/gmail-store';
+import { getSessionUserId } from '@/lib/gemfinder/session';
 
 const schema = z.object({
   projectId: z.string().min(1).max(120),
@@ -22,7 +23,7 @@ const schema = z.object({
 });
 
 export async function POST(req: NextRequest) {
-  const userId = req.cookies.get('ar_user')?.value || '';
+  const userId = getSessionUserId(req);
   const actor = userId ? await getAuthUserById(userId) : null;
   if (!actor || !actor.active) {
     return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });

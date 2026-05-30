@@ -2,9 +2,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getAuthUserById } from '@/lib/gemfinder/auth-store';
 import { listWorkspaceProjects } from '@/lib/gemfinder/project-store';
 import { ensureSchema, getStats } from '@/lib/gemfinder/scout-candidate-store';
+import { getSessionUserId } from '@/lib/gemfinder/session';
 
 async function requireEditorActor(req: NextRequest) {
-  const userId = req.cookies.get('ar_user')?.value || '';
+  const userId = getSessionUserId(req);
   const actor = userId ? await getAuthUserById(userId) : null;
   if (!actor || !actor.active) {
     return { actor: null, response: NextResponse.json({ error: 'Not authenticated' }, { status: 401 }) };

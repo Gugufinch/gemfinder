@@ -1,6 +1,7 @@
 // app/api/ar/scout/hunter/run/route.test.ts
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { NextRequest } from 'next/server';
+import { signSession } from '@/lib/gemfinder/session';
 
 // ─── Module mocks ─────────────────────────────────────────────────────────────
 vi.mock('@/lib/gemfinder/auth-store', () => ({ getAuthUserById: vi.fn() }));
@@ -41,7 +42,7 @@ function makeReq(
 
   const req = new NextRequest(url, init);
   if (userId) {
-    req.cookies.set('ar_user', userId);
+    req.cookies.set('ar_user', signSession(userId));
   }
   return req;
 }
@@ -144,7 +145,7 @@ describe('POST /api/ar/scout/hunter/run', () => {
       body: 'not-json{{{',
       headers: { 'Content-Type': 'application/json' },
     });
-    req.cookies.set('ar_user', 'user-123');
+    req.cookies.set('ar_user', signSession('user-123'));
     const res = await POST(req);
     expect(res.status).toBe(400);
     const json = await res.json();

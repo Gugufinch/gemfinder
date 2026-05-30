@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getAuthUserById, updateUserByAdmin } from '@/lib/gemfinder/auth-store';
+import { getSessionUserId } from '@/lib/gemfinder/session';
 
 const patchSchema = z.object({
   role: z.enum(['admin', 'editor', 'viewer']).optional(),
@@ -9,7 +10,7 @@ const patchSchema = z.object({
 });
 
 export async function PATCH(req: NextRequest, ctx: { params: Promise<{ userId: string }> }) {
-  const adminUserId = req.cookies.get('ar_user')?.value || '';
+  const adminUserId = getSessionUserId(req);
   const actor = await getAuthUserById(adminUserId);
   if (!actor || !actor.active) {
     return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });

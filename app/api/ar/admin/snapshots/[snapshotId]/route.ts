@@ -13,12 +13,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAuthUserById } from '@/lib/gemfinder/auth-store';
 import { getWorkspaceSnapshotById } from '@/lib/gemfinder/project-store';
+import { getSessionUserId } from '@/lib/gemfinder/session';
 
 export async function GET(
   req: NextRequest,
   ctx: { params: Promise<{ snapshotId: string }> },
 ) {
-  const userId = req.cookies.get('ar_user')?.value || '';
+  const userId = getSessionUserId(req);
   const actor = userId ? await getAuthUserById(userId) : null;
   if (!actor || !actor.active) {
     return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });

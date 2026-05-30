@@ -1,6 +1,7 @@
 // app/api/ar/scout/hunter/run/[id]/route.test.ts
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { NextRequest } from 'next/server';
+import { signSession } from '@/lib/gemfinder/session';
 
 // ─── Module mocks ─────────────────────────────────────────────────────────────
 vi.mock('@/lib/gemfinder/auth-store', () => ({ getAuthUserById: vi.fn() }));
@@ -30,7 +31,7 @@ function makeReq(
 
   const req = new NextRequest(url, { method: 'GET' });
   if (userId) {
-    req.cookies.set('ar_user', userId);
+    req.cookies.set('ar_user', signSession(userId));
   }
 
   const ctx = { params: Promise.resolve({ id: runId }) };
@@ -115,7 +116,7 @@ describe('GET /api/ar/scout/hunter/run/[id]', () => {
   it('returns 400 when run id is empty string', async () => {
     const url = new URL('http://localhost/api/ar/scout/hunter/run/?workspaceId=ws-1');
     const req = new NextRequest(url, { method: 'GET' });
-    req.cookies.set('ar_user', 'user-123');
+    req.cookies.set('ar_user', signSession('user-123'));
     const ctx = { params: Promise.resolve({ id: '' }) };
     const res = await GET(req, ctx);
     expect(res.status).toBe(400);
@@ -179,7 +180,7 @@ describe('DELETE /api/ar/scout/hunter/run/[id]', () => {
     const url = new URL(`http://localhost/api/ar/scout/hunter/run/${runId}`);
     if (workspaceId) url.searchParams.set('workspaceId', workspaceId);
     const req = new NextRequest(url, { method: 'DELETE' });
-    if (userId) req.cookies.set('ar_user', userId);
+    if (userId) req.cookies.set('ar_user', signSession(userId));
     return [req, { params: Promise.resolve({ id: runId }) }];
   }
 

@@ -4,10 +4,11 @@ import { z } from 'zod';
 import { getAuthUserById } from '@/lib/gemfinder/auth-store';
 import { listWorkspaceProjects } from '@/lib/gemfinder/project-store';
 import { getWeights, setWeights } from '@/lib/gemfinder/hunter/weights-store';
+import { getSessionUserId } from '@/lib/gemfinder/session';
 
 // Inline auth helper — duplicated per existing scout route convention.
 async function requireEditorActor(req: NextRequest) {
-  const userId = req.cookies.get('ar_user')?.value || '';
+  const userId = getSessionUserId(req);
   const actor = userId ? await getAuthUserById(userId) : null;
   if (!actor || !actor.active) {
     return { actor: null, response: NextResponse.json({ error: 'Not authenticated' }, { status: 401 }) };

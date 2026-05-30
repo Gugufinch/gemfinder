@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAuthUserById } from '@/lib/gemfinder/auth-store';
 import { getPrivateGmailConnectionByUserId, listWorkspaceGmailConnections } from '@/lib/gemfinder/gmail-store';
+import { getSessionUserId } from '@/lib/gemfinder/session';
 
 async function getActor(req: NextRequest) {
-  const userId = req.cookies.get('ar_user')?.value || '';
+  const userId = getSessionUserId(req);
   if (!userId) return null;
   return getAuthUserById(userId);
 }

@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getAuthUserById, listUsersForAdmin, registerAuthUser } from '@/lib/gemfinder/auth-store';
+import { getSessionUserId } from '@/lib/gemfinder/session';
 
 const createSchema = z.object({
   email: z.string().email().max(220),
@@ -16,7 +17,7 @@ function tempPassword(): string {
 }
 
 export async function GET(req: NextRequest) {
-  const adminUserId = req.cookies.get('ar_user')?.value || '';
+  const adminUserId = getSessionUserId(req);
   const actor = await getAuthUserById(adminUserId);
   if (!actor || !actor.active) {
     return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
@@ -33,7 +34,7 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const adminUserId = req.cookies.get('ar_user')?.value || '';
+  const adminUserId = getSessionUserId(req);
   const actor = await getAuthUserById(adminUserId);
   if (!actor || !actor.active) {
     return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });

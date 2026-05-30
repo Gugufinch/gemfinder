@@ -9,13 +9,14 @@ import {
   WorkspaceEtagConflictError,
 } from '@/lib/gemfinder/project-store';
 import { notifySlackOnProjectTransitions } from '@/lib/gemfinder/slack';
+import { getSessionUserId } from '@/lib/gemfinder/session';
 
 const updateSchema = z.object({
   projects: z.array(z.unknown())
 });
 
 async function getActor(req: NextRequest) {
-  const userId = req.cookies.get('ar_user')?.value || '';
+  const userId = getSessionUserId(req);
   if (!userId) return null;
   return getAuthUserById(userId);
 }

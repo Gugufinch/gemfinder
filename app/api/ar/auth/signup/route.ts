@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { registerAuthUser } from '@/lib/gemfinder/auth-store';
+import { signSession } from '@/lib/gemfinder/session';
 
 const schema = z.object({
   email: z.string().email().max(220),
@@ -22,7 +23,7 @@ export async function POST(req: NextRequest) {
 
   const secure = process.env.NODE_ENV === 'production';
   const response = NextResponse.json({ ok: true, userId: result.userId, email: result.email, role: result.role });
-  response.cookies.set('ar_user', result.userId, { httpOnly: true, secure, sameSite: 'lax', path: '/', maxAge: 60 * 60 * 24 * 30 });
+  response.cookies.set('ar_user', signSession(result.userId), { httpOnly: true, secure, sameSite: 'lax', path: '/', maxAge: 60 * 60 * 24 * 30 });
   response.cookies.set('ar_email', result.email, { httpOnly: true, secure, sameSite: 'lax', path: '/', maxAge: 60 * 60 * 24 * 30 });
   response.cookies.set('ar_role', result.role, { httpOnly: true, secure, sameSite: 'lax', path: '/', maxAge: 60 * 60 * 24 * 30 });
   return response;

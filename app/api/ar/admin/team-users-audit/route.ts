@@ -35,6 +35,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAuthUserById } from '@/lib/gemfinder/auth-store';
 import { listWorkspaceProjects } from '@/lib/gemfinder/project-store';
+import { getSessionUserId } from '@/lib/gemfinder/session';
 
 // MUST stay in sync with DEFAULT_TEAM_USERS in app/ar/GemFinderApp.jsx.
 // If you add or remove names there, mirror it here. Worth a small risk of
@@ -42,7 +43,7 @@ import { listWorkspaceProjects } from '@/lib/gemfinder/project-store';
 const DEFAULT_TEAM_USERS = ['Greg', 'Vinny', 'Brad', 'Jen', 'JB', 'Dakota'];
 
 export async function GET(req: NextRequest) {
-  const userId = req.cookies.get('ar_user')?.value || '';
+  const userId = getSessionUserId(req);
   const actor = userId ? await getAuthUserById(userId) : null;
   if (!actor || !actor.active) {
     return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });

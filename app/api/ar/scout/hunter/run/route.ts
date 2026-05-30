@@ -6,10 +6,11 @@ import { listWorkspaceProjects } from '@/lib/gemfinder/project-store';
 import { createRun, listRunsByWorkspace, sweepStaleRuns } from '@/lib/gemfinder/hunter-runs-store';
 import { getWeights } from '@/lib/gemfinder/hunter/weights-store';
 import { runPipeline } from '@/lib/gemfinder/hunter/orchestrator';
+import { getSessionUserId } from '@/lib/gemfinder/session';
 
 // Inline auth helper — duplicated per existing scout route convention.
 async function requireEditorActor(req: NextRequest) {
-  const userId = req.cookies.get('ar_user')?.value || '';
+  const userId = getSessionUserId(req);
   const actor = userId ? await getAuthUserById(userId) : null;
   if (!actor || !actor.active) {
     return { actor: null, response: NextResponse.json({ error: 'Not authenticated' }, { status: 401 }) };

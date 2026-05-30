@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import { getAuthUserById } from '@/lib/gemfinder/auth-store';
 import { buildGoogleAuthUrl } from '@/lib/gemfinder/gmail';
+import { getSessionUserId } from '@/lib/gemfinder/session';
 
 type GmailStatePayload = {
   nonce: string;
@@ -37,7 +38,7 @@ function safeReturnTo(value: string): string {
 }
 
 export async function GET(req: NextRequest) {
-  const userId = req.cookies.get('ar_user')?.value || '';
+  const userId = getSessionUserId(req);
   if (!userId) {
     return NextResponse.redirect(new URL('/ar?gmail=auth_required', req.url));
   }
