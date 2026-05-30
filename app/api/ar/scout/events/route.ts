@@ -13,9 +13,9 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getAuthUserById } from '@/lib/gemfinder/auth-store';
-import { listWorkspaceProjects } from '@/lib/gemfinder/project-store';
 import { listEvents } from '@/lib/gemfinder/scout-candidate-store';
 import { getSessionUserId } from '@/lib/gemfinder/session';
+import { isScoutV3Enabled } from '@/lib/gemfinder/feature-flags';
 
 async function requireActor(req: NextRequest) {
   const userId = getSessionUserId(req);
@@ -26,19 +26,6 @@ async function requireActor(req: NextRequest) {
   return { actor, response: null };
 }
 
-async function requireScoutV3Flag(workspaceId: string): Promise<boolean> {
-  try {
-    const projects = await listWorkspaceProjects();
-    const proj = (projects as Array<Record<string, unknown>>).find((p) => p.id === workspaceId);
-    const settings = (proj?.settings as Record<string, unknown>) || {};
-    const flags = (settings.featureFlags as Record<string, unknown>) || {};
-    return flags.scoutV3 !== false;
-  } catch (err) {
-    console.warn('[EVENTS] feature-flag check failed:', err);
-    return true;
-  }
-}
-
 export async function GET(req: NextRequest) {
   const { actor, response } = await requireActor(req);
   if (response || !actor) return response;
@@ -47,7 +34,7 @@ export async function GET(req: NextRequest) {
   if (!workspaceId) {
     return NextResponse.json({ error: 'workspaceId query param is required' }, { status: 400 });
   }
-  if (!(await requireScoutV3Flag(workspaceId))) {
+  if (!(await isScoutV3Enabled(workspaceId))) {
     return NextResponse.json({ error: 'Not found' }, { status: 404 });
   }
 
@@ -74,8 +61,7 @@ export async function GET(req: NextRequest) {
       candidateId,
       runId,
       since,
-      limit,
-    });
+      limit });
     return NextResponse.json({
       ok: true,
       events,
@@ -83,8 +69,7 @@ export async function GET(req: NextRequest) {
       // When the caller polled with `since`, also echo back the newest event's
       // timestamp so they can use it as the next `since` cursor. Saves a round
       // trip of "what was the last event I got?".
-      newestAt: events.length > 0 ? events[events.length - 1].createdAt : null,
-    });
+      newestAt: events.length > 0 ? events[events.length - 1].createdAt : null });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error('[EVENTS] list failed:', err);

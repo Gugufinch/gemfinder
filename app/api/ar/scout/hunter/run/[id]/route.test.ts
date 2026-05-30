@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { NextRequest } from 'next/server';
 import { signSession } from '@/lib/gemfinder/session';
+import { __resetFeatureFlagCache } from '@/lib/gemfinder/feature-flags';
 
 // ─── Module mocks ─────────────────────────────────────────────────────────────
 vi.mock('@/lib/gemfinder/auth-store', () => ({ getAuthUserById: vi.fn() }));
@@ -50,6 +51,8 @@ const FAKE_RUN = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Audit #4: same per-test reset as the sibling route tests.
+  __resetFeatureFlagCache();
   vi.spyOn(console, 'warn').mockImplementation(() => {});
 
   // Default: active editor

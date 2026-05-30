@@ -2,11 +2,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getAuthUserById } from '@/lib/gemfinder/auth-store';
-import { listWorkspaceProjects } from '@/lib/gemfinder/project-store';
 import { createRun, listRunsByWorkspace, sweepStaleRuns } from '@/lib/gemfinder/hunter-runs-store';
 import { getWeights } from '@/lib/gemfinder/hunter/weights-store';
 import { runPipeline } from '@/lib/gemfinder/hunter/orchestrator';
 import { getSessionUserId } from '@/lib/gemfinder/session';
+import { isScoutV3Enabled } from '@/lib/gemfinder/feature-flags';
 
 // Inline auth helper — duplicated per existing scout route convention.
 async function requireEditorActor(req: NextRequest) {
@@ -22,19 +22,6 @@ async function requireEditorActor(req: NextRequest) {
 }
 
 // Inline feature flag helper — also duplicated by convention.
-async function requireScoutV3Flag(workspaceId: string): Promise<boolean> {
-  try {
-    const projects = await listWorkspaceProjects();
-    const proj = (projects as Array<Record<string, unknown>>).find((p) => p.id === workspaceId);
-    const settings = (proj?.settings as Record<string, unknown>) || {};
-    const flags = (settings.featureFlags as Record<string, unknown>) || {};
-    return flags.scoutV3 !== false;
-  } catch (err) {
-    console.warn('[HUNTER_RUN] feature-flag check failed:', err);
-    return true;  // fail open — auth still required
-  }
-}
-
 const criteriaSchema = z.object({
   genres: z.array(z.string()).min(0),
   regions: z.array(z.string()).optional().default([]),
@@ -45,8 +32,7 @@ const criteriaSchema = z.object({
   instrument: z.string().optional(),
   targetCount: z.number().int().min(1).max(100).default(25),
   minScore: z.number().min(0).max(100).optional(),
-  source: z.enum(['musicbrainz', 'llm']).optional(),
-});
+  source: z.enum(['musicbrainz', 'llm']).optional() });
 // No min-filter requirement — hunts with zero criteria run on weights alone.
 
 export async function POST(req: NextRequest) {
@@ -57,7 +43,7 @@ export async function POST(req: NextRequest) {
   if (!workspaceId) {
     return NextResponse.json({ error: 'workspaceId query param is required' }, { status: 400 });
   }
-  if (!(await requireScoutV3Flag(workspaceId))) {
+  if (!(await isScoutV3Enabled(workspaceId))) {
     return NextResponse.json({ error: 'Not found' }, { status: 404 });
   }
 
@@ -76,8 +62,7 @@ export async function POST(req: NextRequest) {
     workspaceId,
     criteria,
     weightsSnapshot: weights,
-    startedBy: actor.email,
-  });
+    startedBy: actor.email });
 
   // Fire-and-forget the pipeline. setImmediate returns an Immediate handle (NOT a Promise),
   // so the .catch must wrap the awaited promise inside the callback.
@@ -87,8 +72,7 @@ export async function POST(req: NextRequest) {
       workspaceId,
       criteria,
       weights,
-      actorEmail: actor.email,
-    }).catch((err) => {
+      actorEmail: actor.email }).catch((err) => {
       console.error('[HUNTER_RUN] pipeline rejected', { runId: run.id, error: err });
       // Pipeline handles setRunStatus('failed') internally — this catch only
       // prevents an unhandled-promise-rejection from crashing Node.
@@ -106,7 +90,7 @@ export async function GET(req: NextRequest) {
   if (!workspaceId) {
     return NextResponse.json({ error: 'workspaceId query param is required' }, { status: 400 });
   }
-  if (!(await requireScoutV3Flag(workspaceId))) {
+  if (!(await isScoutV3Enabled(workspaceId))) {
     return NextResponse.json({ error: 'Not found' }, { status: 404 });
   }
 

@@ -1,19 +1,18 @@
 // app/api/ar/scout/candidates/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { getAuthUserById } from '@/lib/gemfinder/auth-store';
-import { listWorkspaceProjects } from '@/lib/gemfinder/project-store';
 import { candidateCreateSchema } from '@/lib/gemfinder/scout/validation';
 import { buildIdentity } from '@/lib/gemfinder/scout/identity';
 import { isBlocked } from '@/lib/gemfinder/scout-blocklist';
 import {
   ensureSchema,
   createCandidate,
-  listCandidatesByWorkspace,
-} from '@/lib/gemfinder/scout-candidate-store';
+  listCandidatesByWorkspace } from '@/lib/gemfinder/scout-candidate-store';
 import { canonicalizeName } from '@/lib/gemfinder/scout/identity';
 import { v4 as uuidv4 } from 'uuid';
 import type { ScoutCandidate } from '@/lib/gemfinder/types';
 import { getSessionUserId } from '@/lib/gemfinder/session';
+import { isScoutV3Enabled } from '@/lib/gemfinder/feature-flags';
 
 async function requireEditorActor(req: NextRequest) {
   const userId = getSessionUserId(req);
@@ -27,22 +26,6 @@ async function requireEditorActor(req: NextRequest) {
   return { actor, response: null };
 }
 
-async function requireScoutV3Flag(workspaceId: string): Promise<boolean> {
-  // Default-on rollout: Scout V3 is enabled unless explicitly disabled
-  // for the workspace via featureFlags.scoutV3 = false.
-  // Flip off per-workspace with: npx tsx scripts/enable-scout-v3.ts <workspaceId> --off
-  try {
-    const projects = await listWorkspaceProjects();
-    const proj = (projects as Array<Record<string, unknown>>).find((p) => p.id === workspaceId);
-    const settings = (proj?.settings as Record<string, unknown>) || {};
-    const flags = (settings.featureFlags as Record<string, unknown>) || {};
-    return flags.scoutV3 !== false;   // undefined or true → on; explicit false → off
-  } catch (err) {
-    console.warn('[SCOUT_HUNT] feature-flag check failed:', err);
-    return true;  // fail open — if we can't check, assume on (still requires auth)
-  }
-}
-
 export async function POST(req: NextRequest) {
   const { actor, response } = await requireEditorActor(req);
   if (response || !actor) return response;
@@ -54,7 +37,7 @@ export async function POST(req: NextRequest) {
 
   // Feature flag gate — return 404 (not 403) so the route appears non-existent
   // when disabled for this workspace.
-  if (!(await requireScoutV3Flag(workspaceId))) {
+  if (!(await isScoutV3Enabled(workspaceId))) {
     return NextResponse.json({ error: 'Not found' }, { status: 404 });
   }
 
@@ -76,8 +59,7 @@ export async function POST(req: NextRequest) {
     tiktokHandle: parsed.data.tiktokHandle,
     youtubeHandle: parsed.data.youtubeHandle,
     soundcloudHandle: parsed.data.soundcloudHandle,
-    bandcampUrl: parsed.data.bandcampUrl,
-  });
+    bandcampUrl: parsed.data.bandcampUrl });
 
   await ensureSchema();
   const blocklistResult = await isBlocked(workspaceId, identity);
@@ -130,8 +112,7 @@ export async function POST(req: NextRequest) {
     enrichmentStatus: 'pending',
     identityOverride: false,
     createdAt: now,
-    updatedAt: now,
-  };
+    updatedAt: now };
 
   try {
     const created = await createCandidate(candidate);
@@ -152,7 +133,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'workspaceId query param is required' }, { status: 400 });
   }
 
-  if (!(await requireScoutV3Flag(workspaceId))) {
+  if (!(await isScoutV3Enabled(workspaceId))) {
     return NextResponse.json({ error: 'Not found' }, { status: 404 });
   }
 

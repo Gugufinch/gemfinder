@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { NextRequest } from 'next/server';
 import { signSession } from '@/lib/gemfinder/session';
+import { __resetFeatureFlagCache } from '@/lib/gemfinder/feature-flags';
 
 // ─── Module mocks ─────────────────────────────────────────────────────────────
 vi.mock('@/lib/gemfinder/auth-store', () => ({ getAuthUserById: vi.fn() }));
@@ -100,6 +101,8 @@ const FAKE_SAVED_WEIGHTS = { ...VALID_WEIGHTS_BODY, updatedAt: '2026-02-01T00:00
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Audit #4: cached flag state would leak across tests.
+  __resetFeatureFlagCache();
   vi.spyOn(console, 'error').mockImplementation(() => {});
   vi.spyOn(console, 'warn').mockImplementation(() => {});
 

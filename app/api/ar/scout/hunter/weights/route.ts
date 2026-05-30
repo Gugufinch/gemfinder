@@ -2,9 +2,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getAuthUserById } from '@/lib/gemfinder/auth-store';
-import { listWorkspaceProjects } from '@/lib/gemfinder/project-store';
 import { getWeights, setWeights } from '@/lib/gemfinder/hunter/weights-store';
 import { getSessionUserId } from '@/lib/gemfinder/session';
+import { isScoutV3Enabled } from '@/lib/gemfinder/feature-flags';
 
 // Inline auth helper — duplicated per existing scout route convention.
 async function requireEditorActor(req: NextRequest) {
@@ -20,19 +20,6 @@ async function requireEditorActor(req: NextRequest) {
 }
 
 // Inline feature flag helper — also duplicated by convention.
-async function requireScoutV3Flag(workspaceId: string): Promise<boolean> {
-  try {
-    const projects = await listWorkspaceProjects();
-    const proj = (projects as Array<Record<string, unknown>>).find((p) => p.id === workspaceId);
-    const settings = (proj?.settings as Record<string, unknown>) || {};
-    const flags = (settings.featureFlags as Record<string, unknown>) || {};
-    return flags.scoutV3 !== false;
-  } catch (err) {
-    console.warn('[HUNTER_WEIGHTS] feature-flag check failed:', err);
-    return true; // fail open — auth still required
-  }
-}
-
 // ─── Zod schema ───────────────────────────────────────────────────────────────
 
 const weightLogSchema = z.object({
@@ -41,29 +28,25 @@ const weightLogSchema = z.object({
   min: z.number(),
   max: z.number(),
   missing_baseline: z.number(),
-  days_window: z.number().optional(),
-});
+  days_window: z.number().optional() });
 
 const weightValueMapSchema = z.object({
   weight: z.number(),
   values: z.record(z.string(), z.number()),
-  missing_baseline: z.number().optional(),
-});
+  missing_baseline: z.number().optional() });
 
 const weightGenreSchema = z.object({
   weight: z.number(),
   targetGenres: z.array(z.string()),
   exact: z.number(),
   related: z.number(),
-  none: z.number(),
-});
+  none: z.number() });
 
 const weightGeoSchema = z.object({
   weight: z.number(),
   targetRegions: z.array(z.string()),
   match: z.number(),
-  other: z.number(),
-});
+  other: z.number() });
 
 const hunterWeightsSchema = z.object({
   version: z.number(),
@@ -80,16 +63,13 @@ const hunterWeightsSchema = z.object({
     genre_fit:            weightGenreSchema,
     geography:            weightGeoSchema,
     role_match:           weightValueMapSchema,
-    recency:              weightLogSchema,
-  }),
+    recency:              weightLogSchema }),
   gates: z.object({
     require_genre_match:  z.boolean(),
     require_living:       z.boolean(),
     require_reachable:    z.boolean(),
-    require_not_blocked:  z.boolean(),
-  }),
-  target_count_default: z.number().int().min(1).max(500),
-});
+    require_not_blocked:  z.boolean() }),
+  target_count_default: z.number().int().min(1).max(500) });
 
 // ─── Route handlers ───────────────────────────────────────────────────────────
 
@@ -101,7 +81,7 @@ export async function GET(req: NextRequest) {
   if (!workspaceId) {
     return NextResponse.json({ error: 'workspaceId query param is required' }, { status: 400 });
   }
-  if (!(await requireScoutV3Flag(workspaceId))) {
+  if (!(await isScoutV3Enabled(workspaceId))) {
     return NextResponse.json({ error: 'Not found' }, { status: 404 });
   }
 
@@ -117,7 +97,7 @@ export async function PUT(req: NextRequest) {
   if (!workspaceId) {
     return NextResponse.json({ error: 'workspaceId query param is required' }, { status: 400 });
   }
-  if (!(await requireScoutV3Flag(workspaceId))) {
+  if (!(await isScoutV3Enabled(workspaceId))) {
     return NextResponse.json({ error: 'Not found' }, { status: 404 });
   }
 

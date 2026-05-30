@@ -23,7 +23,6 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getAuthUserById } from '@/lib/gemfinder/auth-store';
-import { listWorkspaceProjects } from '@/lib/gemfinder/project-store';
 import { candidateCreateSchema } from '@/lib/gemfinder/scout/validation';
 import { buildIdentity, canonicalizeName } from '@/lib/gemfinder/scout/identity';
 import { isBlocked } from '@/lib/gemfinder/scout-blocklist';
@@ -31,6 +30,7 @@ import { ensureSchema, createCandidate } from '@/lib/gemfinder/scout-candidate-s
 import { v4 as uuidv4 } from 'uuid';
 import type { ScoutCandidate } from '@/lib/gemfinder/types';
 import { getSessionUserId } from '@/lib/gemfinder/session';
+import { isScoutV3Enabled } from '@/lib/gemfinder/feature-flags';
 
 async function requireEditorActor(req: NextRequest) {
   const userId = getSessionUserId(req);
@@ -42,19 +42,6 @@ async function requireEditorActor(req: NextRequest) {
     return { actor: null, response: NextResponse.json({ error: 'Editor or admin role required' }, { status: 403 }) };
   }
   return { actor, response: null };
-}
-
-async function requireScoutV3Flag(workspaceId: string): Promise<boolean> {
-  try {
-    const projects = await listWorkspaceProjects();
-    const proj = (projects as Array<Record<string, unknown>>).find((p) => p.id === workspaceId);
-    const settings = (proj?.settings as Record<string, unknown>) || {};
-    const flags = (settings.featureFlags as Record<string, unknown>) || {};
-    return flags.scoutV3 !== false;
-  } catch (err) {
-    console.warn('[CAND_BULK] feature-flag check failed:', err);
-    return true;
-  }
 }
 
 const MAX_BULK_SIZE = 500;
@@ -73,7 +60,7 @@ export async function POST(req: NextRequest) {
   if (!workspaceId) {
     return NextResponse.json({ error: 'workspaceId query param is required' }, { status: 400 });
   }
-  if (!(await requireScoutV3Flag(workspaceId))) {
+  if (!(await isScoutV3Enabled(workspaceId))) {
     return NextResponse.json({ error: 'Not found' }, { status: 404 });
   }
 
@@ -109,9 +96,7 @@ export async function POST(req: NextRequest) {
         displayName,
         details: parsed.error.issues.map((issue) => ({
           path: issue.path.join('.'),
-          message: issue.message,
-        })),
-      });
+          message: issue.message })) });
       continue;
     }
 
@@ -124,8 +109,7 @@ export async function POST(req: NextRequest) {
       tiktokHandle: parsed.data.tiktokHandle,
       youtubeHandle: parsed.data.youtubeHandle,
       soundcloudHandle: parsed.data.soundcloudHandle,
-      bandcampUrl: parsed.data.bandcampUrl,
-    });
+      bandcampUrl: parsed.data.bandcampUrl });
 
     try {
       const blocklistResult = await isBlocked(workspaceId, identity);
@@ -135,8 +119,7 @@ export async function POST(req: NextRequest) {
           status: 'duplicate',
           displayName: parsed.data.displayName,
           reason: blocklistResult.reason,
-          matchedRecord: blocklistResult.matchedRecord,
-        });
+          matchedRecord: blocklistResult.matchedRecord });
         continue;
       }
     } catch (err) {
@@ -144,8 +127,7 @@ export async function POST(req: NextRequest) {
         rowIndex: i,
         status: 'error',
         displayName: parsed.data.displayName,
-        details: `Blocklist check failed: ${err instanceof Error ? err.message : String(err)}`,
-      });
+        details: `Blocklist check failed: ${err instanceof Error ? err.message : String(err)}` });
       continue;
     }
 
@@ -191,8 +173,7 @@ export async function POST(req: NextRequest) {
       enrichmentStatus: 'pending',
       identityOverride: false,
       createdAt: now,
-      updatedAt: now,
-    };
+      updatedAt: now };
 
     try {
       const inserted = await createCandidate(candidate);
@@ -200,15 +181,13 @@ export async function POST(req: NextRequest) {
         rowIndex: i,
         status: 'success',
         candidateId: inserted.id,
-        displayName: inserted.displayName,
-      });
+        displayName: inserted.displayName });
     } catch (err) {
       results.push({
         rowIndex: i,
         status: 'error',
         displayName: parsed.data.displayName,
-        details: `Insert failed: ${err instanceof Error ? err.message : String(err)}`,
-      });
+        details: `Insert failed: ${err instanceof Error ? err.message : String(err)}` });
     }
   }
 
@@ -218,8 +197,7 @@ export async function POST(req: NextRequest) {
     succeeded: results.filter((r) => r.status === 'success').length,
     duplicates: results.filter((r) => r.status === 'duplicate').length,
     validationErrors: results.filter((r) => r.status === 'validation_error').length,
-    errors: results.filter((r) => r.status === 'error').length,
-  };
+    errors: results.filter((r) => r.status === 'error').length };
 
   return NextResponse.json({ ok: true, summary, results });
 }

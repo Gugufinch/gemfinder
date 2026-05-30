@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { NextRequest } from 'next/server';
 import { signSession } from '@/lib/gemfinder/session';
+import { __resetFeatureFlagCache } from '@/lib/gemfinder/feature-flags';
 
 // ─── Module mocks ─────────────────────────────────────────────────────────────
 vi.mock('@/lib/gemfinder/auth-store', () => ({ getAuthUserById: vi.fn() }));
@@ -62,6 +63,9 @@ const VALID_BODY = { genres: ['indie pop'], targetCount: 10 };
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Audit #4: clear the cached feature-flag state so each test sees the
+  // current vi.mock'd workspace, not whatever the previous test cached.
+  __resetFeatureFlagCache();
   vi.spyOn(console, 'error').mockImplementation(() => {});
   vi.spyOn(console, 'warn').mockImplementation(() => {});
 

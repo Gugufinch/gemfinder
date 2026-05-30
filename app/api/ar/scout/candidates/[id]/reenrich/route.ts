@@ -15,15 +15,14 @@ import { getAuthUserById } from '@/lib/gemfinder/auth-store';
 import {
   getCandidate,
   updateCandidate,
-  emitEvent,
-} from '@/lib/gemfinder/scout-candidate-store';
-import { listWorkspaceProjects } from '@/lib/gemfinder/project-store';
+  emitEvent } from '@/lib/gemfinder/scout-candidate-store';
 import { enrichCandidate } from '@/lib/gemfinder/hunter/enrichment';
 import { getWeights } from '@/lib/gemfinder/hunter/weights-store';
 import { computeScore } from '@/lib/gemfinder/hunter/scoring';
 import type { MBArtist } from '@/lib/gemfinder/hunter/musicbrainz';
 import type { ScoutCandidate } from '@/lib/gemfinder/types';
 import { getSessionUserId } from '@/lib/gemfinder/session';
+import { isScoutV3Enabled } from '@/lib/gemfinder/feature-flags';
 
 // Fields the re-enrich pipeline can touch — used to compute the per-field delta
 // shown in the UI's "What just happened" panel. The label is human-readable.
@@ -99,19 +98,6 @@ async function requireEditorActor(req: NextRequest) {
   return { actor, response: null };
 }
 
-async function requireScoutV3Flag(workspaceId: string): Promise<boolean> {
-  try {
-    const projects = await listWorkspaceProjects();
-    const proj = (projects as Array<Record<string, unknown>>).find((p) => p.id === workspaceId);
-    const settings = (proj?.settings as Record<string, unknown>) || {};
-    const flags = (settings.featureFlags as Record<string, unknown>) || {};
-    return flags.scoutV3 !== false;
-  } catch (err) {
-    console.warn('[CAND_REENRICH] feature-flag check failed:', err);
-    return true;
-  }
-}
-
 export async function POST(
   req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
@@ -123,7 +109,7 @@ export async function POST(
   if (!workspaceId) {
     return NextResponse.json({ error: 'workspaceId query param is required' }, { status: 400 });
   }
-  if (!(await requireScoutV3Flag(workspaceId))) {
+  if (!(await isScoutV3Enabled(workspaceId))) {
     return NextResponse.json({ error: 'Not found' }, { status: 404 });
   }
 
@@ -144,8 +130,7 @@ export async function POST(
     id: candidate.musicbrainzId || '',
     name: candidate.displayName,
     country: candidate.locations?.[0],  // best-effort hint
-    tags: (candidate.genres || []).map((g) => ({ name: g, count: 1 })),
-  };
+    tags: (candidate.genres || []).map((g) => ({ name: g, count: 1 })) };
 
   let enriched;
   try {
@@ -161,8 +146,7 @@ export async function POST(
     if (msg.includes('not-a-recording-artist')) {
       return NextResponse.json({
         ok: false,
-        error: 'Deep research could not verify this name as a recording artist. Candidate left as-is — consider rejecting manually.',
-      }, { status: 422 });
+        error: 'Deep research could not verify this name as a recording artist. Candidate left as-is — consider rejecting manually.' }, { status: 422 });
     }
     console.error('[CAND_REENRICH] enrichment crashed:', err);
     return NextResponse.json({ error: `Re-enrichment failed: ${msg}` }, { status: 500 });
@@ -207,8 +191,7 @@ export async function POST(
   patch.weightSnapshot = {
     ...score.perDimension,
     ...(enriched.topTracks ? { _topTracks: enriched.topTracks } : {}),
-    ...(enriched.spotifyImageUrl ? { _imageUrl: enriched.spotifyImageUrl } : {}),
-  };
+    ...(enriched.spotifyImageUrl ? { _imageUrl: enriched.spotifyImageUrl } : {}) };
   patch.enrichmentStatus = (enriched.scrapedContactEmail || enriched.spotifyArtistId) ? 'complete' : 'partial';
   patch.updatedAt = new Date().toISOString();
 
@@ -229,8 +212,7 @@ export async function POST(
     lastSeenAt: candidate.updatedAt,
     summary: changedRows.length === 0
       ? 'No fields changed — all data on file was already current.'
-      : `${changedRows.length} field${changedRows.length === 1 ? '' : 's'} updated.`,
-  };
+      : `${changedRows.length} field${changedRows.length === 1 ? '' : 's'} updated.` };
 
   // Emit a final summary event so the activity-log panel can render a
   // "✓ Re-enrich complete" capstone row that ties together everything below it.
@@ -242,9 +224,7 @@ export async function POST(
     message: delta.summary,
     data: {
       changedFields: changedRows.map((r) => r.field),
-      totalChanged: delta.totalChanged,
-    },
-  });
+      totalChanged: delta.totalChanged } });
 
   return NextResponse.json({ ok: true, candidate: updated, delta });
 }

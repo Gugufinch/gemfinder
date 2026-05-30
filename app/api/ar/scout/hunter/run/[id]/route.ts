@@ -1,10 +1,10 @@
 // app/api/ar/scout/hunter/run/[id]/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { getAuthUserById } from '@/lib/gemfinder/auth-store';
-import { listWorkspaceProjects } from '@/lib/gemfinder/project-store';
 import { getRun, sweepStaleRuns, deleteRun } from '@/lib/gemfinder/hunter-runs-store';
 import { listCandidatesByHunterRun } from '@/lib/gemfinder/scout-candidate-store';
 import { getSessionUserId } from '@/lib/gemfinder/session';
+import { isScoutV3Enabled } from '@/lib/gemfinder/feature-flags';
 
 // Inline auth helper — duplicated per existing scout route convention.
 async function requireEditorActor(req: NextRequest) {
@@ -20,19 +20,6 @@ async function requireEditorActor(req: NextRequest) {
 }
 
 // Inline feature flag helper — also duplicated by convention.
-async function requireScoutV3Flag(workspaceId: string): Promise<boolean> {
-  try {
-    const projects = await listWorkspaceProjects();
-    const proj = (projects as Array<Record<string, unknown>>).find((p) => p.id === workspaceId);
-    const settings = (proj?.settings as Record<string, unknown>) || {};
-    const flags = (settings.featureFlags as Record<string, unknown>) || {};
-    return flags.scoutV3 !== false;
-  } catch (err) {
-    console.warn('[HUNTER_RUN_DETAIL] feature-flag check failed:', err);
-    return true;  // fail open — auth still required
-  }
-}
-
 export async function GET(
   req: NextRequest,
   ctx: { params: Promise<{ id: string }> }
@@ -44,7 +31,7 @@ export async function GET(
   if (!workspaceId) {
     return NextResponse.json({ error: 'workspaceId query param is required' }, { status: 400 });
   }
-  if (!(await requireScoutV3Flag(workspaceId))) {
+  if (!(await isScoutV3Enabled(workspaceId))) {
     return NextResponse.json({ error: 'Not found' }, { status: 404 });
   }
 
@@ -91,7 +78,7 @@ export async function DELETE(
   if (!workspaceId) {
     return NextResponse.json({ error: 'workspaceId query param is required' }, { status: 400 });
   }
-  if (!(await requireScoutV3Flag(workspaceId))) {
+  if (!(await isScoutV3Enabled(workspaceId))) {
     return NextResponse.json({ error: 'Not found' }, { status: 404 });
   }
 

@@ -26,6 +26,7 @@ import { v4 as uuidv4 } from 'uuid';
 import type { ScoutRejection } from '@/lib/gemfinder/types';
 import type { AuthUserRecord } from '@/lib/gemfinder/types';
 import { getSessionUserId } from '@/lib/gemfinder/session';
+import { isScoutV3Enabled } from '@/lib/gemfinder/feature-flags';
 
 async function requireEditorActor(req: NextRequest) {
   const userId = getSessionUserId(req);
@@ -39,21 +40,6 @@ async function requireEditorActor(req: NextRequest) {
   return { actor, response: null };
 }
 
-async function requireScoutV3Flag(workspaceId: string): Promise<boolean> {
-  // Default-on rollout: Scout V3 enabled unless explicitly disabled
-  // via featureFlags.scoutV3 = false. See scripts/enable-scout-v3.ts.
-  try {
-    const projects = await listWorkspaceProjects();
-    const proj = (projects as Array<Record<string, unknown>>).find((p) => p.id === workspaceId);
-    const settings = (proj?.settings as Record<string, unknown>) || {};
-    const flags = (settings.featureFlags as Record<string, unknown>) || {};
-    return flags.scoutV3 !== false;
-  } catch (err) {
-    console.warn('[SCOUT_HUNT] feature-flag check failed:', err);
-    return true;
-  }
-}
-
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { actor, response } = await requireEditorActor(req);
   if (response || !actor) return response;
@@ -62,7 +48,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return NextResponse.json({ error: 'workspaceId required' }, { status: 400 });
 
-  if (!(await requireScoutV3Flag(workspaceId))) {
+  if (!(await isScoutV3Enabled(workspaceId))) {
     return NextResponse.json({ error: 'Not found' }, { status: 404 });
   }
 
