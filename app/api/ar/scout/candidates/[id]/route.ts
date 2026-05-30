@@ -11,10 +11,9 @@ import {
   getScoutPool,
 } from '@/lib/gemfinder/scout-candidate-store';
 import {
-  addTalentToProject,
-  listWorkspaceProjects,
-  saveWorkspaceProjects,
+  applyAddTalentMutation,
 } from '@/lib/gemfinder/project-store';
+import { mutateWorkspaceProjects } from '@/lib/gemfinder/mutate-workspace';
 import { isBlocked } from '@/lib/gemfinder/scout-blocklist';
 import { buildIdentity } from '@/lib/gemfinder/scout/identity';
 import {
@@ -130,38 +129,45 @@ async function handleApprove(workspaceId: string, candidateId: string, body: unk
       return NextResponse.json({ error: 'Candidate not found (may have been handled concurrently)' }, { status: 404 });
     }
 
-    // Add to Kickoff project (JSONB mutation via saveWorkspaceProjects).
-    // This writes to a DIFFERENT table (gemfinder_workspace_state) than the
-    // pg transaction, so it's NOT inside the transaction. Ordering per spec
-    // "Graduation atomicity": JSONB write first, then candidate delete. If
-    // delete fails after JSONB succeeds, we have a retryable duplicate state.
-    const { talentId, artistRecord } = await addTalentToProject(
-      workspaceId,
-      projectId,
-      candidate,
-      actor as unknown as AuthUserRecord
+    // Audit #5: ONE etag-protected mutation does both writes that used to
+    // happen as two unguarded saves — adding the artist record AND stamping
+    // kickoffDecisionState. Wraps in mutateWorkspaceProjects, so a
+    // concurrent workspace mutation can't silently overwrite either.
+    // This still writes to gemfinder_workspace_state OUTSIDE the pg
+    // transaction (which locks scout_candidates) — that boundary is
+    // unchanged. Graduation atomicity: JSONB write first, then candidate
+    // delete. If delete fails after JSONB succeeds, the kickoff state is
+    // idempotent on retry (same talentId, same decision).
+    const { result } = await mutateWorkspaceProjects(
+      (projects) => {
+        const out = applyAddTalentMutation(
+          projects,
+          workspaceId,
+          projectId,
+          candidate,
+          actor as unknown as AuthUserRecord,
+        );
+        const project = (projects as Array<Record<string, unknown>>).find((p) => p.id === projectId);
+        if (project) {
+          const settings = (project.settings as Record<string, unknown>) || {};
+          const decisionState = (settings.kickoffDecisionState as Record<string, unknown>) || {};
+          decisionState[out.talentId] = {
+            decision: 'qualified',
+            decisionBy: actor.email,
+            decisionAt: new Date().toISOString(),
+            reviewCount: 1,
+            lastReviewedBy: actor.email,
+            lastReviewedAt: new Date().toISOString(),
+            note: note || null,
+          };
+          settings.kickoffDecisionState = decisionState;
+          project.settings = settings;
+        }
+        return out;
+      },
+      { reason: `scout_approve:${actor.email}` },
     );
-
-    // Write kickoffDecisionState[talentId] = qualified
-    // (key name matches the post-migration shape — see Chunk 5 Task 1 Step 6)
-    const projects = await listWorkspaceProjects();
-    const project = (projects as Array<Record<string, unknown>>).find((p) => p.id === projectId);
-    if (project) {
-      const settings = (project.settings as Record<string, unknown>) || {};
-      const decisionState = (settings.kickoffDecisionState as Record<string, unknown>) || {};
-      decisionState[talentId] = {
-        decision: 'qualified',
-        decisionBy: actor.email,
-        decisionAt: new Date().toISOString(),
-        reviewCount: 1,
-        lastReviewedBy: actor.email,
-        lastReviewedAt: new Date().toISOString(),
-        note: note || null,
-      };
-      settings.kickoffDecisionState = decisionState;
-      project.settings = settings;
-      await saveWorkspaceProjects(projects);
-    }
+    const { talentId, artistRecord } = result;
 
     // Delete candidate row inside the locked transaction (exactly-once guarantee).
     await client.query(

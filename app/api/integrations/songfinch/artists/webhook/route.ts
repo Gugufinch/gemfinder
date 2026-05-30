@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
-import { listWorkspaceProjects, saveWorkspaceProjects } from '@/lib/gemfinder/project-store';
+import { listWorkspaceProjects } from '@/lib/gemfinder/project-store';
+import { mutateWorkspaceProjects } from '@/lib/gemfinder/mutate-workspace';
 import { notifySlackOnProjectTransitions } from '@/lib/gemfinder/slack';
 
 export const runtime = 'nodejs';
@@ -311,45 +312,56 @@ async function processSongfinchWebhook(data: z.infer<typeof payloadSchema>) {
   const environment = String(data.environment || 'production').trim().toLowerCase() || 'production';
   const allowDevelopmentSync = acceptsDevelopmentSync();
 
-  const previousProjects = (await listWorkspaceProjects()) as WorkspaceProject[];
-  const nextProjects = previousProjects.map(project => ({ ...project }));
-  let projectIndex = findKickoffProjectIndex(nextProjects);
-  if (projectIndex < 0) {
-    nextProjects.push(defaultKickoffProject());
-    projectIndex = nextProjects.length - 1;
+  // Pre-check duplicate via a read-only fetch. Tolerable rare race: if the
+  // same event_id is being processed concurrently, both pre-checks miss and
+  // the second write lands a duplicate entry in recentEvents.
+  // processedEventIds is still deduped, so the worst case is a cosmetic
+  // double-log of one event in the recentEvents tail — not data loss.
+  {
+    const preProjects = (await listWorkspaceProjects()) as WorkspaceProject[];
+    const preIdx = findKickoffProjectIndex(preProjects);
+    if (preIdx >= 0) {
+      const preIds = ((preProjects[preIdx].settings as Record<string, unknown> | undefined)?.songfinchWebhook as { processedEventIds?: string[] } | undefined)?.processedEventIds;
+      if (Array.isArray(preIds) && preIds.includes(data.event_id)) {
+        return NextResponse.json({
+          ok: true,
+          duplicate: true,
+          synced: false,
+          reason: 'event_already_processed',
+          eventId: data.event_id,
+        });
+      }
+    }
   }
 
-  const targetProject = nextProjects[projectIndex];
-  const settings = { ...(targetProject.settings || {}) } as Record<string, unknown>;
-  const webhookState = {
-    processedEventIds: dedupeStrings(
-      Array.isArray((settings.songfinchWebhook as { processedEventIds?: string[] } | undefined)?.processedEventIds)
-        ? ((settings.songfinchWebhook as { processedEventIds?: string[] }).processedEventIds || []).map(id => String(id || '').trim())
-        : []
-    ),
-    recentEvents: Array.isArray((settings.songfinchWebhook as { recentEvents?: unknown[] } | undefined)?.recentEvents)
-      ? [ ...(((settings.songfinchWebhook as { recentEvents?: unknown[] }).recentEvents || [])) ]
-      : [],
-  };
-
-  if (webhookState.processedEventIds.includes(data.event_id)) {
-    return NextResponse.json({
-      ok: true,
-      duplicate: true,
-      synced: false,
-      reason: 'event_already_processed',
-      eventId: data.event_id,
-    });
-  }
-
-  webhookState.recentEvents = [summarizeRecentEvent(data), ...webhookState.recentEvents].slice(0, 50);
+  // Audit #5: ALL state mutation goes through mutateWorkspaceProjects so a
+  // concurrent webhook (or approve, weights, etc.) doesn't have its work
+  // silently clobbered. The mutator runs fresh on every retry — both
+  // writers' artist/pipeline changes survive.
   if (environment === 'development' && !allowDevelopmentSync) {
-    settings.songfinchWebhook = webhookState;
-    nextProjects[projectIndex] = {
-      ...targetProject,
-      settings,
-    };
-    await saveWorkspaceProjects(nextProjects, { reason: 'songfinch_webhook:test_event' });
+    await mutateWorkspaceProjects(
+      (projects) => {
+        const arr = projects as WorkspaceProject[];
+        let idx = findKickoffProjectIndex(arr);
+        if (idx < 0) { arr.push(defaultKickoffProject()); idx = arr.length - 1; }
+        const target = arr[idx];
+        const settings = { ...(target.settings || {}) } as Record<string, unknown>;
+        const ws = {
+          processedEventIds: dedupeStrings(
+            Array.isArray((settings.songfinchWebhook as { processedEventIds?: string[] } | undefined)?.processedEventIds)
+              ? ((settings.songfinchWebhook as { processedEventIds?: string[] }).processedEventIds || []).map(id => String(id || '').trim())
+              : []
+          ),
+          recentEvents: Array.isArray((settings.songfinchWebhook as { recentEvents?: unknown[] } | undefined)?.recentEvents)
+            ? [ ...(((settings.songfinchWebhook as { recentEvents?: unknown[] }).recentEvents || [])) ]
+            : [],
+        };
+        ws.recentEvents = [summarizeRecentEvent(data), ...ws.recentEvents].slice(0, 50);
+        settings.songfinchWebhook = ws;
+        arr[idx] = { ...target, settings };
+      },
+      { reason: 'songfinch_webhook:test_event' },
+    );
     return NextResponse.json({
       ok: true,
       accepted: true,
@@ -360,99 +372,129 @@ async function processSongfinchWebhook(data: z.infer<typeof payloadSchema>) {
     }, { status: 202 });
   }
 
-  const artists = Array.isArray(targetProject.artists) ? [...targetProject.artists] : [];
-  const incomingEmail = canonicalEmail(String(data.contact_email || data.manager_email || data.artist_email || ''));
-  const incomingNameKey = canonicalArtistName(data.artist_name);
-  const existingArtist = artists.find(artist =>
-    canonicalArtistName(String(artist.n || '')) === incomingNameKey
-    || (incomingEmail && canonicalEmail(String(artist.contactEmail || artist.e || '')) === incomingEmail)
-  );
-  const artistName = String(existingArtist?.n || data.artist_name).trim();
-  const existingIndex = artists.findIndex(artist => String(artist.n || '') === artistName);
-  const instagramUrl = trimUrl(String(data.instagram_url || ''));
-  const instagramHandle = extractInstagramHandle(instagramUrl);
-  const tiktokUrl = trimUrl(String(data.tiktok_url || ''));
-  const stageFromEvent = kickoffStageFromPayload(String(data.status || ''), data.event_type);
-  const previousStage = String(targetProject.pipeline?.[artistName]?.stage || 'prospect');
-  const nextStage = stageFromEvent || previousStage || 'prospect';
-  const nowIso = String(data.updated_at || '').trim() || new Date().toISOString();
+  // Full mutation path. Snapshots are captured INSIDE the mutator so retries
+  // get the right "before/after" pair for the Slack notification.
+  let previousProjects: WorkspaceProject[] = [];
+  let nextProjects: WorkspaceProject[] = [];
+  await mutateWorkspaceProjects(
+    (projects) => {
+      const arr = projects as WorkspaceProject[];
+      previousProjects = JSON.parse(JSON.stringify(arr));
 
-  const nextArtist: ArtistRecord = {
-    ...(existingArtist || {}),
-    n: artistName,
-    g: normalizeGenre(String(data.genre || existingArtist?.g || '')),
-    l: numericString(data.monthly_listeners ?? existingArtist?.l ?? ''),
-    h: String(data.hit_track || existingArtist?.h || '').trim(),
-    ig: instagramUrl || (instagramHandle ? `@${instagramHandle}` : String(existingArtist?.ig || '').trim()),
-    soc: instagramHandle || String(existingArtist?.soc || '').replace(/^@/, '').trim(),
-    e: canonicalEmail(String(data.artist_email || existingArtist?.e || '')),
-    loc: String(data.location || existingArtist?.loc || '').trim(),
-    s: Boolean(existingArtist?.s),
-    o: 'Songfinch webhook',
-    instagramFollowers: numericString(data.instagram_followers ?? existingArtist?.instagramFollowers ?? ''),
-    contactName: String(data.contact_name || data.manager_name || existingArtist?.contactName || '').trim(),
-    contactEmail: canonicalEmail(String(data.contact_email || data.manager_email || existingArtist?.contactEmail || '')),
-    contactType: String(
-      data.contact_type
-      || (data.manager_email || data.manager_name ? 'Manager' : '')
-      || existingArtist?.contactType
-      || ''
-    ).trim(),
-    tiktokUrl: tiktokUrl || String(existingArtist?.tiktokUrl || '').trim(),
-    tiktokFollowers: numericString(data.tiktok_followers ?? existingArtist?.tiktokFollowers ?? ''),
-    spotifyUrl: trimUrl(String(data.spotify_url || existingArtist?.spotifyUrl || '')),
-    curatorPageUrl: String(existingArtist?.curatorPageUrl || '').trim(),
-    curatedArtists: Array.isArray(existingArtist?.curatedArtists) ? existingArtist?.curatedArtists : [],
-    profileSummary: String(data.profile_summary || existingArtist?.profileSummary || '').trim(),
-  };
-
-  if (existingIndex >= 0) artists[existingIndex] = nextArtist;
-  else artists.unshift(nextArtist);
-
-  const nextNotes = { ...(targetProject.notes || {}) };
-  const incomingNote = String(data.notes || '').trim();
-  if (incomingNote) {
-    nextNotes[artistName] = incomingNote;
-  }
-
-  const nextProject: WorkspaceProject = {
-    ...targetProject,
-    artists,
-    pipeline: {
-      ...(targetProject.pipeline || {}),
-      [artistName]: {
-        ...(targetProject.pipeline?.[artistName] || {}),
-        stage: nextStage,
-        date: nowIso,
-      },
-    },
-    notes: nextNotes,
-    activityLog: addLog(
-      targetProject,
-      artistName,
-      webhookActionLabel(data.event_type, String(data.status || '')),
-      'event',
-      {
-        actor: 'Songfinch webhook',
-        note: incomingNote || `event_id=${data.event_id}`,
-        sourceEventId: data.event_id,
-        sourceEventType: data.event_type,
-        sourceEnvironment: environment,
+      let projectIndex = findKickoffProjectIndex(arr);
+      if (projectIndex < 0) {
+        arr.push(defaultKickoffProject());
+        projectIndex = arr.length - 1;
       }
-    ),
-    settings: {
-      ...settings,
-      songfinchWebhook: {
-        processedEventIds: dedupeStrings([...webhookState.processedEventIds, data.event_id]).slice(-500),
-        recentEvents: webhookState.recentEvents,
-      },
-    },
-  };
 
-  nextProjects[projectIndex] = nextProject;
-  await saveWorkspaceProjects(nextProjects, {
-    reason: `songfinch_webhook:${slugify(data.event_type) || 'event'}`,
-  });
+      const targetProject = arr[projectIndex];
+      const settings = { ...(targetProject.settings || {}) } as Record<string, unknown>;
+      const webhookState = {
+        processedEventIds: dedupeStrings(
+          Array.isArray((settings.songfinchWebhook as { processedEventIds?: string[] } | undefined)?.processedEventIds)
+            ? ((settings.songfinchWebhook as { processedEventIds?: string[] }).processedEventIds || []).map(id => String(id || '').trim())
+            : []
+        ),
+        recentEvents: Array.isArray((settings.songfinchWebhook as { recentEvents?: unknown[] } | undefined)?.recentEvents)
+          ? [ ...(((settings.songfinchWebhook as { recentEvents?: unknown[] }).recentEvents || [])) ]
+          : [],
+      };
+      webhookState.recentEvents = [summarizeRecentEvent(data), ...webhookState.recentEvents].slice(0, 50);
+
+      const artists = Array.isArray(targetProject.artists) ? [...targetProject.artists] : [];
+      const incomingEmail = canonicalEmail(String(data.contact_email || data.manager_email || data.artist_email || ''));
+      const incomingNameKey = canonicalArtistName(data.artist_name);
+      const existingArtist = artists.find(artist =>
+        canonicalArtistName(String(artist.n || '')) === incomingNameKey
+        || (incomingEmail && canonicalEmail(String(artist.contactEmail || artist.e || '')) === incomingEmail)
+      );
+      const artistName = String(existingArtist?.n || data.artist_name).trim();
+      const existingIndex = artists.findIndex(artist => String(artist.n || '') === artistName);
+      const instagramUrl = trimUrl(String(data.instagram_url || ''));
+      const instagramHandle = extractInstagramHandle(instagramUrl);
+      const tiktokUrl = trimUrl(String(data.tiktok_url || ''));
+      const stageFromEvent = kickoffStageFromPayload(String(data.status || ''), data.event_type);
+      const previousStage = String(targetProject.pipeline?.[artistName]?.stage || 'prospect');
+      const nextStage = stageFromEvent || previousStage || 'prospect';
+      const nowIso = String(data.updated_at || '').trim() || new Date().toISOString();
+
+      const nextArtist: ArtistRecord = {
+        ...(existingArtist || {}),
+        n: artistName,
+        g: normalizeGenre(String(data.genre || existingArtist?.g || '')),
+        l: numericString(data.monthly_listeners ?? existingArtist?.l ?? ''),
+        h: String(data.hit_track || existingArtist?.h || '').trim(),
+        ig: instagramUrl || (instagramHandle ? `@${instagramHandle}` : String(existingArtist?.ig || '').trim()),
+        soc: instagramHandle || String(existingArtist?.soc || '').replace(/^@/, '').trim(),
+        e: canonicalEmail(String(data.artist_email || existingArtist?.e || '')),
+        loc: String(data.location || existingArtist?.loc || '').trim(),
+        s: Boolean(existingArtist?.s),
+        o: 'Songfinch webhook',
+        instagramFollowers: numericString(data.instagram_followers ?? existingArtist?.instagramFollowers ?? ''),
+        contactName: String(data.contact_name || data.manager_name || existingArtist?.contactName || '').trim(),
+        contactEmail: canonicalEmail(String(data.contact_email || data.manager_email || existingArtist?.contactEmail || '')),
+        contactType: String(
+          data.contact_type
+          || (data.manager_email || data.manager_name ? 'Manager' : '')
+          || existingArtist?.contactType
+          || ''
+        ).trim(),
+        tiktokUrl: tiktokUrl || String(existingArtist?.tiktokUrl || '').trim(),
+        tiktokFollowers: numericString(data.tiktok_followers ?? existingArtist?.tiktokFollowers ?? ''),
+        spotifyUrl: trimUrl(String(data.spotify_url || existingArtist?.spotifyUrl || '')),
+        curatorPageUrl: String(existingArtist?.curatorPageUrl || '').trim(),
+        curatedArtists: Array.isArray(existingArtist?.curatedArtists) ? existingArtist?.curatedArtists : [],
+        profileSummary: String(data.profile_summary || existingArtist?.profileSummary || '').trim(),
+      };
+
+      if (existingIndex >= 0) artists[existingIndex] = nextArtist;
+      else artists.unshift(nextArtist);
+
+      const nextNotes = { ...(targetProject.notes || {}) };
+      const incomingNote = String(data.notes || '').trim();
+      if (incomingNote) {
+        nextNotes[artistName] = incomingNote;
+      }
+
+      const nextProject: WorkspaceProject = {
+        ...targetProject,
+        artists,
+        pipeline: {
+          ...(targetProject.pipeline || {}),
+          [artistName]: {
+            ...(targetProject.pipeline?.[artistName] || {}),
+            stage: nextStage,
+            date: nowIso,
+          },
+        },
+        notes: nextNotes,
+        activityLog: addLog(
+          targetProject,
+          artistName,
+          webhookActionLabel(data.event_type, String(data.status || '')),
+          'event',
+          {
+            actor: 'Songfinch webhook',
+            note: incomingNote || `event_id=${data.event_id}`,
+            sourceEventId: data.event_id,
+            sourceEventType: data.event_type,
+            sourceEnvironment: environment,
+          }
+        ),
+        settings: {
+          ...settings,
+          songfinchWebhook: {
+            processedEventIds: dedupeStrings([...webhookState.processedEventIds, data.event_id]).slice(-500),
+            recentEvents: webhookState.recentEvents,
+          },
+        },
+      };
+
+      arr[projectIndex] = nextProject;
+      nextProjects = JSON.parse(JSON.stringify(arr));
+    },
+    { reason: `songfinch_webhook:${slugify(data.event_type) || 'event'}` },
+  );
 
   await notifySlackOnProjectTransitions({
     previousProjects,

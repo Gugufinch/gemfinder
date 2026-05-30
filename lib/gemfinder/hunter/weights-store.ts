@@ -1,5 +1,6 @@
 import type { HunterWeights } from '@/lib/gemfinder/types';
-import { listWorkspaceProjects, saveWorkspaceProjects } from '@/lib/gemfinder/project-store';
+import { listWorkspaceProjects } from '@/lib/gemfinder/project-store';
+import { mutateWorkspaceProjects } from '@/lib/gemfinder/mutate-workspace';
 
 export const DEFAULT_HUNTER_WEIGHTS: HunterWeights = {
   version: 1,
@@ -45,15 +46,23 @@ export async function getWeights(workspaceId: string): Promise<HunterWeights> {
 }
 
 export async function setWeights(workspaceId: string, weights: HunterWeights, actorEmail: string): Promise<void> {
-  const projects = (await listWorkspaceProjects()) as Array<Record<string, unknown>>;
-  const proj = projects.find((p) => p.id === workspaceId);
-  if (!proj) throw new Error(`[HUNTER_WEIGHTS] workspace ${workspaceId} not found`);
-  const settings = (proj.settings as Record<string, unknown>) || {};
-  settings.hunterWeights = {
-    ...weights,
-    updatedAt: new Date().toISOString(),
-    updatedBy: actorEmail,
-  };
-  proj.settings = settings;
-  await saveWorkspaceProjects(projects);
+  // Audit #5: etag-protected compare-and-swap with retry on conflict.
+  // A concurrent setWeights (e.g. Greg updates while Dakota's request is in
+  // flight) used to silently overwrite. Now the second writer re-reads, re-
+  // applies the mutation against the freshest state, and saves cleanly.
+  await mutateWorkspaceProjects(
+    (projects) => {
+      const arr = projects as Array<Record<string, unknown>>;
+      const proj = arr.find((p) => p.id === workspaceId);
+      if (!proj) throw new Error(`[HUNTER_WEIGHTS] workspace ${workspaceId} not found`);
+      const settings = (proj.settings as Record<string, unknown>) || {};
+      settings.hunterWeights = {
+        ...weights,
+        updatedAt: new Date().toISOString(),
+        updatedBy: actorEmail,
+      };
+      proj.settings = settings;
+    },
+    { reason: `hunter_weights:set_by:${actorEmail}` },
+  );
 }

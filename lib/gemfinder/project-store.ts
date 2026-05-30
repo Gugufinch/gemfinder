@@ -375,13 +375,23 @@ export async function restoreWorkspaceSnapshot(
   };
 }
 
-export async function addTalentToProject(
+/**
+ * Pure mutator: appends an artist record to the named project's `artists`
+ * array. Does NOT read or save — callers must wrap this in
+ * `mutateWorkspaceProjects` so the read-mutate-save is etag-protected.
+ *
+ * Audit #5: this used to do its own read+save, which combined with the
+ * approve flow's second save meant two unguarded writes per approve —
+ * each clobberable by any concurrent workspace mutation. Now both writes
+ * happen inside a single etag-protected round-trip.
+ */
+export function applyAddTalentMutation(
+  projects: unknown[],
   workspaceId: string,
   projectId: string,
   candidate: ScoutCandidate,
-  actor: AuthUserRecord
-): Promise<{ talentId: string; artistRecord: Record<string, unknown> }> {
-  const projects = await listWorkspaceProjects();
+  actor: AuthUserRecord,
+): { talentId: string; artistRecord: Record<string, unknown> } {
   const project = projects.find((p: unknown) => (p as { id?: string }).id === projectId) as Record<string, unknown> | undefined;
   if (!project) {
     throw new Error(`Project ${projectId} not found in workspace ${workspaceId}`);
@@ -406,8 +416,6 @@ export async function addTalentToProject(
   const artists = ((project.artists as Record<string, unknown>[]) || []).slice();
   artists.push(artistRecord);
   (project as Record<string, unknown>).artists = artists;
-
-  await saveWorkspaceProjects(projects);
 
   return {
     talentId: candidate.displayName,
