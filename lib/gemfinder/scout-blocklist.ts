@@ -1,24 +1,21 @@
 // lib/gemfinder/scout-blocklist.ts
-import type { BlocklistResult, CandidateIdentity, BlocklistMatchedOn } from './types';
-import { listWorkspaceProjects } from './project-store';
-import { canonicalizeName } from './scout/identity';
-import { getScoutPool } from './scout-candidate-store';
+//
+// Audit #6: ~16 sequential pg queries → 1 UNION-ALL statement.
+//
+// The MATCH_FIELDS priority order is now encoded in scout-blocklist-query.ts
+// (one source of truth). The workspace JSONB scan (source 3) is delegated to
+// scout-blocklist-index.ts so the single-call and batch paths share logic.
+//
+// For batch use (Hunter, bulk import), prefer `buildBlocklistIndex` from
+// './scout-blocklist-index' — same workspace fetched once, then synchronous
+// O(1) lookups per identity. This isBlocked() wrapper is for one-off use
+// (approve, edit) where prefetch overhead would dominate.
 
-// Match priority: stable IDs first, name last.
-const MATCH_FIELDS: Array<{
-  identityKey: keyof CandidateIdentity;
-  columnName: string;
-  matchedOn: BlocklistMatchedOn;
-}> = [
-  { identityKey: 'spotifyArtistId',  columnName: 'spotify_artist_id', matchedOn: 'spotify_artist_id' },
-  { identityKey: 'musicbrainzId',    columnName: 'musicbrainz_id',    matchedOn: 'musicbrainz_id' },
-  { identityKey: 'primaryEmail',     columnName: 'primary_email',     matchedOn: 'primary_email' },
-  { identityKey: 'instagramHandle',  columnName: 'instagram_handle',  matchedOn: 'instagram_handle' },
-  { identityKey: 'tiktokHandle',     columnName: 'tiktok_handle',     matchedOn: 'tiktok_handle' },
-  { identityKey: 'youtubeHandle',    columnName: 'youtube_handle',    matchedOn: 'youtube_handle' },
-  { identityKey: 'soundcloudHandle', columnName: 'soundcloud_handle', matchedOn: 'soundcloud_handle' },
-  { identityKey: 'canonicalName',    columnName: 'canonical_name',    matchedOn: 'canonical_name' },
-];
+import type { BlocklistResult, CandidateIdentity } from './types';
+import { listWorkspaceProjects } from './project-store';
+import { getScoutPool } from './scout-candidate-store';
+import { buildBlocklistQuery, type BlocklistQueryRow } from './scout-blocklist-query';
+import { matchAgainstIndex, type BlocklistIndex } from './scout-blocklist-index';
 
 export async function isBlocked(
   workspaceId: string,
@@ -27,141 +24,93 @@ export async function isBlocked(
 ): Promise<BlocklistResult> {
   const pool = getScoutPool();
 
-  // --- Source 1: scout_candidates table ---
-  for (const { identityKey, columnName, matchedOn } of MATCH_FIELDS) {
-    const value = identity[identityKey];
-    if (!value) continue;
-
-    const query = options?.excludeCandidateId
-      ? `select id, display_name from scout_candidates where workspace_id = $1 and ${columnName} = $2 and id != $3 limit 1`
-      : `select id, display_name from scout_candidates where workspace_id = $1 and ${columnName} = $2 limit 1`;
-    const params: unknown[] = options?.excludeCandidateId
-      ? [workspaceId, value, options.excludeCandidateId]
-      : [workspaceId, value];
-
-    const res = await pool.query(query, params);
-    if (res.rows.length) {
+  // ─── Sources 1 + 2: scout_candidates + scout_rejections (ONE query) ──────
+  const { sql, params } = buildBlocklistQuery({
+    workspaceId,
+    identity,
+    excludeCandidateId: options?.excludeCandidateId,
+    includeRejections: options?.includeRejections,
+  });
+  const res = await pool.query(sql, params);
+  const row = res.rows[0] as BlocklistQueryRow | undefined;
+  if (row?.id) {
+    if (row.source === 'candidate') {
       return {
         blocked: true,
         reason: 'candidate',
-        matchedOn,
+        matchedOn: row.matched_on,
         matchedRecord: {
-          id: res.rows[0].id as string,
-          displayName: res.rows[0].display_name as string,
+          id: row.id,
+          displayName: row.display_name,
           location: 'Pending in Scout V3',
         },
       };
     }
+    return {
+      blocked: true,
+      reason: 'rejected',
+      matchedOn: row.matched_on,
+      matchedRecord: {
+        id: row.id,
+        displayName: row.display_name,
+        location: `Rejected (${row.reason_code ?? 'rejected'})`,
+        addedAt: row.rejected_at instanceof Date ? row.rejected_at.toISOString() : String(row.rejected_at ?? ''),
+      },
+    };
   }
 
-  // --- Source 2: scout_rejections table (skippable) ---
-  if (options?.includeRejections !== false) {
-    for (const { identityKey, columnName, matchedOn } of MATCH_FIELDS) {
-      const value = identity[identityKey];
-      if (!value) continue;
-
-      const res = await pool.query(
-        `select id, display_name, reason_code, rejected_at from scout_rejections where workspace_id = $1 and ${columnName} = $2 limit 1`,
-        [workspaceId, value]
-      );
-      if (res.rows.length) {
-        const row = res.rows[0];
-        return {
-          blocked: true,
-          reason: 'rejected',
-          matchedOn,
-          matchedRecord: {
-            id: row.id as string,
-            displayName: row.display_name as string,
-            location: `Rejected (${row.reason_code as string})`,
-            addedAt: (row.rejected_at as Date).toISOString(),
-          },
-        };
-      }
-    }
-  }
-
-  // --- Source 3: Workspace projects JSONB (in-memory scan) ---
-  // Covers Kickoff + Live records via listWorkspaceProjects().
-  // Workspace-scoped: only check projects belonging to the same workspaceId
-  // so cross-workspace artists don't false-positive-collide.
+  // ─── Source 3: workspace projects JSONB scan ─────────────────────────────
+  // Reuse the index's matcher so source-3 logic lives in ONE place. We
+  // build a tiny index containing only the projects branch — the SQL
+  // sources are already handled above, so empty Maps for those.
   try {
     const allProjects = await listWorkspaceProjects();
-    const projects = (allProjects as Array<Record<string, unknown>>).filter((project) => {
+    const projects = ((allProjects as Array<Record<string, unknown>>) ?? []).filter((project) => {
       const projWorkspaceId = String(project?.workspaceId ?? '');
-      // Match either the workspace's own id (rare) or the project's workspaceId field.
       return projWorkspaceId === workspaceId || project?.id === workspaceId;
-    });
-    for (const project of projects) {
-      const artists = (project as { artists?: Array<Record<string, unknown>> })?.artists ?? [];
-      for (const artist of artists) {
-        const artistName   = String(artist?.n     ?? '');
-        const artistEmail  = String(artist?.e     ?? '').toLowerCase();
-        const artistInsta  = String(artist?.soc   ?? '').replace(/^@/, '');
-        const artistSpotify = String(artist?.spotify ?? '');
-        const artistStage  = String(artist?.stage ?? 'prospect');
-        const reason: 'kickoff' | 'live' = artistStage === 'live' ? 'live' : 'kickoff';
-
-        if (identity.canonicalName && artistName) {
-          const artistCanonical = canonicalizeName(artistName);
-          if (artistCanonical === identity.canonicalName) {
-            return {
-              blocked: true,
-              reason,
-              matchedOn: 'canonical_name',
-              matchedRecord: {
-                id: artistName,
-                displayName: artistName,
-                location: `Kickoff · ${artistStage}`,
-                stage: artistStage,
-              },
-            };
-          }
-        }
-        if (identity.primaryEmail && artistEmail === identity.primaryEmail) {
-          return {
-            blocked: true,
-            reason,
-            matchedOn: 'primary_email',
-            matchedRecord: {
-              id: artistName,
-              displayName: artistName,
-              location: `Kickoff · ${artistStage}`,
-              stage: artistStage,
-            },
-          };
-        }
-        if (identity.instagramHandle && artistInsta === identity.instagramHandle) {
-          return {
-            blocked: true,
-            reason,
-            matchedOn: 'instagram_handle',
-            matchedRecord: {
-              id: artistName,
-              displayName: artistName,
-              location: `Kickoff · ${artistStage}`,
-              stage: artistStage,
-            },
-          };
-        }
-        if (identity.spotifyArtistId && artistSpotify.includes(identity.spotifyArtistId)) {
-          return {
-            blocked: true,
-            reason,
-            matchedOn: 'spotify_artist_id',
-            matchedRecord: {
-              id: artistName,
-              displayName: artistName,
-              location: `Kickoff · ${artistStage}`,
-              stage: artistStage,
-            },
-          };
-        }
-      }
-    }
+    }) as BlocklistIndex['projects'];
+    const stubIndex: BlocklistIndex = {
+      workspaceId,
+      candidatesByField: emptyCandidateFieldMap(),
+      rejectionsByField: emptyRejectionFieldMap(),
+      projects,
+    };
+    const r = matchAgainstIndex(stubIndex, identity, options);
+    if (r.blocked) return r;
   } catch (err) {
     console.warn('[SCOUT_BLOCKLIST] kickoff/live scan failed:', err);
   }
 
   return { blocked: false };
 }
+
+function emptyCandidateFieldMap(): BlocklistIndex['candidatesByField'] {
+  return {
+    spotify_artist_id:  new Map(),
+    musicbrainz_id:     new Map(),
+    primary_email:      new Map(),
+    instagram_handle:   new Map(),
+    tiktok_handle:      new Map(),
+    youtube_handle:     new Map(),
+    soundcloud_handle:  new Map(),
+    canonical_name:     new Map(),
+  };
+}
+
+function emptyRejectionFieldMap(): BlocklistIndex['rejectionsByField'] {
+  return {
+    spotify_artist_id:  new Map(),
+    musicbrainz_id:     new Map(),
+    primary_email:      new Map(),
+    instagram_handle:   new Map(),
+    tiktok_handle:      new Map(),
+    youtube_handle:     new Map(),
+    soundcloud_handle:  new Map(),
+    canonical_name:     new Map(),
+  };
+}
+
+// Re-export the batch API so existing imports of `isBlocked` can sit next
+// to the index API without a second import path.
+export { buildBlocklistIndex, matchAgainstIndex } from './scout-blocklist-index';
+export type { BlocklistIndex } from './scout-blocklist-index';

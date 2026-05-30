@@ -9,7 +9,7 @@ import { searchArtistsViaLLM } from './llm-agent';
 import { enrichCandidate } from './enrichment';
 import { evaluateGates } from './gates';
 import { computeScore } from './scoring';
-import { isBlocked } from '@/lib/gemfinder/scout-blocklist';
+import { buildBlocklistIndex, matchAgainstIndex } from '@/lib/gemfinder/scout-blocklist';
 import { buildIdentity, canonicalizeName } from '@/lib/gemfinder/scout/identity';
 import { updateRunSummary, setRunStatus } from '@/lib/gemfinder/hunter-runs-store';
 import { createCandidate, listKnownCanonicalNames, emitEvent } from '@/lib/gemfinder/scout-candidate-store';
@@ -121,6 +121,12 @@ export async function runPipeline(input: RunPipelineInput): Promise<HunterRunSum
       [mbResults[i], mbResults[j]] = [mbResults[j], mbResults[i]];
     }
 
+    // Audit #6: prefetch the workspace's blocklist ONCE before the loop so
+    // each candidate's isBlocked check is O(1) sync instead of ~16 pg
+    // round-trips. For a 100-candidate run this collapses ~1700 queries
+    // into 3. Built outside the concurrency loop so all workers share it.
+    const blocklistIndex = await buildBlocklistIndex(workspaceId);
+
     // Phases B + C + D: enrich each candidate with concurrency, then gate + score
     type ScoredCandidate = {
       enriched: EnrichedCandidate;
@@ -149,7 +155,7 @@ export async function runPipeline(input: RunPipelineInput): Promise<HunterRunSum
               tiktokHandle: enriched.tiktokHandle,
               primaryEmail: enriched.scrapedContactEmail,
             });
-            const blockResult = await isBlocked(workspaceId, identity);
+            const blockResult = matchAgainstIndex(blocklistIndex, identity);
             if (blockResult.blocked) {
               summary.skippedBlocked++;
               return;

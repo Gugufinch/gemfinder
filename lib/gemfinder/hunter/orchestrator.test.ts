@@ -17,7 +17,12 @@ vi.mock('./scoring', () => ({
   computeScore: vi.fn(),
 }));
 vi.mock('@/lib/gemfinder/scout-blocklist', () => ({
+  // Audit #6: orchestrator now prefetches the workspace's blocklist once
+  // before the enrichment loop, then does sync matches. Mock the new API
+  // surface; keep isBlocked mock for any indirect callers.
   isBlocked: vi.fn(),
+  buildBlocklistIndex: vi.fn(),
+  matchAgainstIndex: vi.fn(),
 }));
 vi.mock('@/lib/gemfinder/scout/identity', () => ({
   buildIdentity: vi.fn((args: any) => ({ displayName: args.displayName, canonicalName: args.displayName.toLowerCase() })),
@@ -85,8 +90,10 @@ beforeEach(() => {
   vi.spyOn(console, 'error').mockImplementation(() => {});
   vi.spyOn(console, 'warn').mockImplementation(() => {});
 
-  // Default: isBlocked returns not-blocked
+  // Default: blocklist prefetch returns an empty index, every match → not-blocked.
   vi.mocked(blocklist.isBlocked).mockResolvedValue({ blocked: false });
+  vi.mocked(blocklist.buildBlocklistIndex).mockResolvedValue({} as never);
+  vi.mocked(blocklist.matchAgainstIndex).mockReturnValue({ blocked: false });
 
   // Default: gates pass
   vi.mocked(gates.evaluateGates).mockReturnValue({ pass: true });
@@ -169,7 +176,9 @@ describe('runPipeline', () => {
     const artists = ['Alice', 'Bob'].map(n => makeMbArtist(n));
     vi.mocked(mb.searchArtists).mockResolvedValue(artists);
     vi.mocked(enr.enrichCandidate).mockImplementation(async (_ws, a) => makeEnriched(a.name) as any);
-    vi.mocked(blocklist.isBlocked).mockResolvedValue({
+    // Audit #6: orchestrator now drives matchAgainstIndex (sync); the old
+    // isBlocked mock would be ignored.
+    vi.mocked(blocklist.matchAgainstIndex).mockReturnValue({
       blocked: true,
       reason: 'live',
       matchedOn: 'canonical_name',
