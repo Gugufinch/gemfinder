@@ -4,6 +4,15 @@ import path from 'node:path';
 import './pg-init';  // side-effect: configure int8 + numeric type parsers process-wide
 import { Pool, type PoolClient } from 'pg';
 import type { AuthRole, AuthUserRecord, PasswordResetTokenRecord, PublicAuthUser } from '@/lib/gemfinder/types';
+// Audit #3: all auth policy lives in auth-policy.ts so the security-critical
+// predicates are auditable in isolation.
+import {
+  decideSignupRole,
+  isAllowedEmail,
+  isAllowedForSelfSignup,
+  isDefaultAdminEmail,
+  isSelfSignupEnabled,
+} from './auth-policy';
 
 const LOCAL_STORE_PATH =
   process.env.GEMFINDER_LOCAL_STORE_PATH || path.join(process.cwd(), 'data', 'gemfinder-auth.local.json');
@@ -95,28 +104,6 @@ function authUserIdFromEmail(email: string): string {
 function sanitizeRole(role: unknown): AuthRole {
   if (role === 'admin' || role === 'viewer') return role;
   return 'editor';
-}
-
-function isAllowedEmail(email: string): boolean {
-  const allowed = String(process.env.AR_ALLOWED_EMAILS || '')
-    .split(',')
-    .map((item) => item.trim().toLowerCase())
-    .filter(Boolean);
-  if (!allowed.length) return true;
-  return allowed.includes(normalizeEmail(email));
-}
-
-function isSelfSignupEnabled(): boolean {
-  const raw = String(process.env.AR_SELF_SIGNUP || 'true').trim().toLowerCase();
-  return !['0', 'false', 'no', 'off'].includes(raw);
-}
-
-function isDefaultAdminEmail(email: string): boolean {
-  const configured = String(process.env.AR_DEFAULT_ADMIN_EMAILS || '')
-    .split(',')
-    .map((item) => item.trim().toLowerCase())
-    .filter(Boolean);
-  return configured.includes(normalizeEmail(email));
 }
 
 async function reconcileDbDefaultAdmin(client: PoolClient, user: AuthUserRecord | null): Promise<AuthUserRecord | null> {
@@ -272,11 +259,6 @@ async function findDbUserById(client: PoolClient, userId: string): Promise<AuthU
   return res.rows[0] ? mapDbUser(res.rows[0]) : null;
 }
 
-async function countDbUsers(client: PoolClient): Promise<number> {
-  const res = await client.query('select count(*)::int as count from gemfinder_auth_users');
-  return Number(res.rows[0]?.count || 0);
-}
-
 async function countDbActiveAdmins(client: PoolClient): Promise<number> {
   const res = await client.query("select count(*)::int as count from gemfinder_auth_users where active = true and role = 'admin'");
   return Number(res.rows[0]?.count || 0);
@@ -296,6 +278,10 @@ export async function registerAuthUser(
   const cleanPassword = String(password || '');
   if (!cleanEmail || !cleanEmail.includes('@')) return { ok: false, error: 'Invalid email' };
   if (cleanPassword.length < 8) return { ok: false, error: 'Password must be at least 8 characters' };
+
+  // Lenient allowlist check — applies to BOTH admin-invite and self-signup
+  // paths. Workspace-wide gate. Empty allowlist = lenient (allows all),
+  // because the strict self-signup check below is the audit-relevant gate.
   if (!isAllowedEmail(cleanEmail)) return { ok: false, error: 'Email is not allowed for this workspace' };
 
   if (hasDatabase()) {
@@ -321,12 +307,19 @@ export async function registerAuthUser(
         role = sanitizeRole(options.role);
         active = options.active !== false;
       } else {
+        // Audit #3: self-signup path. Three independent gates, all
+        // fail-closed by default — see auth-policy.ts for full reasoning.
         if (!isSelfSignupEnabled()) {
           await client.query('rollback');
           return { ok: false, error: 'Self signup is disabled' };
         }
-        const totalUsers = await countDbUsers(client);
-        role = totalUsers === 0 || isDefaultAdminEmail(cleanEmail) ? 'admin' : 'editor';
+        if (!isAllowedForSelfSignup(cleanEmail)) {
+          await client.query('rollback');
+          return { ok: false, error: 'Email is not on the self-signup allowlist' };
+        }
+        // No more `totalUsers === 0` magic. Bootstrap admin via
+        // AR_DEFAULT_ADMIN_EMAILS only.
+        role = decideSignupRole(cleanEmail);
         active = true;
       }
 
@@ -360,8 +353,12 @@ export async function registerAuthUser(
     role = sanitizeRole(options.role);
     active = options.active !== false;
   } else {
+    // Audit #3: same fail-closed self-signup gates as the DB branch above.
     if (!isSelfSignupEnabled()) return { ok: false, error: 'Self signup is disabled' };
-    role = store.users.length === 0 || isDefaultAdminEmail(cleanEmail) ? 'admin' : 'editor';
+    if (!isAllowedForSelfSignup(cleanEmail)) {
+      return { ok: false, error: 'Email is not on the self-signup allowlist' };
+    }
+    role = decideSignupRole(cleanEmail);
     active = true;
   }
 
