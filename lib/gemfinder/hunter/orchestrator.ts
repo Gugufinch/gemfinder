@@ -11,7 +11,7 @@ import { evaluateGates } from './gates';
 import { computeScore } from './scoring';
 import { buildBlocklistIndex, matchAgainstIndex } from '@/lib/gemfinder/scout-blocklist';
 import { buildIdentity, canonicalizeName } from '@/lib/gemfinder/scout/identity';
-import { updateRunSummary, setRunStatus } from '@/lib/gemfinder/hunter-runs-store';
+import { updateRunSummary, queueRunSummaryPatch, setRunStatus } from '@/lib/gemfinder/hunter-runs-store';
 import { createCandidate, listKnownCanonicalNames, emitEvent } from '@/lib/gemfinder/scout-candidate-store';
 
 export type RunPipelineInput = {
@@ -190,17 +190,19 @@ export async function runPipeline(input: RunPipelineInput): Promise<HunterRunSum
               message: err instanceof Error ? err.message : String(err),
             });
           } finally {
-            // Fire-and-forget incremental progress write so the UI poll shows
-            // live numbers instead of sitting on "fetched 100, scored 0" for the
-            // entire enrichment phase. Per-candidate write is 100 small JSONB
-            // patches over the run — cheap, and worth it for the UX.
-            void updateRunSummary(runId, {
+            // Audit #7: debounced queue replaces per-candidate fire-and-forget
+            // writes. The hot loop's ~100 calls coalesce into ~5 pg writes
+            // (one per 500ms window), so the connection pool isn't hammered
+            // and the UI's 2s poll still sees fresh-ish numbers. The phase-
+            // boundary `await updateRunSummary` below force-flushes pending
+            // patches before continuing, so no progress is lost.
+            queueRunSummaryPatch(runId, {
               skippedBlocked: summary.skippedBlocked,
               gatedOut: summary.gatedOut,
               gatedReasons: summary.gatedReasons,
               scored: summary.scored,
               errors: summary.errors,
-            }).catch((err) => console.warn('[HUNTER_RUN] incremental progress write failed:', err));
+            });
           }
         })();
         inFlight.push(task);

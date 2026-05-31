@@ -272,40 +272,30 @@ describe('listRunsByWorkspace', () => {
 
 // ---- updateRunSummary --------------------------------------------------
 
-describe('updateRunSummary', () => {
-  it('calls jsonb_set for each patched key', async () => {
+// Audit #7 rewrote updateRunSummary: jsonb_set per-key → single `||` merge.
+// Detailed contract lives in hunter-runs-summary-queue.test.ts. These tests
+// keep the SQL-shape regression guard relative to the old behavior so a
+// future revert is obvious.
+describe('updateRunSummary (post-audit #7)', () => {
+  it('emits a single `summary || $1::jsonb` UPDATE per call, regardless of patch size', async () => {
     mockQuery.mockResolvedValue({ rows: [], rowCount: 1 });
-
-    await updateRunSummary('run-001', { fetched: 10, scored: 5 });
+    await updateRunSummary('run-001', { fetched: 10, scored: 5, added: 2, errors: [] });
 
     const updateCalls = mockQuery.mock.calls.filter(
-      (c) => typeof c[0] === 'string' && (c[0] as string).includes('jsonb_set')
+      (c) => typeof c[0] === 'string' && /summary\s*\|\|/i.test(c[0] as string)
     );
-    expect(updateCalls).toHaveLength(2);
-
-    const keys = updateCalls.map((c) => c[1][0] as string);
-    expect(keys).toContain('{fetched}');
-    expect(keys).toContain('{scored}');
+    expect(updateCalls).toHaveLength(1);
+    // Patch is shipped as ONE jsonb param, run id in param 2.
+    const patch = JSON.parse(updateCalls[0][1][0] as string);
+    expect(patch).toMatchObject({ fetched: 10, scored: 5, added: 2 });
+    expect(updateCalls[0][1][1]).toBe('run-001');
   });
 
-  it('encodes the value as JSON in param slot 2', async () => {
-    mockQuery.mockResolvedValue({ rows: [], rowCount: 1 });
-
-    await updateRunSummary('run-001', { fetched: 42 });
-
-    const updateCall = mockQuery.mock.calls.find(
-      (c) => typeof c[0] === 'string' && (c[0] as string).includes('jsonb_set')
-    );
-    expect(JSON.parse(updateCall![1][1] as string)).toBe(42);
-  });
-
-  it('is a no-op when patch is empty', async () => {
+  it('is a no-op when patch is empty (zero pg roundtrips)', async () => {
     mockQuery.mockResolvedValue({ rows: [], rowCount: 0 });
-
     await updateRunSummary('run-001', {});
-
     const updateCalls = mockQuery.mock.calls.filter(
-      (c) => typeof c[0] === 'string' && (c[0] as string).includes('jsonb_set')
+      (c) => typeof c[0] === 'string' && /summary\s*\|\|/i.test(c[0] as string)
     );
     expect(updateCalls).toHaveLength(0);
   });

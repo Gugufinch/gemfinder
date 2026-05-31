@@ -30,6 +30,9 @@ vi.mock('@/lib/gemfinder/scout/identity', () => ({
 }));
 vi.mock('@/lib/gemfinder/hunter-runs-store', () => ({
   updateRunSummary: vi.fn(),
+  // Audit #7: hot-loop call now uses the debounced queue, not the awaited
+  // updateRunSummary. Mock both so the orchestrator can call either.
+  queueRunSummaryPatch: vi.fn(),
   setRunStatus: vi.fn(),
 }));
 vi.mock('@/lib/gemfinder/scout-candidate-store', () => ({
