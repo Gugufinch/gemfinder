@@ -2,6 +2,7 @@ import { cookies } from 'next/headers';
 import GemFinderApp from './GemFinderApp.jsx';
 import ARLogin from './ARLogin';
 import { getAuthUserById } from '@/lib/gemfinder/auth-store';
+import { verifySession } from '@/lib/gemfinder/session';
 
 type SearchParams = Record<string, string | string[] | undefined>;
 
@@ -20,7 +21,12 @@ export default async function ARPage({ searchParams }: { searchParams?: Promise<
 
   try {
     const cookieStore = await cookies();
-    const userId = cookieStore.get('ar_user')?.value || '';
+    // Audit #2 follow-up: the ar_user cookie is an HMAC-signed token, not a
+    // raw userId. Verify it the same way the API routes do (getSessionUserId).
+    // Reading the raw value here was the bug that made login impossible after
+    // Audit #2 — the signed token never matched a real userId, so this gate
+    // always fell through to the login screen even with a valid session.
+    const userId = verifySession(cookieStore.get('ar_user')?.value)?.uid || '';
 
     if (!userId) {
       return <ARLogin initialMode={initialMode} initialResetToken={resetTokenParam} />;
