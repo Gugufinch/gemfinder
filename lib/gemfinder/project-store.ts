@@ -227,9 +227,15 @@ export async function saveWorkspaceProjects(
   // return it in the 409 response (no extra round trip).
   if (options?.expectedEtag !== undefined) {
     const result = await getPool().query(
+      // PRECISION BUG FIX: the etag is `updated_at.toISOString()` — MILLISECOND
+      // precision (JS Date can't hold more). But Postgres timestamptz stores
+      // MICROSECONDS. A plain `updated_at = $3` compares the ms etag (e.g.
+      // .291Z = .291000) against the stored .291387 → NEVER matches → every
+      // optimistic-locked save 409s and the client reverts. Compare at the
+      // etag's own precision (millisecond) so the round-trip is stable.
       `update gemfinder_workspace_state
        set value = $2::jsonb, updated_at = now()
-       where state_key = $1 and updated_at = $3
+       where state_key = $1 and date_trunc('milliseconds', updated_at) = $3::timestamptz
        returning updated_at`,
       [WORKSPACE_STATE_KEY, JSON.stringify({ projects: normalized }), options.expectedEtag]
     );
