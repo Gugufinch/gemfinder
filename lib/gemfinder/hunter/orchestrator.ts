@@ -317,8 +317,59 @@ export async function runPipeline(input: RunPipelineInput): Promise<HunterRunSum
     });
     await Promise.allSettled(deepResearchPromises);
 
-    // Phase F: insert each into scout_candidates
+    // Phase E.6: RE-SCORE + RE-GATE on the post-deep-research merged data.
+    //
+    // Phase C scored + gated each candidate on SHALLOW data (deep research was
+    // deferred to save quota). Phase E.5 then merged richer findings into
+    // sc.enriched — corrected genre, isLiving, contactReadiness, follower
+    // counts, etc. Without this pass, the leaderboard score shown to the
+    // operator reflects stale Phase-C data, AND hard gates never re-run — so a
+    // survivor that deep research reveals as DECEASED (or now-blocked, or
+    // newly below the score floor) sailed straight into the queue. Recompute
+    // both, drop anything that now fails a gate or the floor (recording the
+    // reason + a "demoted after deep research" event), and re-sort by the
+    // corrected score before inserting.
+    const MIN_SCORE_FLOOR = typeof criteria.minScore === 'number' ? criteria.minScore : 35;
+    const survivors: ScoredCandidate[] = [];
     for (const sc of topN) {
+      const identity = buildIdentity({
+        displayName: sc.enriched.displayName,
+        spotifyArtistId: sc.enriched.spotifyArtistId,
+        instagramHandle: sc.enriched.instagramHandle,
+        tiktokHandle: sc.enriched.tiktokHandle,
+        primaryEmail: sc.enriched.scrapedContactEmail,
+      });
+      const blockResult = matchAgainstIndex(blocklistIndex, identity);
+      const gate = evaluateGates(sc.enriched, weights, blockResult, criteria);
+      if (!gate.pass) {
+        summary.gatedOut++;
+        summary.gatedReasons.push({ candidateName: sc.enriched.displayName, reason: `post_deep_research:${gate.reason}` });
+        void emitEvent({
+          workspaceId, runId, phase: 'meta', status: 'success',
+          message: `Demoted "${sc.enriched.displayName}" after deep research — ${gate.reason}`,
+          data: { reason: gate.reason, stage: 'post_deep_research_gate' },
+        });
+        continue;
+      }
+      const rescore = computeScore(sc.enriched, weights);
+      if (rescore.final < MIN_SCORE_FLOOR) {
+        summary.gatedOut++;
+        summary.gatedReasons.push({ candidateName: sc.enriched.displayName, reason: `post_deep_research:low_score:${rescore.final}` });
+        void emitEvent({
+          workspaceId, runId, phase: 'meta', status: 'success',
+          message: `Demoted "${sc.enriched.displayName}" after deep research — low_score:${rescore.final}`,
+          data: { reason: 'low_score', score: rescore.final, stage: 'post_deep_research_floor' },
+        });
+        continue;
+      }
+      sc.finalScore = rescore.final;
+      sc.perDimension = rescore.perDimension;
+      survivors.push(sc);
+    }
+    survivors.sort((a, b) => b.finalScore - a.finalScore);
+
+    // Phase F: insert each into scout_candidates
+    for (const sc of survivors) {
       try {
         const now = new Date().toISOString();
         const candidate: ScoutCandidate = {

@@ -54,6 +54,7 @@ vi.mock('@/lib/gemfinder/scout-candidate-store', () => ({
 
 import { runPipeline } from './orchestrator';
 import { DEFAULT_HUNTER_WEIGHTS } from './weights-store';
+import { computeScore } from './scoring';
 import * as mb from './musicbrainz';
 import * as llm from './llm-agent';
 import * as enr from './enrichment';
@@ -145,12 +146,20 @@ async function runHunt(opts: {
   gates?: Partial<typeof DEFAULT_HUNTER_WEIGHTS.gates>;
   blockNames?: string[];
   failNames?: string[];   // names whose enrichment throws (error isolation test)
+  // Fields the DEEP-RESEARCH pass (Phase E.5, skipDeepResearch:false) reveals
+  // that differ from the light Phase-C pass — e.g. { 'Late Reveal': { isLiving: false } }.
+  // Lets us prove the pipeline re-scores/re-gates on the corrected data.
+  deepOverrides?: Record<string, Partial<ReturnType<typeof makeArtist>>>;
 }) {
   vi.mocked(mb.searchArtists).mockResolvedValue(opts.artists.map(a => ({ id: a.musicbrainzId, name: a.displayName })) as any);
-  vi.mocked(enr.enrichCandidate).mockImplementation(async (_ws: any, mbArtist: any) => {
+  vi.mocked(enr.enrichCandidate).mockImplementation(async (_ws: any, mbArtist: any, options?: any) => {
     if (opts.failNames?.includes(mbArtist.name)) throw new Error(`enrichment boom: ${mbArtist.name}`);
-    const found = opts.artists.find(a => a.displayName === mbArtist.name);
-    return (found ?? makeArtist(mbArtist.name)) as any;
+    const found = opts.artists.find(a => a.displayName === mbArtist.name) ?? makeArtist(mbArtist.name);
+    // The deep-research pass (skipDeepResearch === false) returns corrected data.
+    const isDeepPass = options && options.skipDeepResearch === false;
+    const override = opts.deepOverrides?.[mbArtist.name];
+    if (isDeepPass && override) return { ...found, ...override } as any;
+    return found as any;
   });
   if (opts.blockNames?.length) {
     vi.mocked(blocklist.buildBlocklistIndex).mockResolvedValue(indexBlocking(opts.blockNames));
@@ -317,6 +326,45 @@ describe('🎯 Hunter simulation — several test hunts against the real pipelin
     expect(summary.errors.length).toBeGreaterThanOrEqual(1);
     expect(summary.added).toBe(3);                        // the 3 good ones still land
     expect(vi.mocked(runsStore.setRunStatus).mock.calls.at(-1)?.[1]).toBe('complete');
+  });
+
+  it('Hunt 9 — deep research reveals a survivor is DECEASED → re-gated out, not inserted (Fix #1)', async () => {
+    // All three pass the light Phase-C pass (alive). Deep research (Phase E.5)
+    // then reveals "Late Reveal" is deceased. With require_living on, the
+    // post-merge re-gate must exclude it — the bug was that gates never re-ran
+    // after the deep-research merge, so deceased artists got inserted anyway.
+    const artists = ['Alive One', 'Late Reveal', 'Alive Two'].map(n => makeArtist(n));
+    const { summary, persisted } = await runHunt({
+      title: 'deep-reveals-deceased', artists,
+      criteria: { genres: ['folk'], regions: ['US'], roleTarget: 'performer', targetCount: 5 },
+      gates: { require_living: true },
+      deepOverrides: { 'Late Reveal': { isLiving: false } },
+    });
+    const names = persisted.map(c => c.displayName);
+    expect(names).not.toContain('Late Reveal');   // re-gated out post-deep-research
+    expect(names).toContain('Alive One');
+    expect(names).toContain('Alive Two');
+    expect(summary.added).toBe(2);
+  });
+
+  it('Hunt 10 — deep research corrects data → inserted score reflects the MERGED data, not stale Phase-C (Fix #1)', async () => {
+    // Light pass: weak signal. Deep research reveals much stronger numbers.
+    // The score stored on the inserted candidate must be computed on the
+    // MERGED data — the bug stored the stale Phase-C score.
+    const light = makeArtist('Sleeper Hit', { spotifyFollowers: 1_000, spotifyPopularity: 20, instagramFollowers: 500, tiktokFollowers: 0, youtubeSubscribers: 0, soundcloudFollowers: 0 });
+    const override = { spotifyFollowers: 90_000, spotifyPopularity: 68, instagramFollowers: 140_000, tiktokFollowers: 120_000 };
+    const expectedMerged = computeScore({ ...light, ...override } as any, DEFAULT_HUNTER_WEIGHTS).final;
+    const expectedStale = computeScore(light as any, DEFAULT_HUNTER_WEIGHTS).final;
+    // Sanity: the fixtures must actually move the score, else the test proves nothing.
+    expect(expectedMerged).not.toBe(expectedStale);
+
+    const { persisted } = await runHunt({
+      title: 'deep-rescore', artists: [light],
+      criteria: { genres: ['folk'], regions: ['US'], roleTarget: 'performer', targetCount: 5, minScore: 1 },
+      deepOverrides: { 'Sleeper Hit': override },
+    });
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0].score).toBe(expectedMerged);   // not expectedStale
   });
 
   it('prints the full hunt report', () => {
